@@ -1,0 +1,18 @@
+{
+	"name": "vulti",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"dev": "concurrently \"npm run dev:core\" \"npm run dev:app\"",
+		"dev:core": "cd vulti-core && ./scripts/install.sh && vulti gateway web",
+		"dev:app": "cd vulti-app && npm install && npm run dev",
+		"build": "npm run build:app",
+		"build:app": "cd vulti-app && npm run build",
+		"tauri:dev": "cd vulti-app && npm run tauri:dev",
+		"tauri:build": "cd vulti-app && npm run tauri:build"
+	},
+	"devDependencies": {
+		"concurrently": "^9.1.2"
+	}
+}

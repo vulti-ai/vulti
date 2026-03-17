@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "vulti-agent",
+  "display_name": "Vulti",
+  "description": "AI agent by Nous Research with 90+ tools, persistent memory, and multi-platform support",
+  "icon": "icon.svg",
+  "distribution": {
+    "type": "command",
+    "command": "vulti",
+    "args": ["acp"]
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/templates/tauri_conf_schema.json",
+  "productName": "Vulti Gateway",
+  "version": "0.1.0",
+  "identifier": "com.vulti.gateway",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173/setup",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Vulti Gateway",
+        "width": 1100,
+        "height": 750,
+        "center": true,
+        "resizable": true,
+        "decorations": true
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "tooltip": "Vulti Gateway"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}

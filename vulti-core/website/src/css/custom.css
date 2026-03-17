@@ -1,0 +1,299 @@
+/**
+ * Vulti — Custom Docusaurus Theme
+ * Aesthetic: Rainbow Siri meets 200 GSM textured paper
+ * Matches landingpage/style.css
+ */
+
+/* Import fonts to match landing page */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── Light mode (PRIMARY — paper aesthetic) ────────────────────────────── */
+:root {
+  --ifm-color-primary: #6B8BEB;
+  --ifm-color-primary-dark: #4E73E5;
+  --ifm-color-primary-darker: #3F66E2;
+  --ifm-color-primary-darkest: #2249CA;
+  --ifm-color-primary-light: #88A3F1;
+  --ifm-color-primary-lighter: #97AFF3;
+  --ifm-color-primary-lightest: #C3D1F9;
+
+  --ifm-background-color: #F5F0E8;
+  --ifm-background-surface-color: #EDE7DB;
+  --ifm-navbar-background-color: rgba(245, 240, 232, 0.75);
+  --ifm-footer-background-color: #E3DCD0;
+
+  --ifm-font-color-base: #3A3530;
+  --ifm-font-color-secondary: #6B6460;
+
+  --ifm-link-color: #6B8BEB;
+  --ifm-link-hover-color: #9D7AEA;
+
+  --ifm-code-background: #EDE7DB;
+
+  --ifm-toc-border-color: rgba(26, 26, 26, 0.08);
+  --ifm-hr-border-color: rgba(26, 26, 26, 0.08);
+
+  --ifm-color-emphasis-100: #E3DCD0;
+  --ifm-color-emphasis-200: #D4CCC0;
+
+  --docusaurus-highlighted-code-line-bg: rgba(107, 139, 235, 0.08);
+
+  --ifm-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ifm-font-family-monospace: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  --ifm-code-font-size: 90%;
+  --ifm-heading-font-weight: 600;
+
+  /* Rainbow accents */
+  --r-rose: #E8607A;
+  --r-coral: #F28B6D;
+  --r-amber: #F0A84A;
+  --r-teal: #4AC6B7;
+  --r-sky: #5AADE0;
+  --r-blue: #6B8BEB;
+  --r-violet: #9D7AEA;
+}
+
+/* ── Dark mode ──────────────────────────────────────────────────────────── */
+[data-theme='dark'] {
+  --ifm-color-primary: #9D7AEA;
+  --ifm-color-primary-dark: #8A60E5;
+  --ifm-color-primary-darker: #8053E2;
+  --ifm-color-primary-darkest: #6430D4;
+  --ifm-color-primary-light: #B094EF;
+  --ifm-color-primary-lighter: #BAA1F1;
+  --ifm-color-primary-lightest: #D6C8F7;
+
+  --ifm-background-color: #1A1A1A;
+  --ifm-background-surface-color: #222222;
+  --ifm-navbar-background-color: rgba(26, 26, 26, 0.85);
+  --ifm-footer-background-color: #141414;
+
+  --ifm-font-color-base: #E8E4DC;
+  --ifm-font-color-secondary: #9A968E;
+
+  --ifm-link-color: #9D7AEA;
+  --ifm-link-hover-color: #B094EF;
+
+  --ifm-code-background: #222222;
+
+  --ifm-toc-border-color: rgba(157, 122, 234, 0.08);
+  --ifm-hr-border-color: rgba(157, 122, 234, 0.08);
+  --ifm-color-emphasis-100: #2A2A2A;
+  --ifm-color-emphasis-200: #333333;
+
+  --docusaurus-highlighted-code-line-bg: rgba(157, 122, 234, 0.08);
+}
+
+/* ── Paper texture background ───────────────────────────────────────────── */
+.main-wrapper {
+  background-image:
+    url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.025'/%3E%3C/svg%3E");
+  background-size: 256px 256px;
+}
+
+[data-theme='dark'] .main-wrapper {
+  background-image: radial-gradient(rgba(157, 122, 234, 0.015) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* ── Navbar ──────────────────────────────────────────────────────────────── */
+.navbar {
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  border-bottom: 1px solid rgba(26, 26, 26, 0.08);
+}
+
+[data-theme='dark'] .navbar {
+  border-bottom: 1px solid rgba(157, 122, 234, 0.08);
+}
+
+.navbar__title {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+.menu {
+  background-color: transparent;
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+  background-color: rgba(107, 139, 235, 0.08);
+  border-left: 3px solid var(--r-violet);
+  padding-left: calc(var(--ifm-menu-link-padding-horizontal) - 3px);
+}
+
+[data-theme='dark'] .menu__link--active:not(.menu__link--sublist) {
+  background-color: rgba(157, 122, 234, 0.08);
+  border-left: 3px solid var(--r-violet);
+}
+
+/* ── Code blocks ─────────────────────────────────────────────────────────── */
+.prism-code {
+  border: 1px solid rgba(26, 26, 26, 0.06);
+  border-radius: 10px !important;
+}
+
+[data-theme='dark'] .prism-code {
+  background-color: #141414 !important;
+  border: 1px solid rgba(157, 122, 234, 0.06);
+}
+
+/* Text diagrams: preserve spacing, disable ligatures */
+pre.prism-code.language-text,
+pre.prism-code.language-plaintext,
+pre.prism-code.language-txt,
+pre.prism-code.language-ascii {
+  white-space: pre;
+  overflow-x: auto;
+  line-height: 1.35;
+  font-family: 'JetBrains Mono', 'Cascadia Mono', 'Cascadia Code', 'Fira Code', 'SFMono-Regular', 'DejaVu Sans Mono', 'Liberation Mono', monospace;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+  text-rendering: optimizeSpeed;
+}
+
+pre.prism-code.language-text code,
+pre.prism-code.language-plaintext code,
+pre.prism-code.language-txt code,
+pre.prism-code.language-ascii code {
+  white-space: pre;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+
+/* ── Mermaid diagrams ────────────────────────────────────────────────────── */
+.theme-mermaid {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+.theme-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ── Terminal figures in docs ─────────────────────────────────────────────── */
+.docs-terminal-figure {
+  display: block;
+  width: 100%;
+  max-width: 900px;
+  margin: 1.25rem auto 0.5rem;
+  border: 1px solid rgba(26, 26, 26, 0.08);
+  border-radius: 14px;
+  background: var(--ifm-background-surface-color);
+}
+
+[data-theme='dark'] .docs-terminal-figure {
+  border: 1px solid rgba(157, 122, 234, 0.08);
+  background: #141414;
+}
+
+.docs-figure-caption {
+  margin-top: 0.35rem;
+  text-align: center;
+  color: var(--ifm-font-color-secondary);
+  font-size: 0.95rem;
+}
+
+/* ── Admonitions — rainbow-tinted ────────────────────────────────────────── */
+.alert--info {
+  --ifm-alert-background-color: rgba(107, 139, 235, 0.06);
+  --ifm-alert-border-color: rgba(107, 139, 235, 0.15);
+}
+
+[data-theme='dark'] .alert--info {
+  --ifm-alert-background-color: rgba(157, 122, 234, 0.05);
+  --ifm-alert-border-color: rgba(157, 122, 234, 0.15);
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+table {
+  border-collapse: collapse;
+}
+
+table th {
+  background-color: rgba(107, 139, 235, 0.06);
+  border-color: rgba(26, 26, 26, 0.08);
+}
+
+table td {
+  border-color: rgba(26, 26, 26, 0.06);
+}
+
+[data-theme='dark'] table th {
+  background-color: rgba(157, 122, 234, 0.06);
+  border-color: rgba(157, 122, 234, 0.12);
+}
+
+[data-theme='dark'] table td {
+  border-color: rgba(157, 122, 234, 0.06);
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+.footer {
+  border-top: 1px solid rgba(26, 26, 26, 0.08);
+}
+
+[data-theme='dark'] .footer {
+  border-top: 1px solid rgba(157, 122, 234, 0.08);
+}
+
+.footer a {
+  color: #6B6460;
+  transition: color 0.2s;
+}
+
+.footer a:hover {
+  color: var(--r-violet);
+  text-decoration: none;
+}
+
+[data-theme='dark'] .footer a {
+  color: #9A968E;
+}
+
+[data-theme='dark'] .footer a:hover {
+  color: var(--r-violet);
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--ifm-background-color);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ifm-color-emphasis-200);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ifm-font-color-secondary);
+}
+
+/* ── Search bar ──────────────────────────────────────────────────────────── */
+[data-theme='dark'] .DocSearch-Button {
+  background-color: #222222;
+  border: 1px solid rgba(157, 122, 234, 0.08);
+}
+
+/* ── Selection — rainbow tint ────────────────────────────────────────────── */
+::selection {
+  background: rgba(157, 122, 234, 0.20);
+}
+
+/* ── Hero banner for docs landing if needed ──────────────────────────────── */
+.hero--vulti {
+  background: linear-gradient(135deg, #F5F0E8 0%, #EDE7DB 100%);
+  padding: 4rem 0;
+}
+
+[data-theme='dark'] .hero--vulti {
+  background: linear-gradient(135deg, #1A1A1A 0%, #222222 100%);
+}
