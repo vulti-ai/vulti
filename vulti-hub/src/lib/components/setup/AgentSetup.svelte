@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { store, type GatewayAgent } from '$lib/stores/app.svelte';
+	import { store } from '$lib/stores/app.svelte';
+	import { type Agent } from '$lib/api';
 	import IdentityTab from './tabs/IdentityTab.svelte';
 	import AIModelsTab from './tabs/AIModelsTab.svelte';
 	import CommunicationTab from './tabs/CommunicationTab.svelte';
@@ -9,7 +10,7 @@
 	import CodeTab from './tabs/CodeTab.svelte';
 	import OtherTab from './tabs/OtherTab.svelte';
 
-	let { agent }: { agent: GatewayAgent } = $props();
+	let { agent }: { agent: Agent } = $props();
 
 	const tabs = [
 		{ id: 'identity', label: 'Identity' },
@@ -25,7 +26,7 @@
 	let activeTab = $state<string>('identity');
 
 	function serviceCount(category: string): number {
-		return agent.services.filter(s => s.category === category && s.status === 'connected').length;
+		return (agent.services ?? []).filter(s => s.category === category && s.status === 'connected').length;
 	}
 
 	function saveAgent() {
@@ -47,7 +48,7 @@
 			<div>
 				<h2 class="text-lg font-bold text-ink">{agent.name}</h2>
 				<p class="text-xs text-ink-muted">
-					{agent.status === 'ready' ? 'Ready' : 'Setting up'} · {agent.services.filter(s => s.status === 'connected').length} services connected
+					{agent.status === 'ready' || agent.status === 'active' ? 'Ready' : 'Setting up'} · {(agent.services ?? []).filter(s => s.status === 'connected').length} services connected
 				</p>
 			</div>
 		</div>

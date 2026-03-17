@@ -52,8 +52,10 @@ def get_vulti_home() -> Path:
     """Get the Vulti home directory (~/.vulti)."""
     return Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
 
-def get_config_path() -> Path:
-    """Get the main config file path."""
+def get_config_path(agent_id: Optional[str] = None) -> Path:
+    """Get the config file path. If agent_id is given, returns per-agent config."""
+    if agent_id:
+        return get_vulti_home() / "agents" / agent_id / "config.yaml"
     return get_vulti_home() / "config.yaml"
 
 def get_env_path() -> Path:
@@ -100,6 +102,15 @@ def ensure_vulti_home():
         d.mkdir(parents=True, exist_ok=True)
         _secure_dir(d)
     _ensure_default_soul_md(home)
+
+    # Initialize multi-agent registry (migrates single-agent installs)
+    try:
+        from vulti_cli.agent_registry import AgentRegistry
+        registry = AgentRegistry(home)
+        registry.ensure_initialized()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug("Agent registry init skipped: %s", e)
 
 
 # =============================================================================
@@ -1033,11 +1044,11 @@ def _normalize_max_turns_config(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
-def load_config() -> Dict[str, Any]:
-    """Load configuration from ~/.vulti/config.yaml."""
+def load_config(agent_id: Optional[str] = None) -> Dict[str, Any]:
+    """Load configuration from ~/.vulti/config.yaml (or per-agent config)."""
     import copy
     ensure_vulti_home()
-    config_path = get_config_path()
+    config_path = get_config_path(agent_id)
     
     config = copy.deepcopy(DEFAULT_CONFIG)
     
@@ -1155,12 +1166,12 @@ _COMMENTED_SECTIONS = """
 """
 
 
-def save_config(config: Dict[str, Any]):
-    """Save configuration to ~/.vulti/config.yaml."""
+def save_config(config: Dict[str, Any], agent_id: Optional[str] = None):
+    """Save configuration to ~/.vulti/config.yaml (or per-agent config)."""
     from utils import atomic_yaml_write
 
     ensure_vulti_home()
-    config_path = get_config_path()
+    config_path = get_config_path(agent_id)
     normalized = _normalize_max_turns_config(config)
 
     # Build optional commented-out sections for features that are off by

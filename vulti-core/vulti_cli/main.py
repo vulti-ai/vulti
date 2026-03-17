@@ -1889,6 +1889,12 @@ def cmd_cron(args):
     cron_command(args)
 
 
+def cmd_rule(args):
+    """Conditional rule management."""
+    from vulti_cli.rule import rule_command
+    rule_command(args)
+
+
 def cmd_doctor(args):
     """Check configuration and dependencies."""
     from vulti_cli.doctor import run_doctor
@@ -2485,7 +2491,7 @@ def _coalesce_session_name_args(argv: list) -> list:
     """
     _SUBCOMMANDS = {
         "chat", "model", "gateway", "setup", "whatsapp", "login", "logout",
-        "status", "cron", "doctor", "config", "pairing", "skills", "tools",
+        "status", "cron", "rule", "doctor", "config", "pairing", "skills", "tools",
         "sessions", "insights", "version", "update", "uninstall",
     }
     _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
@@ -2914,7 +2920,55 @@ For more help on a command:
     cron_subparsers.add_parser("tick", help="Run due jobs once and exit")
 
     cron_parser.set_defaults(func=cmd_cron)
-    
+
+    # =========================================================================
+    # rule command
+    # =========================================================================
+    rule_parser = subparsers.add_parser(
+        "rule",
+        help="Conditional rule management",
+        description="Manage conditional automation rules (if X then Y)"
+    )
+    rule_subparsers = rule_parser.add_subparsers(dest="rule_command")
+
+    # rule list
+    rule_list = rule_subparsers.add_parser("list", help="List rules")
+    rule_list.add_argument("--all", action="store_true", help="Include disabled rules")
+
+    # rule create/add
+    rule_create = rule_subparsers.add_parser("create", aliases=["add"], help="Create a conditional rule")
+    rule_create.add_argument("condition", help="Natural language condition (when to trigger)")
+    rule_create.add_argument("action", help="Natural language action (what to do)")
+    rule_create.add_argument("--name", help="Optional human-friendly rule name")
+    rule_create.add_argument("--priority", type=int, default=0, help="Priority (lower = higher, default 0)")
+    rule_create.add_argument("--max-triggers", type=int, help="Auto-disable after N triggers")
+    rule_create.add_argument("--cooldown", type=int, help="Minimum minutes between triggers")
+    rule_create.add_argument("--tags", nargs="+", help="Optional tags for organization")
+
+    # rule edit
+    rule_edit = rule_subparsers.add_parser("edit", help="Edit an existing rule")
+    rule_edit.add_argument("rule_id", help="Rule ID to edit")
+    rule_edit.add_argument("--condition", help="New condition")
+    rule_edit.add_argument("--action", dest="action_prompt", help="New action")
+    rule_edit.add_argument("--name", help="New rule name")
+    rule_edit.add_argument("--priority", type=int, help="New priority")
+    rule_edit.add_argument("--max-triggers", type=int, help="New max trigger count")
+    rule_edit.add_argument("--cooldown", type=int, help="New cooldown in minutes")
+    rule_edit.add_argument("--tags", nargs="+", help="Replace tags")
+    rule_edit.add_argument("--clear-tags", action="store_true", help="Remove all tags")
+
+    # lifecycle actions
+    rule_enable = rule_subparsers.add_parser("enable", help="Enable a disabled rule")
+    rule_enable.add_argument("rule_id", help="Rule ID to enable")
+
+    rule_disable = rule_subparsers.add_parser("disable", help="Disable a rule")
+    rule_disable.add_argument("rule_id", help="Rule ID to disable")
+
+    rule_remove = rule_subparsers.add_parser("remove", aliases=["rm", "delete"], help="Remove a rule")
+    rule_remove.add_argument("rule_id", help="Rule ID to remove")
+
+    rule_parser.set_defaults(func=cmd_rule)
+
     # =========================================================================
     # doctor command
     # =========================================================================

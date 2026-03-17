@@ -3,8 +3,11 @@
 
 	let { agent }: { agent: GatewayAgent } = $props();
 
+	// svelte-ignore state_referenced_locally
 	let name = $state(agent.name);
+	// svelte-ignore state_referenced_locally
 	let avatar = $state(agent.avatar || '');
+	// svelte-ignore state_referenced_locally
 	let personality = $state(agent.personality || '');
 
 	const emojiOptions = ['🤖', '🧠', '💼', '🏠', '🎨', '📊', '🔧', '🌟', '🎯', '🦊', '🐻', '🦉'];
@@ -22,7 +25,7 @@
 
 	<!-- Avatar -->
 	<div>
-		<label class="mb-2 block text-sm font-medium text-ink">Avatar</label>
+		<span class="mb-2 block text-sm font-medium text-ink">Avatar</span>
 		<div class="flex flex-wrap gap-2">
 			{#each emojiOptions as emoji}
 				<button

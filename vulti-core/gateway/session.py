@@ -399,7 +399,7 @@ class SessionEntry:
         )
 
 
-def build_session_key(source: SessionSource, group_sessions_per_user: bool = True) -> str:
+def build_session_key(source: SessionSource, group_sessions_per_user: bool = True, agent_id: str = "default") -> str:
     """Build a deterministic session key from a message source.
 
     This is the single source of truth for session key construction.
@@ -419,18 +419,19 @@ def build_session_key(source: SessionSource, group_sessions_per_user: bool = Tru
         shared session per chat.
       - Without identifiers, messages fall back to one session per platform/chat_type.
     """
+    prefix = f"agent:{agent_id}"
     platform = source.platform.value
     if source.chat_type == "dm":
         if source.chat_id:
             if source.thread_id:
-                return f"agent:main:{platform}:dm:{source.chat_id}:{source.thread_id}"
-            return f"agent:main:{platform}:dm:{source.chat_id}"
+                return f"{prefix}:{platform}:dm:{source.chat_id}:{source.thread_id}"
+            return f"{prefix}:{platform}:dm:{source.chat_id}"
         if source.thread_id:
-            return f"agent:main:{platform}:dm:{source.thread_id}"
-        return f"agent:main:{platform}:dm"
+            return f"{prefix}:{platform}:dm:{source.thread_id}"
+        return f"{prefix}:{platform}:dm"
 
     participant_id = source.user_id_alt or source.user_id
-    key_parts = ["agent:main", platform, source.chat_type]
+    key_parts = [prefix, platform, source.chat_type]
 
     if source.chat_id:
         key_parts.append(source.chat_id)

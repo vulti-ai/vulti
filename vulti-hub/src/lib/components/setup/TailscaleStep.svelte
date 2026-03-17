@@ -1,13 +1,14 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
 	import { onMount } from 'svelte';
-	import QRCode from 'qrcode';
+	import * as QRCode from 'qrcode';
 
 	let { status, onComplete }: {
 		status: 'pending' | 'connected' | 'skipped';
 		onComplete: () => void;
 	} = $props();
 
+	// svelte-ignore state_referenced_locally
 	let phase = $state<'checking' | 'not_installed' | 'installing' | 'installed_not_running' | 'connected'>(
 		status === 'connected' ? 'connected' : 'checking'
 	);

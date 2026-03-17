@@ -81,7 +81,13 @@ MEMORY_GUIDANCE = (
     "Do NOT save task progress, session outcomes, completed-work logs, or temporary TODO "
     "state to memory; use session_search to recall those from past transcripts. "
     "If you've discovered a new way to do something, solved a problem that could be "
-    "necessary later, save it as a skill with the skill tool."
+    "necessary later, save it as a skill with the skill tool.\n"
+    "At the natural end of a substantive conversation (5+ exchanges, or after corrections "
+    "or significant learnings), load the 'reflect' skill and run a reflection pass. "
+    "This consolidates what you learned into three layers: soul (USER.md — who the user is "
+    "at a deep level), memories (MEMORY.md — specific learnings and corrections), and "
+    "understanding (your own behavioral calibration). You can also offer: "
+    "'Want me to reflect on this session before we close?'"
 )
 
 SESSION_SEARCH_GUIDANCE = (
@@ -363,11 +369,11 @@ def _truncate_content(content: str, filename: str, max_chars: int = CONTEXT_FILE
     return head + marker + tail
 
 
-def build_context_files_prompt(cwd: Optional[str] = None) -> str:
+def build_context_files_prompt(cwd: Optional[str] = None, agent_id: Optional[str] = None) -> str:
     """Discover and load context files for the system prompt.
 
     Discovery: AGENTS.md (recursive), .cursorrules / .cursor/rules/*.mdc,
-    and SOUL.md from VULTI_HOME only. Each capped at 20,000 chars.
+    and SOUL.md from VULTI_HOME (or per-agent directory). Each capped at 20,000 chars.
     """
     if cwd is None:
         cwd = os.getcwd()
@@ -435,14 +441,22 @@ def build_context_files_prompt(cwd: Optional[str] = None) -> str:
         cursorrules_content = _truncate_content(cursorrules_content, ".cursorrules")
         sections.append(cursorrules_content)
 
-    # SOUL.md from VULTI_HOME only
+    # SOUL.md: check per-agent directory first, then VULTI_HOME
     try:
         from vulti_cli.config import ensure_vulti_home
         ensure_vulti_home()
     except Exception as e:
         logger.debug("Could not ensure VULTI_HOME before loading SOUL.md: %s", e)
 
-    soul_path = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti")) / "SOUL.md"
+    _vulti_home = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
+    _agent_id = agent_id or os.getenv("VULTI_AGENT_ID")
+    soul_path = None
+    if _agent_id:
+        _agent_soul = _vulti_home / "agents" / _agent_id / "SOUL.md"
+        if _agent_soul.exists():
+            soul_path = _agent_soul
+    if soul_path is None:
+        soul_path = _vulti_home / "SOUL.md"
     if soul_path.exists():
         try:
             content = soul_path.read_text(encoding="utf-8").strip()
@@ -456,3 +470,91 @@ def build_context_files_prompt(cwd: Optional[str] = None) -> str:
     if not sections:
         return ""
     return "# Project Context\n\nThe following project context files have been loaded and should be followed:\n\n" + "\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
+# Rules prompt injection
+# ---------------------------------------------------------------------------
+
+MAX_RULES_IN_PROMPT = 20
+MAX_RULE_TEXT_CHARS = 200
+MAX_RULES_SECTION_CHARS = 3000
+
+
+def build_rules_prompt(agent_id: Optional[str] = None) -> str:
+    """Build the active rules block for injection into the system prompt.
+
+    Loads enabled rules for the given agent (respecting cooldowns),
+    sorts by priority, and renders a compact instruction block.
+    Returns empty string if no active rules.
+    """
+    try:
+        from rules.rules import get_active_rules
+    except ImportError:
+        return ""
+
+    rules = get_active_rules(agent_id)
+    if not rules:
+        return ""
+
+    total = len(rules)
+    shown = rules[:MAX_RULES_IN_PROMPT]
+
+    def _trunc(text: str) -> str:
+        text = text.strip().replace("\n", " ")
+        if len(text) > MAX_RULE_TEXT_CHARS:
+            return text[:MAX_RULE_TEXT_CHARS - 3] + "..."
+        return text
+
+    lines = []
+    for r in shown:
+        name = r.get("name", "unnamed")
+        rid = r["id"]
+        cond = _trunc(r.get("condition", ""))
+        act = _trunc(r.get("action", ""))
+        lines.append(f'  [p={r.get("priority", 0)}] {name} (id:{rid}): IF "{cond}" THEN "{act}"')
+
+    rules_block = "\n".join(lines)
+
+    overflow_note = ""
+    if total > MAX_RULES_IN_PROMPT:
+        overflow_note = f"\n  ({total - MAX_RULES_IN_PROMPT} more rules not shown — consider consolidating or removing unused rules)"
+
+    section = (
+        "## Active Rules\n\n"
+        "You have conditional rules. For EVERY incoming message, silently evaluate whether\n"
+        "any rule's condition matches. If a rule matches, execute its action using your\n"
+        "tools BEFORE composing your normal response. Multiple rules can match the same message.\n"
+        "Execute them in priority order (lowest number first). After executing a rule's action,\n"
+        "call rule(action='record', rule_id='...') to log the trigger.\n"
+        "Do not mention rule evaluation to the user unless the rule's action produces a visible result.\n"
+        "If no rules match, proceed normally without mentioning rules.\n\n"
+        "<rules>\n"
+        f"{rules_block}{overflow_note}\n"
+        "</rules>"
+    )
+
+    # Final size guard
+    if len(section) > MAX_RULES_SECTION_CHARS:
+        # Drop lowest-priority rules until we fit
+        while len(shown) > 1 and len(section) > MAX_RULES_SECTION_CHARS:
+            shown = shown[:-1]
+            lines = lines[:-1]
+            rules_block = "\n".join(lines)
+            dropped = total - len(shown)
+            overflow_note = f"\n  ({dropped} more rules not shown — consider consolidating or removing unused rules)"
+            section = (
+                "## Active Rules\n\n"
+                "You have conditional rules. For EVERY incoming message, silently evaluate whether\n"
+                "any rule's condition matches. If a rule matches, execute its action using your\n"
+                "tools BEFORE composing your normal response. Multiple rules can match the same message.\n"
+                "Execute them in priority order (lowest number first). After executing a rule's action,\n"
+                "call rule(action='record', rule_id='...') to log the trigger.\n"
+                "Do not mention rule evaluation to the user unless the rule's action produces a visible result.\n"
+                "If no rules match, proceed normally without mentioning rules.\n\n"
+                "<rules>\n"
+                f"{rules_block}{overflow_note}\n"
+                "</rules>"
+            )
+
+    return section

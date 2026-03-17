@@ -85,7 +85,7 @@ from agent.model_metadata import (
 )
 from agent.context_compressor import ContextCompressor
 from agent.prompt_caching import apply_anthropic_cache_control
-from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt
+from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_rules_prompt
 from agent.display import (
     KawaiiSpinner, build_tool_preview as _build_tool_preview,
     get_cute_tool_message as _get_cute_tool_message_impl,
@@ -1920,9 +1920,16 @@ class AIAgent:
             prompt_parts.append(skills_prompt)
 
         if not self.skip_context_files:
-            context_files_prompt = build_context_files_prompt()
+            _agent_id_for_context = os.getenv("VULTI_AGENT_ID")
+            context_files_prompt = build_context_files_prompt(agent_id=_agent_id_for_context)
             if context_files_prompt:
                 prompt_parts.append(context_files_prompt)
+
+        # Conditional rules — injected for all platforms including cron
+        _agent_id_for_rules = os.getenv("VULTI_AGENT_ID")
+        rules_prompt = build_rules_prompt(agent_id=_agent_id_for_rules)
+        if rules_prompt:
+            prompt_parts.append(rules_prompt)
 
         from vulti_time import now as _vulti_now
         now = _vulti_now()

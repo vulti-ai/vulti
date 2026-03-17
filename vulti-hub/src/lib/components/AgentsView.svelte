@@ -76,9 +76,9 @@
 								<span class="text-xs text-slate-400">{agent.status}</span>
 							</span>
 						</div>
-						{#if agent.platforms.length > 0}
+						{#if (agent.platforms ?? []).length > 0}
 							<div class="flex flex-wrap gap-1.5">
-								{#each agent.platforms as platform}
+								{#each agent.platforms ?? [] as platform}
 									<span class="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{platform}</span>
 								{/each}
 							</div>

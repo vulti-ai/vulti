@@ -1,9 +1,9 @@
 <script lang="ts">
-	import SetupWizard from '$lib/components/SetupWizard.svelte';
+	import AgentDashboard from '$lib/components/AgentDashboard.svelte';
 </script>
 
 <svelte:head>
-	<title>Vulti - Setup</title>
+	<title>Vulti Hub</title>
 </svelte:head>
 
-<SetupWizard />
+<AgentDashboard />

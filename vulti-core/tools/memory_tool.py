@@ -33,7 +33,17 @@ from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Where memory files live
+# Where memory files live — resolves per-agent if VULTI_AGENT_ID is set
+def _resolve_memory_dir() -> Path:
+    """Resolve the memory directory, checking per-agent path first."""
+    vulti_home = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
+    agent_id = os.getenv("VULTI_AGENT_ID")
+    if agent_id:
+        agent_mem = vulti_home / "agents" / agent_id / "memories"
+        if agent_mem.exists():
+            return agent_mem
+    return vulti_home / "memories"
+
 MEMORY_DIR = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti")) / "memories"
 
 ENTRY_DELIMITER = "\n§\n"
@@ -95,20 +105,29 @@ class MemoryStore:
         Tool responses always reflect this live state.
     """
 
-    def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375):
+    def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375, memory_dir: Path = None):
         self.memory_entries: List[str] = []
         self.user_entries: List[str] = []
         self.memory_char_limit = memory_char_limit
         self.user_char_limit = user_char_limit
+        self._memory_dir = memory_dir  # Set explicitly or resolved at load time
         # Frozen snapshot for system prompt -- set once at load_from_disk()
         self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": ""}
 
+    @property
+    def memory_dir(self) -> Path:
+        """Resolve the memory directory, using per-agent path if available."""
+        if self._memory_dir:
+            return self._memory_dir
+        return _resolve_memory_dir()
+
     def load_from_disk(self):
         """Load entries from MEMORY.md and USER.md, capture system prompt snapshot."""
-        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+        mem_dir = self.memory_dir
+        mem_dir.mkdir(parents=True, exist_ok=True)
 
-        self.memory_entries = self._read_file(MEMORY_DIR / "MEMORY.md")
-        self.user_entries = self._read_file(MEMORY_DIR / "USER.md")
+        self.memory_entries = self._read_file(mem_dir / "MEMORY.md")
+        self.user_entries = self._read_file(mem_dir / "USER.md")
 
         # Deduplicate entries (preserves order, keeps first occurrence)
         self.memory_entries = list(dict.fromkeys(self.memory_entries))
@@ -122,12 +141,13 @@ class MemoryStore:
 
     def save_to_disk(self, target: str):
         """Persist entries to the appropriate file. Called after every mutation."""
-        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+        mem_dir = self.memory_dir
+        mem_dir.mkdir(parents=True, exist_ok=True)
 
         if target == "memory":
-            self._write_file(MEMORY_DIR / "MEMORY.md", self.memory_entries)
+            self._write_file(mem_dir / "MEMORY.md", self.memory_entries)
         elif target == "user":
-            self._write_file(MEMORY_DIR / "USER.md", self.user_entries)
+            self._write_file(mem_dir / "USER.md", self.user_entries)
 
     def _entries_for(self, target: str) -> List[str]:
         if target == "user":

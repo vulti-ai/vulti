@@ -8,19 +8,13 @@
 	} = $props();
 
 	function statusColor(status: string): string {
-		if (status === 'ready') return 'bg-green-500';
-		if (status === 'setting_up') return 'bg-yellow-500';
+		if (status === 'connected' || status === 'active' || status === 'ready') return 'bg-green-500';
+		if (status === 'disconnected' || status === 'stopped' || status === 'setting_up') return 'bg-yellow-500';
 		return 'bg-red-500';
 	}
 
 	function selectAgent(id: string) {
-		store.gatewayActiveAgentId = id;
-	}
-
-	function forkActive() {
-		if (store.gatewayActiveAgentId) {
-			store.forkAgent(store.gatewayActiveAgentId);
-		}
+		store.activeAgentId = id;
 	}
 </script>
 
@@ -43,9 +37,6 @@
 				<path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
 			</svg>
 			<span>Settings</span>
-			{#if !store.gatewayGlobal.tailscale.connected}
-				<span class="ml-auto h-2 w-2 rounded-full bg-yellow-500"></span>
-			{/if}
 		</button>
 	</div>
 
@@ -55,26 +46,39 @@
 	<!-- Agents label -->
 	<div class="flex items-center justify-between px-4 py-1">
 		<span class="text-xs font-medium uppercase text-ink-muted">Agents</span>
-		<span class="text-xs text-ink-faint">{store.gatewayAgents.length}</span>
+		<span class="text-xs text-ink-faint">{store.agents.length}</span>
 	</div>
 
 	<!-- Agent list -->
 	<nav class="flex-1 overflow-y-auto px-3 pb-3">
-		{#each store.gatewayAgents as agent}
-			<button
-				onclick={() => selectAgent(agent.id)}
-				class="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors
-					{agent.id === store.gatewayActiveAgentId && !settingsActive ? 'bg-surface text-ink' : 'text-ink-dim hover:bg-surface-hover'}"
-			>
-				<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm">
-					{agent.avatar || agent.name.charAt(0)}
-				</span>
-				<span class="flex-1 truncate font-medium">{agent.name}</span>
-				<span class="h-2 w-2 shrink-0 rounded-full {statusColor(agent.status)}"></span>
-			</button>
+		{#each store.agents as agent}
+			<div class="flex items-center gap-1">
+				<button
+					onclick={() => selectAgent(agent.id)}
+					class="flex flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors
+						{agent.id === store.activeAgentId && !settingsActive ? 'bg-surface text-ink' : 'text-ink-dim hover:bg-surface-hover'}"
+				>
+					<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm">
+						{agent.name.charAt(0)}
+					</span>
+					<span class="flex-1 truncate font-medium">{agent.name}</span>
+					<span class="h-2 w-2 shrink-0 rounded-full {statusColor(agent.status)}"></span>
+				</button>
+				<a
+					href="http://localhost:5173"
+					target="_blank"
+					rel="noopener noreferrer"
+					title="Open web interface"
+					class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-hover hover:text-primary transition-colors"
+				>
+					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+					</svg>
+				</a>
+			</div>
 		{/each}
 
-		{#if store.gatewayAgents.length === 0}
+		{#if store.agents.length === 0}
 			<p class="px-3 py-4 text-center text-xs text-ink-muted">No agents yet</p>
 		{/if}
 	</nav>
@@ -90,16 +94,5 @@
 			</svg>
 			New Agent
 		</button>
-		{#if store.gatewayActiveAgentId && !settingsActive}
-			<button
-				onclick={forkActive}
-				class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-dim hover:bg-surface-hover"
-			>
-				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
-				</svg>
-				Fork Agent
-			</button>
-		{/if}
 	</div>
 </div>

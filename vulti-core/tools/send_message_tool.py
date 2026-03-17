@@ -41,7 +41,7 @@ SEND_MESSAGE_SCHEMA = {
             },
             "target": {
                 "type": "string",
-                "description": "Delivery target. Format: 'platform' (uses home channel), 'platform:#channel-name', 'platform:chat_id', or Telegram topic 'telegram:chat_id:thread_id'. Examples: 'telegram', 'telegram:-1001234567890:17585', 'discord:#bot-home', 'slack:#engineering', 'signal:+15551234567'"
+                "description": "Delivery target. Formats: 'platform' (uses home channel), 'platform:#channel-name', 'platform:chat_id', 'telegram:chat_id:thread_id', or 'agent:agent_id' (inter-agent message). Examples: 'telegram', 'discord:#bot-home', 'agent:researcher'"
             },
             "message": {
                 "type": "string",
@@ -63,17 +63,82 @@ def send_message_tool(args, **kw):
     return _handle_send(args)
 
 
+def _handle_agent_send(target_agent_id: str, message: str) -> str:
+    """Send a message to another agent via the inter-agent bus."""
+    hop_count = int(os.getenv("VULTI_AGENT_HOP_COUNT", "0"))
+    sender_agent_id = os.getenv("VULTI_AGENT_ID", "default")
+
+    if hop_count >= 3:
+        return json.dumps({
+            "error": f"Max inter-agent hop count reached (3). "
+            "Cannot send further inter-agent messages to prevent loops."
+        })
+
+    try:
+        import asyncio
+        from gateway.agent_bus import send_to_agent
+
+        # Run the async agent bus call
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(
+                    asyncio.run,
+                    send_to_agent(
+                        target_agent_id=target_agent_id,
+                        message=message,
+                        sender_agent_id=sender_agent_id,
+                        hop_count=hop_count,
+                    ),
+                ).result(timeout=180)
+        else:
+            result = asyncio.run(send_to_agent(
+                target_agent_id=target_agent_id,
+                message=message,
+                sender_agent_id=sender_agent_id,
+                hop_count=hop_count,
+            ))
+
+        return json.dumps(result)
+    except Exception as e:
+        logger.error("Inter-agent send to '%s' failed: %s", target_agent_id, e)
+        return json.dumps({"error": f"Failed to send to agent '{target_agent_id}': {e}"})
+
+
 def _handle_list():
-    """Return formatted list of available messaging targets."""
+    """Return formatted list of available messaging targets (platforms + agents)."""
+    result = {}
     try:
         from gateway.channel_directory import format_directory_for_display
-        return json.dumps({"targets": format_directory_for_display()})
+        result["targets"] = format_directory_for_display()
     except Exception as e:
-        return json.dumps({"error": f"Failed to load channel directory: {e}"})
+        result["targets"] = f"Failed to load channel directory: {e}"
+
+    # Include available agents
+    try:
+        from vulti_cli.agent_registry import AgentRegistry
+        registry = AgentRegistry()
+        current_agent = os.getenv("VULTI_AGENT_ID", "default")
+        agents = [
+            f"agent:{a.id} — {a.name} ({a.description})"
+            for a in registry.list_agents()
+            if a.id != current_agent and a.status == "active"
+        ]
+        if agents:
+            result["agents"] = agents
+    except Exception:
+        pass
+
+    return json.dumps(result)
 
 
 def _handle_send(args):
-    """Send a message to a platform target."""
+    """Send a message to a platform target or another agent."""
     target = args.get("target", "")
     message = args.get("message", "")
     if not target or not message:
@@ -82,6 +147,12 @@ def _handle_send(args):
     parts = target.split(":", 1)
     platform_name = parts[0].strip().lower()
     target_ref = parts[1].strip() if len(parts) > 1 else None
+
+    # Inter-agent messaging: target="agent:agent_id"
+    if platform_name == "agent":
+        if not target_ref:
+            return json.dumps({"error": "agent target requires an agent ID, e.g. 'agent:researcher'"})
+        return _handle_agent_send(target_ref, message)
     chat_id = None
     thread_id = None
 

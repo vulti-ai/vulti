@@ -317,6 +317,13 @@ class GatewayRunner:
         self.config = config or load_gateway_config()
         self.adapters: Dict[Platform, BasePlatformAdapter] = {}
 
+        # Multi-agent registry and routing
+        from vulti_cli.agent_registry import AgentRegistry
+        from gateway.config import load_agent_routing
+        self.agent_registry = AgentRegistry()
+        self.agent_registry.ensure_initialized()
+        self._agent_routing_table = load_agent_routing()
+
         # Load ephemeral config from config.yaml / env vars.
         # Both are injected at API-call time only and never persisted.
         self._prefill_messages = self._load_prefill_messages()
@@ -586,12 +593,42 @@ class GatewayRunner:
     def exit_reason(self) -> Optional[str]:
         return self._exit_reason
 
-    def _session_key_for_source(self, source: SessionSource) -> str:
+    def _resolve_agent_for_source(self, source: SessionSource, message_text: str = "") -> tuple[str, str]:
+        """Resolve which agent should handle a message and extract clean message text.
+
+        Returns (agent_id, cleaned_message_text).
+
+        Resolution order:
+          1. @agent_name mention in message text
+          2. Routing table match from SessionSource
+          3. Default agent
+        """
+        import re
+        from gateway.config import resolve_agent_routing
+
+        # Check for @agent_name mention
+        if message_text:
+            match = re.match(r"^@([a-z][a-z0-9\-]{0,31})\b\s*(.*)", message_text, re.DOTALL)
+            if match:
+                mentioned_id = match.group(1)
+                if self.agent_registry.get_agent(mentioned_id):
+                    return mentioned_id, match.group(2).strip() or message_text
+
+        # Fall back to routing table
+        agent_id = resolve_agent_routing(source, self._agent_routing_table)
+        return agent_id, message_text
+
+    def _session_key_for_source(self, source: SessionSource, agent_id: str = "default") -> str:
         """Resolve the current session key for a source, honoring gateway config when available."""
         if hasattr(self, "session_store") and self.session_store is not None:
             try:
                 session_key = self.session_store._generate_session_key(source)
                 if isinstance(session_key, str) and session_key:
+                    # Replace agent:main or agent:default prefix if agent_id differs
+                    if agent_id != "default" and session_key.startswith("agent:default:"):
+                        session_key = f"agent:{agent_id}:{session_key[len('agent:default:'):]}"
+                    elif agent_id != "main" and session_key.startswith("agent:main:"):
+                        session_key = f"agent:{agent_id}:{session_key[len('agent:main:'):]}"
                     return session_key
             except Exception:
                 pass
@@ -599,6 +636,7 @@ class GatewayRunner:
         return build_session_key(
             source,
             group_sessions_per_user=getattr(config, "group_sessions_per_user", True),
+            agent_id=agent_id,
         )
 
     def _resolve_turn_agent_config(self, user_message: str, model: str, runtime_kwargs: dict) -> dict:
@@ -1323,6 +1361,17 @@ class GatewayRunner:
                         )
             return None
         
+        # Resolve which agent should handle this message
+        _resolved_agent_id, _resolved_text = self._resolve_agent_for_source(source, event.text or "")
+        if _resolved_text != (event.text or ""):
+            event.text = _resolved_text  # Strip @mention from text
+
+        # Store resolved agent_id on event so command handlers can access it
+        event._agent_id = _resolved_agent_id
+
+        # Set VULTI_AGENT_ID so tools know which agent they serve
+        os.environ["VULTI_AGENT_ID"] = _resolved_agent_id
+
         # PRIORITY handling when an agent is already running for this session.
         # Default behavior is to interrupt immediately so user text/stop messages
         # are handled with minimal latency.
@@ -1330,7 +1379,7 @@ class GatewayRunner:
         # Special case: Telegram/photo bursts often arrive as multiple near-
         # simultaneous updates. Do NOT interrupt for photo-only follow-ups here;
         # let the adapter-level batching/queueing logic absorb them.
-        _quick_key = self._session_key_for_source(source)
+        _quick_key = self._session_key_for_source(source, agent_id=_resolved_agent_id)
         if _quick_key in self._running_agents:
             if event.get_command() == "status":
                 return await self._handle_status_command(event)
@@ -1518,7 +1567,7 @@ class GatewayRunner:
                 logger.debug("Skill command check failed (non-fatal): %s", e)
         
         # Check for pending exec approval responses
-        session_key_preview = self._session_key_for_source(source)
+        session_key_preview = self._session_key_for_source(source, agent_id=_resolved_agent_id)
         if session_key_preview in self._pending_approvals:
             user_text = event.text.strip().lower()
             if user_text in ("yes", "y", "approve", "ok", "go", "do it"):
@@ -1578,7 +1627,46 @@ class GatewayRunner:
 
         # Build the context prompt to inject
         context_prompt = build_session_context_prompt(context, redact_pii=_redact_pii)
-        
+
+        # Inject agent identity when running a non-default agent
+        if _resolved_agent_id != "default":
+            agent_meta = self.agent_registry.get_agent(_resolved_agent_id)
+            if agent_meta:
+                other_agents = [
+                    f"  - agent:{a.id} -- {a.name} ({a.description})"
+                    for a in self.agent_registry.list_agents()
+                    if a.id != _resolved_agent_id and a.status == "active"
+                ]
+                identity_block = (
+                    f"## Agent Identity\n"
+                    f"You are **{agent_meta.name}** (agent ID: {agent_meta.id}).\n"
+                )
+                if agent_meta.description:
+                    identity_block += f"Your role: {agent_meta.description}\n"
+                if other_agents:
+                    identity_block += (
+                        "\n## Inter-Agent Communication\n"
+                        "You can message other agents using send_message(target=\"agent:<id>\"):\n"
+                        + "\n".join(other_agents) + "\n"
+                    )
+                context_prompt = identity_block + "\n" + context_prompt
+        else:
+            # Even for default agent, list other agents if they exist
+            other_agents = [
+                a for a in self.agent_registry.list_agents()
+                if a.id != _resolved_agent_id and a.status == "active"
+            ]
+            if other_agents:
+                agent_lines = [
+                    f"  - agent:{a.id} -- {a.name} ({a.description})"
+                    for a in other_agents
+                ]
+                context_prompt += (
+                    "\n\n## Inter-Agent Communication\n"
+                    "You can message other agents using send_message(target=\"agent:<id>\"):\n"
+                    + "\n".join(agent_lines) + "\n"
+                )
+
         # If the previous session expired and was auto-reset, prepend a notice
         # so the agent knows this is a fresh conversation (not an intentional /reset).
         if getattr(session_entry, 'was_auto_reset', False):
@@ -1960,7 +2048,8 @@ class GatewayRunner:
                 history=history,
                 source=source,
                 session_id=session_entry.session_id,
-                session_key=session_key
+                session_key=session_key,
+                agent_id=_resolved_agent_id,
             )
             
             response = agent_result.get("final_response") or ""
@@ -2169,9 +2258,9 @@ class GatewayRunner:
     async def _handle_reset_command(self, event: MessageEvent) -> str:
         """Handle /new or /reset command."""
         source = event.source
-        
+
         # Get existing session key
-        session_key = self._session_key_for_source(source)
+        session_key = self._session_key_for_source(source, agent_id=getattr(event, '_agent_id', 'default'))
         
         # Flush memories in the background (fire-and-forget) so the user
         # gets the "Session reset!" response immediately.
@@ -3408,7 +3497,7 @@ class GatewayRunner:
             return "Session database not available."
 
         source = event.source
-        session_key = self._session_key_for_source(source)
+        session_key = self._session_key_for_source(source, agent_id=getattr(event, '_agent_id', 'default'))
         name = event.get_command_args().strip()
 
         if not name:
@@ -3482,7 +3571,7 @@ class GatewayRunner:
     async def _handle_usage_command(self, event: MessageEvent) -> str:
         """Handle /usage command -- show token usage for the session's last agent run."""
         source = event.source
-        session_key = self._session_key_for_source(source)
+        session_key = self._session_key_for_source(source, agent_id=getattr(event, '_agent_id', 'default'))
 
         agent = self._running_agents.get(session_key)
         if agent and hasattr(agent, "session_total_tokens") and agent.session_api_calls > 0:
@@ -4085,6 +4174,7 @@ class GatewayRunner:
         session_id: str,
         session_key: str = None,
         _interrupt_depth: int = 0,
+        agent_id: str = "default",
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -4335,17 +4425,31 @@ class GatewayRunner:
             # Pass session_key to process registry via env var so background
             # processes can be mapped back to this gateway session
             os.environ["VULTI_SESSION_KEY"] = session_key or ""
+            os.environ["VULTI_AGENT_ID"] = agent_id
 
             # Read from env var or use default (same as CLI)
             max_iterations = int(os.getenv("VULTI_MAX_ITERATIONS", "90"))
-            
+
             # Map platform enum to the platform hint key the agent understands.
             # Platform.LOCAL ("local") maps to "cli"; others pass through as-is.
             platform_key = "cli" if source.platform == Platform.LOCAL else source.platform.value
-            
-            # Combine platform context with user-configured ephemeral system prompt
+
+            # Load per-agent config overrides
+            _agent_config = {}
+            if agent_id != "default":
+                try:
+                    from vulti_cli.config import load_config as _load_agent_config
+                    _agent_config = _load_agent_config(agent_id=agent_id)
+                except Exception as _ac_err:
+                    logger.debug("Could not load agent config for '%s': %s", agent_id, _ac_err)
+
+            # Combine platform context with user-configured ephemeral system prompt.
+            # For non-default agents, use their system_prompt from config if available.
             combined_ephemeral = context_prompt or ""
-            if self._ephemeral_system_prompt:
+            _agent_system_prompt = _agent_config.get("agent", {}).get("system_prompt", "") if _agent_config else ""
+            if _agent_system_prompt:
+                combined_ephemeral = (combined_ephemeral + "\n\n" + _agent_system_prompt).strip()
+            elif self._ephemeral_system_prompt:
                 combined_ephemeral = (combined_ephemeral + "\n\n" + self._ephemeral_system_prompt).strip()
 
             # Re-read .env and config for fresh credentials (gateway is long-lived,
@@ -4357,7 +4461,11 @@ class GatewayRunner:
             except Exception:
                 pass
 
-            model = _resolve_gateway_model()
+            # Use per-agent model if configured, otherwise gateway default
+            if _agent_config.get("model"):
+                model = _agent_config["model"]
+            else:
+                model = _resolve_gateway_model()
 
             try:
                 runtime_kwargs = _resolve_runtime_agent_kwargs()

@@ -3252,7 +3252,225 @@ class VultiCLI:
 
         print(f"(._.) Unknown cron command: {subcommand}")
         print("  Available: list, add, edit, pause, resume, run, remove")
-    
+
+    def _handle_rule_command(self, cmd: str):
+        """Handle the /rule command to manage conditional automation rules."""
+        import shlex
+        from tools.rule_tools import rule as rule_tool
+
+        def _rule_api(**kwargs):
+            return json.loads(rule_tool(**kwargs))
+
+        def _parse_flags(tokens):
+            opts = {
+                "name": None,
+                "priority": None,
+                "max_triggers": None,
+                "cooldown": None,
+                "tags": [],
+                "clear_tags": False,
+                "all": False,
+                "condition": None,
+                "action_prompt": None,
+                "positionals": [],
+            }
+            i = 0
+            while i < len(tokens):
+                token = tokens[i]
+                if token == "--name" and i + 1 < len(tokens):
+                    opts["name"] = tokens[i + 1]
+                    i += 2
+                elif token == "--priority" and i + 1 < len(tokens):
+                    try:
+                        opts["priority"] = int(tokens[i + 1])
+                    except ValueError:
+                        print("(._.) --priority must be an integer")
+                        return None
+                    i += 2
+                elif token == "--max-triggers" and i + 1 < len(tokens):
+                    try:
+                        opts["max_triggers"] = int(tokens[i + 1])
+                    except ValueError:
+                        print("(._.) --max-triggers must be an integer")
+                        return None
+                    i += 2
+                elif token == "--cooldown" and i + 1 < len(tokens):
+                    try:
+                        opts["cooldown"] = int(tokens[i + 1])
+                    except ValueError:
+                        print("(._.) --cooldown must be an integer")
+                        return None
+                    i += 2
+                elif token == "--tag" and i + 1 < len(tokens):
+                    opts["tags"].append(tokens[i + 1])
+                    i += 2
+                elif token == "--clear-tags":
+                    opts["clear_tags"] = True
+                    i += 1
+                elif token == "--all":
+                    opts["all"] = True
+                    i += 1
+                elif token == "--condition" and i + 1 < len(tokens):
+                    opts["condition"] = tokens[i + 1]
+                    i += 2
+                elif token == "--action" and i + 1 < len(tokens):
+                    opts["action_prompt"] = tokens[i + 1]
+                    i += 2
+                else:
+                    opts["positionals"].append(token)
+                    i += 1
+            return opts
+
+        tokens = shlex.split(cmd)
+
+        if len(tokens) == 1:
+            print()
+            print("+" + "-" * 68 + "+")
+            print("|" + " " * 20 + "(^_^) Conditional Rules" + " " * 23 + "|")
+            print("+" + "-" * 68 + "+")
+            print()
+            print("  Commands:")
+            print("    /rule list")
+            print('    /rule add "message is a receipt" "save to Google Drive"')
+            print('    /rule edit <rule_id> --condition "new condition" --action "new action"')
+            print("    /rule enable <rule_id>")
+            print("    /rule disable <rule_id>")
+            print("    /rule remove <rule_id>")
+            print()
+            result = _rule_api(action="list")
+            rules = result.get("rules", []) if result.get("success") else []
+            if rules:
+                print("  Current Rules:")
+                print("  " + "-" * 63)
+                for r in rules:
+                    triggers_str = str(r.get("trigger_count", 0))
+                    if r.get("max_triggers") is not None:
+                        triggers_str = f"{r['trigger_count']}/{r['max_triggers']}"
+                    print(f"    {r['rule_id'][:12]:<12} | p={r.get('priority', 0):<3} | triggers: {triggers_str}")
+                    print(f"      IF: {r.get('condition_preview', '')}")
+                    print(f"      THEN: {r.get('action_preview', '')}")
+                    print()
+            else:
+                print("  No rules configured. Use '/rule add' to create one.")
+            print()
+            return
+
+        subcommand = tokens[1].lower()
+        opts = _parse_flags(tokens[2:])
+        if opts is None:
+            return
+
+        if subcommand == "list":
+            result = _rule_api(action="list", include_disabled=opts["all"])
+            rules = result.get("rules", []) if result.get("success") else []
+            if not rules:
+                print("(._.) No rules configured.")
+                return
+
+            print()
+            print("Conditional Rules:")
+            print("-" * 80)
+            for r in rules:
+                triggers_str = str(r.get("trigger_count", 0))
+                if r.get("max_triggers") is not None:
+                    triggers_str = f"{r['trigger_count']}/{r['max_triggers']}"
+                status = "enabled" if r.get("enabled", True) else "disabled"
+                print(f"  ID: {r['rule_id']}")
+                print(f"  Name: {r['name']}")
+                print(f"  State: {status}  Priority: {r.get('priority', 0)}")
+                print(f"  IF: {r.get('condition_preview', '')}")
+                print(f"  THEN: {r.get('action_preview', '')}")
+                print(f"  Triggers: {triggers_str}")
+                if r.get("cooldown_minutes"):
+                    print(f"  Cooldown: {r['cooldown_minutes']}m")
+                print()
+            return
+
+        if subcommand in {"add", "create"}:
+            positionals = opts["positionals"]
+            condition = opts["condition"]
+            action_prompt = opts["action_prompt"]
+            if not condition and len(positionals) >= 1:
+                condition = positionals[0]
+            if not action_prompt and len(positionals) >= 2:
+                action_prompt = positionals[1]
+            if not condition or not action_prompt:
+                print('(._.) Usage: /rule add "condition" "action" [--name ...] [--priority ...]')
+                return
+            result = _rule_api(
+                action="create",
+                condition=condition,
+                action_prompt=action_prompt,
+                name=opts["name"],
+                priority=opts["priority"],
+                max_triggers=opts["max_triggers"],
+                cooldown_minutes=opts["cooldown"],
+                tags=opts["tags"] or None,
+            )
+            if result.get("success"):
+                print(f"(^_^)b Created rule: {result['rule_id']}")
+                print(f"  Name: {result['name']}")
+            else:
+                print(f"(x_x) Failed to create rule: {result.get('error')}")
+            return
+
+        if subcommand == "edit":
+            positionals = opts["positionals"]
+            if not positionals:
+                print("(._.) Usage: /rule edit <rule_id> [--condition ...] [--action ...]")
+                return
+            rule_id = positionals[0]
+
+            kwargs = {"action": "update", "rule_id": rule_id}
+            if opts["condition"] is not None:
+                kwargs["condition"] = opts["condition"]
+            if opts["action_prompt"] is not None:
+                kwargs["action_prompt"] = opts["action_prompt"]
+            if opts["name"] is not None:
+                kwargs["name"] = opts["name"]
+            if opts["priority"] is not None:
+                kwargs["priority"] = opts["priority"]
+            if opts["max_triggers"] is not None:
+                kwargs["max_triggers"] = opts["max_triggers"]
+            if opts["cooldown"] is not None:
+                kwargs["cooldown_minutes"] = opts["cooldown"]
+            if opts["tags"]:
+                kwargs["tags"] = opts["tags"]
+            if opts["clear_tags"]:
+                kwargs["tags"] = []
+
+            result = _rule_api(**kwargs)
+            if result.get("success"):
+                r = result["rule"]
+                print(f"(^_^)b Updated rule: {r['rule_id']}")
+                print(f"  Name: {r['name']}")
+            else:
+                print(f"(x_x) Failed to update rule: {result.get('error')}")
+            return
+
+        if subcommand in {"enable", "disable", "remove", "rm", "delete"}:
+            positionals = opts["positionals"]
+            if not positionals:
+                print(f"(._.) Usage: /rule {subcommand} <rule_id>")
+                return
+            rule_id = positionals[0]
+            action = "remove" if subcommand in {"remove", "rm", "delete"} else subcommand
+            result = _rule_api(action=action, rule_id=rule_id)
+            if not result.get("success"):
+                print(f"(x_x) Failed to {action} rule: {result.get('error')}")
+                return
+            if action == "enable":
+                print(f"(^_^)b Enabled rule: {result['rule']['name']} ({rule_id})")
+            elif action == "disable":
+                print(f"(^_^)b Disabled rule: {result['rule']['name']} ({rule_id})")
+            else:
+                removed = result.get("removed_rule", {})
+                print(f"(^_^)b Removed rule: {removed.get('name', rule_id)} ({rule_id})")
+            return
+
+        print(f"(._.) Unknown rule command: {subcommand}")
+        print("  Available: list, add, edit, enable, disable, remove")
+
     def _handle_skills_command(self, cmd: str):
         """Handle /skills slash command — delegates to vulti_cli.skills_hub."""
         from vulti_cli.skills_hub import handle_skills_slash
@@ -3570,6 +3788,8 @@ class VultiCLI:
             self.save_conversation()
         elif canonical == "cron":
             self._handle_cron_command(cmd_original)
+        elif canonical == "rule":
+            self._handle_rule_command(cmd_original)
         elif canonical == "skills":
             with self._busy_command(self._slow_command_status(cmd_original)):
                 self._handle_skills_command(cmd_original)

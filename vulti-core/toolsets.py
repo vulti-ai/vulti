@@ -58,6 +58,8 @@ _VULTI_CORE_TOOLS = [
     "execute_code", "delegate_task",
     # Cronjob management
     "cronjob",
+    # Conditional rule management
+    "rule",
     # Cross-platform messaging (gated on gateway running via check_fn)
     "send_message",
     # Honcho memory tools (gated on honcho being active via check_fn)
@@ -129,7 +131,13 @@ TOOLSETS = {
         "tools": ["cronjob"],
         "includes": []
     },
-    
+
+    "rule": {
+        "description": "Conditional rule management - create, list, update, enable, disable, remove automation rules",
+        "tools": ["rule"],
+        "includes": []
+    },
+
     "rl": {
         "description": "RL training tools for running reinforcement learning on Tinker-Atropos",
         "tools": [

@@ -81,6 +81,15 @@ fn start_gateway(state: tauri::State<'_, GatewayProcess>) -> Result<GatewayStatu
 }
 
 #[tauri::command]
+fn get_gateway_token() -> Result<String, String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!("{}/.vulti/web_token", home);
+    std::fs::read_to_string(&path)
+        .map(|s| s.trim().to_string())
+        .map_err(|e| format!("Could not read token from {}: {}", path, e))
+}
+
+#[tauri::command]
 fn check_gateway() -> GatewayStatus {
     // Try to reach the gateway API - accept any HTTP response (even 401) as proof it's running
     let running = Command::new("curl")
@@ -206,7 +215,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![start_gateway, check_gateway, stop_gateway, tailscale_status, install_tailscale, open_tailscale])
+        .invoke_handler(tauri::generate_handler![start_gateway, check_gateway, stop_gateway, get_gateway_token, tailscale_status, install_tailscale, open_tailscale])
         .build(tauri::generate_context!())
         .expect("error while building Vulti Gateway")
         .run(|app, event| {

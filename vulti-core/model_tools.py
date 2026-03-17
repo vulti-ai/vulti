@@ -83,6 +83,7 @@ def _discover_tools():
         "tools.skill_manager_tool",
         "tools.browser_tool",
         "tools.cronjob_tools",
+        "tools.rule_tools",
         "tools.rl_training_tool",
         "tools.tts_tool",
         "tools.todo_tool",
@@ -152,6 +153,7 @@ _LEGACY_TOOLSET_MAP = {
         "browser_vision", "browser_console"
     ],
     "cronjob_tools": ["cronjob"],
+    "rule_tools": ["rule"],
     "rl_tools": [
         "rl_list_environments", "rl_select_environment",
         "rl_get_current_config", "rl_edit_config",

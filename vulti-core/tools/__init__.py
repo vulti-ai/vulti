@@ -93,6 +93,14 @@ from .cronjob_tools import (
     CRONJOB_SCHEMA,
 )
 
+# Conditional rule tools
+from .rule_tools import (
+    rule,
+    check_rule_requirements,
+    get_rule_tool_definitions,
+    RULE_SCHEMA,
+)
+
 # RL Training tools (Tinker-Atropos)
 from .rl_training_tool import (
     rl_list_environments,

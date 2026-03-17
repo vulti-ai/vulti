@@ -298,6 +298,7 @@ def create_job(
     model: Optional[str] = None,
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
+    agent: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -367,6 +368,8 @@ def create_job(
         # Delivery configuration
         "deliver": deliver,
         "origin": origin,  # Tracks where job was created for "origin" delivery
+        # Agent scope -- which agent owns this cron job
+        "agent": agent or os.getenv("VULTI_AGENT_ID", "default"),
     }
 
     jobs = load_jobs()

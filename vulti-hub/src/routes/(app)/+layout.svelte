@@ -7,16 +7,15 @@
 	let showAgentPicker = $state(false);
 
 	const navItems = [
-		{ id: 'chat' as const, label: 'Chat', svg: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z' },
-		{ id: 'cron' as const, label: 'Cron', svg: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
-		{ id: 'memories' as const, label: 'Memories', svg: 'M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z' },
-		{ id: 'soul' as const, label: 'Soul', svg: 'M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z' },
-		{ id: 'analytics' as const, label: 'Analytics', svg: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' }
+		{ id: 'profile' as const, label: 'Profile', svg: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },
+		{ id: 'actions' as const, label: 'Actions', svg: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
+		{ id: 'analytics' as const, label: 'Analytics', svg: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+		{ id: 'config' as const, label: 'Config', svg: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.573-1.066z' }
 	] as const;
 
 	function statusColor(status: string): string {
-		if (status === 'ready') return 'bg-green-500';
-		if (status === 'setting_up') return 'bg-yellow-500';
+		if (status === 'connected' || status === 'active' || status === 'ready') return 'bg-green-500';
+		if (status === 'disconnected' || status === 'stopped' || status === 'setting_up') return 'bg-yellow-500';
 		return 'bg-red-500';
 	}
 
@@ -25,6 +24,7 @@
 			store.sidebarOpen = false;
 		}
 		store.loadSessions();
+		store.loadAgents();
 	});
 
 	function navigate(view: typeof store.currentView) {
@@ -35,10 +35,10 @@
 	}
 
 	function selectAgent(id: string) {
-		store.gatewayActiveAgentId = id;
+		store.activeAgentId = id;
 		showAgentPicker = false;
-		// Reload data for the new agent context
-		store.loadSessions();
+		// Reload all agent-scoped resources for the new agent
+		store.reloadAgentResources();
 	}
 </script>
 
@@ -59,15 +59,15 @@
 			<div class="relative shrink-0 border-b border-border p-2">
 				<button
 					onclick={() => (showAgentPicker = !showAgentPicker)}
-					title={store.activeGatewayAgent?.name || 'Select agent'}
+					title={store.activeAgent?.name || 'Select agent'}
 					class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-surface-hover"
 				>
-					{#if store.activeGatewayAgent}
+					{#if store.activeAgent}
 						<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface text-sm">
-							{store.activeGatewayAgent.avatar || store.activeGatewayAgent.name.charAt(0)}
+							{store.activeAgent.avatar || store.activeAgent.name.charAt(0)}
 						</span>
-						<span class="sidebar-label flex-1 truncate text-sm font-medium">{store.activeGatewayAgent.name}</span>
-						<span class="sidebar-label h-2 w-2 shrink-0 rounded-full {statusColor(store.activeGatewayAgent.status)}"></span>
+						<span class="sidebar-label flex-1 truncate text-sm font-medium">{store.activeAgent.name}</span>
+						<span class="sidebar-label h-2 w-2 shrink-0 rounded-full {statusColor(store.activeAgent.status)}"></span>
 					{:else}
 						<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface text-xs text-slate-500">?</span>
 						<span class="sidebar-label flex-1 text-sm text-slate-500">No agent</span>
@@ -80,12 +80,12 @@
 				{#if showAgentPicker}
 					<div class="fixed inset-0 z-40" onclick={() => (showAgentPicker = false)} onkeydown={() => {}}></div>
 					<div class="absolute left-2 right-2 top-full z-50 mt-1 rounded-lg border border-border bg-slate-900 py-1 shadow-xl">
-						{#each store.gatewayAgents as agent}
+						{#each store.agents as agent}
 							<button
 								onclick={() => selectAgent(agent.id)}
 								class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors"
-								class:bg-surface-active={store.gatewayActiveAgentId === agent.id}
-								class:hover:bg-surface-hover={store.gatewayActiveAgentId !== agent.id}
+								class:bg-surface-active={store.activeAgentId === agent.id}
+								class:hover:bg-surface-hover={store.activeAgentId !== agent.id}
 							>
 								<span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface text-xs">
 									{agent.avatar || agent.name.charAt(0)}
@@ -94,7 +94,7 @@
 								<span class="h-2 w-2 shrink-0 rounded-full {statusColor(agent.status)}"></span>
 							</button>
 						{/each}
-						{#if store.gatewayAgents.length === 0}
+						{#if store.agents.length === 0}
 							<p class="px-3 py-2 text-xs text-slate-500">No agents configured</p>
 							<p class="px-3 pb-2 text-xs text-slate-600">Set up agents in Vulti settings</p>
 						{/if}

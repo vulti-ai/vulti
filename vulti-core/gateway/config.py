@@ -456,6 +456,87 @@ def load_gateway_config() -> GatewayConfig:
     return config
 
 
+def load_agent_routing() -> dict:
+    """Load the agent routing table from gateway.json.
+
+    Returns a dict mapping pattern strings to agent IDs.
+    Pattern format: '{platform}:{chat_type}:{chat_id}' with '*' as wildcard.
+    Rules are evaluated in insertion order; first match wins.
+
+    Example:
+        {
+            "telegram:dm:*": "default",
+            "telegram:group:-1001234567890": "researcher",
+            "*": "default"
+        }
+    """
+    _home = get_vulti_home()
+    gateway_path = _home / "gateway.json"
+    if gateway_path.exists():
+        try:
+            with open(gateway_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get("routing", {})
+        except Exception as e:
+            logger.debug("Failed to load agent routing: %s", e)
+    return {}
+
+
+def resolve_agent_routing(source, routing_table: dict = None) -> str:
+    """Resolve which agent should handle a message based on routing rules.
+
+    Args:
+        source: SessionSource with platform, chat_type, chat_id fields.
+        routing_table: Dict of pattern -> agent_id. If None, loads from config.
+
+    Returns:
+        agent_id string. Defaults to 'default' if no match.
+    """
+    if routing_table is None:
+        routing_table = load_agent_routing()
+
+    if not routing_table:
+        return "default"
+
+    platform = source.platform.value if hasattr(source.platform, 'value') else str(source.platform)
+    chat_type = getattr(source, 'chat_type', 'dm') or 'dm'
+    chat_id = getattr(source, 'chat_id', '') or ''
+
+    # Build the source key for matching
+    source_key = f"{platform}:{chat_type}:{chat_id}"
+
+    for pattern, agent_id in routing_table.items():
+        if _routing_pattern_matches(pattern, source_key):
+            return agent_id
+
+    return "default"
+
+
+def _routing_pattern_matches(pattern: str, source_key: str) -> bool:
+    """Check if a routing pattern matches a source key.
+
+    Patterns use '*' as wildcard for any segment.
+    Examples:
+        'telegram:dm:*' matches 'telegram:dm:12345'
+        'telegram:*:*' matches 'telegram:group:12345'
+        '*' matches anything
+    """
+    if pattern == "*":
+        return True
+
+    pattern_parts = pattern.split(":")
+    source_parts = source_key.split(":")
+
+    if len(pattern_parts) > len(source_parts):
+        return False
+
+    for p, s in zip(pattern_parts, source_parts):
+        if p != "*" and p != s:
+            return False
+
+    return True
+
+
 def _get_or_create_web_token() -> str:
     """Get or create a persistent auth token for the web adapter.
 

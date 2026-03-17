@@ -2,8 +2,60 @@ const API_BASE = 'http://localhost:8080/api';
 
 let authToken: string | null = null;
 
+// Auto-load token from Tauri on first use
+let tokenLoaded = false;
+async function ensureTokenLoaded() {
+	if (tokenLoaded) return;
+	tokenLoaded = true;
+	// Try localStorage first
+	if (!authToken) {
+		authToken = localStorage.getItem('vulti_token');
+		// Validate the stored token works
+		if (authToken) {
+			try {
+				const res = await fetch(`${API_BASE}/status`, {
+					headers: { Authorization: `Bearer ${authToken}` },
+					signal: AbortSignal.timeout(2000)
+				});
+				if (res.status === 401) {
+					// Stale token, clear it
+					authToken = null;
+					localStorage.removeItem('vulti_token');
+				}
+			} catch {
+				// Gateway not reachable yet, keep the token
+			}
+		}
+	}
+	// Try Tauri if still no token
+	if (!authToken && typeof window !== 'undefined' && '__TAURI__' in window) {
+		try {
+			const { invoke } = await import('@tauri-apps/api/core');
+			const token = await invoke<string>('get_gateway_token');
+			if (token) {
+				authToken = token;
+				localStorage.setItem('vulti_token', token);
+			}
+		} catch {}
+	}
+	// Fallback: bootstrap from gateway (localhost only)
+	if (!authToken) {
+		try {
+			const res = await fetch(`${API_BASE}/bootstrap`, { signal: AbortSignal.timeout(2000) });
+			if (res.ok) {
+				const data = await res.json();
+				if (data.token) {
+					authToken = data.token;
+					localStorage.setItem('vulti_token', data.token);
+				}
+			}
+		} catch {}
+	}
+}
+
 export function setToken(token: string) {
 	authToken = token;
+	tokenLoaded = true;
 	localStorage.setItem('vulti_token', token);
 }
 
@@ -20,6 +72,7 @@ export function clearToken() {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+	await ensureTokenLoaded();
 	const token = getToken();
 	const res = await fetch(`${API_BASE}${path}`, {
 		...options,
@@ -45,11 +98,18 @@ export const api = {
 		});
 	},
 
-	// Sessions
-	listSessions() {
+	// Sessions (backward compat -- default agent)
+	listSessions(agentId?: string) {
+		if (agentId) return request<Session[]>(`/agents/${agentId}/sessions`);
 		return request<Session[]>('/sessions');
 	},
-	createSession(name?: string) {
+	createSession(agentId?: string, name?: string) {
+		if (agentId) {
+			return request<Session>(`/agents/${agentId}/sessions`, {
+				method: 'POST',
+				body: JSON.stringify({ name })
+			});
+		}
 		return request<Session>('/sessions', {
 			method: 'POST',
 			body: JSON.stringify({ name })
@@ -62,16 +122,41 @@ export const api = {
 		return request<Message[]>(`/sessions/${sessionId}/history`);
 	},
 
-	// Agents
+	// Agent CRUD
 	listAgents() {
 		return request<Agent[]>('/agents');
 	},
+	getAgent(agentId: string) {
+		return request<Agent>(`/agents/${agentId}`);
+	},
+	createAgent(data: { name: string; avatar?: string; personality?: string; description?: string; inherit_from?: string }) {
+		return request<Agent>('/agents', {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
+	},
+	updateAgent(agentId: string, updates: Partial<Agent>) {
+		return request<Agent>(`/agents/${agentId}`, {
+			method: 'PUT',
+			body: JSON.stringify(updates)
+		});
+	},
+	deleteAgent(agentId: string) {
+		return request<{ ok: boolean }>(`/agents/${agentId}`, { method: 'DELETE' });
+	},
 
-	// Cron
-	listCron() {
+	// Cron (agent-scoped or default)
+	listCron(agentId?: string) {
+		if (agentId) return request<CronJob[]>(`/agents/${agentId}/cron`);
 		return request<CronJob[]>('/cron');
 	},
-	createCron(job: Partial<CronJob>) {
+	createCron(job: Partial<CronJob>, agentId?: string) {
+		if (agentId) {
+			return request<CronJob>(`/agents/${agentId}/cron`, {
+				method: 'POST',
+				body: JSON.stringify(job)
+			});
+		}
 		return request<CronJob>('/cron', {
 			method: 'POST',
 			body: JSON.stringify(job)
@@ -87,7 +172,27 @@ export const api = {
 		return request<void>(`/cron/${id}`, { method: 'DELETE' });
 	},
 
-	// Inbox & Contacts
+	// Rules
+	listRules() {
+		return request<Rule[]>('/rules');
+	},
+	createRule(rule: Partial<Rule>) {
+		return request<Rule>('/rules', {
+			method: 'POST',
+			body: JSON.stringify(rule)
+		});
+	},
+	updateRule(id: string, updates: Partial<Rule>) {
+		return request<Rule>(`/rules/${id}`, {
+			method: 'PUT',
+			body: JSON.stringify(updates)
+		});
+	},
+	deleteRule(id: string) {
+		return request<void>(`/rules/${id}`, { method: 'DELETE' });
+	},
+
+	// Inbox & Contacts (global)
 	getInbox() {
 		return request<InboxItem[]>('/inbox');
 	},
@@ -95,32 +200,46 @@ export const api = {
 		return request<Contact[]>('/contacts');
 	},
 
-	// Integrations
+	// Integrations (global)
 	getIntegrations() {
 		return request<Integration[]>('/integrations');
 	},
 
-	// Memories & Soul
-	getMemories() {
+	// Memories & Soul (agent-scoped or default)
+	getMemories(agentId?: string) {
+		if (agentId) return request<Memories>(`/agents/${agentId}/memories`);
 		return request<Memories>('/memories');
 	},
-	updateMemory(file: 'memory' | 'user', content: string) {
+	updateMemory(file: 'memory' | 'user', content: string, agentId?: string) {
+		if (agentId) {
+			return request<{ ok: boolean }>(`/agents/${agentId}/memories`, {
+				method: 'PUT',
+				body: JSON.stringify({ file, content })
+			});
+		}
 		return request<{ ok: boolean }>('/memories', {
 			method: 'PUT',
 			body: JSON.stringify({ file, content })
 		});
 	},
-	getSoul() {
+	getSoul(agentId?: string) {
+		if (agentId) return request<{ content: string }>(`/agents/${agentId}/soul`);
 		return request<{ content: string }>('/soul');
 	},
-	updateSoul(content: string) {
+	updateSoul(content: string, agentId?: string) {
+		if (agentId) {
+			return request<{ ok: boolean }>(`/agents/${agentId}/soul`, {
+				method: 'PUT',
+				body: JSON.stringify({ content })
+			});
+		}
 		return request<{ ok: boolean }>('/soul', {
 			method: 'PUT',
 			body: JSON.stringify({ content })
 		});
 	},
 
-	// System Status
+	// System Status (global)
 	getStatus() {
 		return request<SystemStatus>('/status');
 	},
@@ -128,7 +247,7 @@ export const api = {
 		return request<ChannelDirectory>('/channels');
 	},
 
-	// Secrets & OAuth
+	// Secrets & OAuth (global)
 	getSecrets() {
 		return request<Secret[]>('/secrets');
 	},
@@ -158,12 +277,20 @@ export interface Message {
 	timestamp: string;
 }
 
+// Unified Agent type (merges old Agent + GatewayAgent)
 export interface Agent {
 	id: string;
 	name: string;
-	url: string;
-	status: 'connected' | 'disconnected' | 'error';
-	platforms: string[];
+	url?: string;
+	avatar?: string;
+	personality?: string;
+	description?: string;
+	model?: string;
+	status: 'setting_up' | 'ready' | 'active' | 'connected' | 'disconnected' | 'stopped' | 'error';
+	services?: AgentService[];
+	platforms?: string[];
+	createdAt?: string;
+	createdFrom?: string | null;
 }
 
 export interface CronJob {
@@ -174,6 +301,20 @@ export interface CronJob {
 	status: 'active' | 'paused';
 	last_run?: string;
 	last_output?: string;
+}
+
+export interface Rule {
+	id: string;
+	name: string;
+	condition: string;
+	action: string;
+	enabled: boolean;
+	priority: number;
+	trigger_count: number;
+	max_triggers?: number | null;
+	cooldown_minutes?: number | null;
+	last_triggered_at?: string | null;
+	tags: string[];
 }
 
 export interface InboxItem {
@@ -234,7 +375,7 @@ export interface ChannelDirectory {
 	platforms: Record<string, { id: string; name: string; type: string }[]>;
 }
 
-// Gateway types
+// Service types
 export type ServiceCategory =
 	| 'ai_models' | 'communication' | 'files'
 	| 'calendar_contacts' | 'knowledge' | 'code' | 'other';
@@ -248,15 +389,8 @@ export interface AgentService {
 	config: Record<string, unknown>;
 }
 
-export interface GatewayAgent {
-	id: string;
-	name: string;
-	avatar?: string;
-	personality?: string;
-	status: 'setting_up' | 'ready' | 'error';
-	services: AgentService[];
-	createdAt: string;
-}
+// Keep GatewayAgent as alias for backward compat
+export type GatewayAgent = Agent;
 
 export interface GlobalSettings {
 	tailscale: { ip: string; connected: boolean };
@@ -265,7 +399,7 @@ export interface GlobalSettings {
 
 export interface GatewayState {
 	global: GlobalSettings;
-	agents: GatewayAgent[];
+	agents: Agent[];
 	activeAgentId: string | null;
 }
 

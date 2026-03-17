@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { setToken } from '$lib/api';
 
 	let { status, onComplete }: {
 		status: 'pending' | 'connected';
 		onComplete: () => void;
 	} = $props();
 
+	// svelte-ignore state_referenced_locally
 	let phase = $state<'checking' | 'not_installed' | 'starting' | 'waiting' | 'connected' | 'error'>(
 		status === 'connected' ? 'connected' : 'checking'
 	);
@@ -22,9 +24,17 @@
 		return () => { if (pollInterval) clearInterval(pollInterval); };
 	});
 
-	function notifyOnce() {
+	async function notifyOnce() {
 		if (!notified) {
 			notified = true;
+			// Auto-load the gateway auth token
+			if (isTauri) {
+				try {
+					const { invoke } = await import('@tauri-apps/api/core');
+					const token = await invoke<string>('get_gateway_token');
+					if (token) setToken(token);
+				} catch {}
+			}
 			onComplete();
 		}
 	}
@@ -44,7 +54,7 @@
 					return;
 				}
 			} catch {}
-			phase = 'pending';
+			phase = 'checking';
 			return;
 		}
 
@@ -58,7 +68,7 @@
 				await startGateway();
 			}
 		} catch {
-			phase = 'pending';
+			phase = 'checking';
 		}
 	}
 

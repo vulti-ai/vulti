@@ -1,44 +1,44 @@
-import { api, type Session, type Message, type Agent, type CronJob, type InboxItem, type Contact, type Memories, type Secret, type OAuthToken, type SystemStatus, type ChannelDirectory, type Analytics, type Integration, type GatewayAgent, type AgentService, type GlobalSettings, type GatewayState, type ServiceCategory } from '$lib/api';
+import { api, setToken, getToken, type Session, type Message, type Agent, type AgentService, type CronJob, type Rule, type InboxItem, type Contact, type Memories, type Secret, type OAuthToken, type SystemStatus, type ChannelDirectory, type Analytics, type Integration, type GlobalSettings } from '$lib/api';
 import { createWsStore, type WsMessage } from '$lib/ws';
 
-// Re-export gateway types for components
-export type { GatewayAgent, AgentService, GlobalSettings, GatewayState, ServiceCategory };
+// Re-export types for components
+export type { GlobalSettings };
+// Re-export types used by setup tabs
+export type { Agent as GatewayAgent, ServiceCategory } from '$lib/api';
 
-// Gateway state persistence
-const DEFAULT_GATEWAY: GatewayState = {
-	global: { tailscale: { ip: '', connected: false }, gateway: { connected: false } },
-	agents: [],
-	activeAgentId: null
+// Settings persistence (only global settings, not agents)
+const DEFAULT_SETTINGS: GlobalSettings = {
+	tailscale: { ip: '', connected: false },
+	gateway: { connected: false }
 };
 
-function loadGatewayFromStorage(): GatewayState {
+function loadSettingsFromStorage(): GlobalSettings {
 	try {
-		const saved = localStorage.getItem('vulti_gateway');
+		const saved = localStorage.getItem('vulti_settings');
 		if (saved) {
 			const parsed = JSON.parse(saved);
-			// Ensure gateway field exists (migration from older schema)
-			if (parsed.global && !parsed.global.gateway) {
-				parsed.global.gateway = { connected: false };
-			}
+			if (!parsed.gateway) parsed.gateway = { connected: false };
 			return parsed;
 		}
+		// Migrate from old key
+		const old = localStorage.getItem('vulti_gateway');
+		if (old) {
+			const parsed = JSON.parse(old);
+			if (parsed.global) {
+				if (!parsed.global.gateway) parsed.global.gateway = { connected: false };
+				return parsed.global;
+			}
+		}
 	} catch {}
-	return { ...DEFAULT_GATEWAY };
+	return { ...DEFAULT_SETTINGS };
 }
 
-function saveGatewayToStorage() {
-	localStorage.setItem('vulti_gateway', JSON.stringify({
-		global: gatewayGlobal,
-		agents: gatewayAgents,
-		activeAgentId: gatewayActiveAgentId
-	}));
+function saveSettingsToStorage() {
+	localStorage.setItem('vulti_settings', JSON.stringify(globalSettings));
 }
 
-// Gateway state
-const savedGateway = loadGatewayFromStorage();
-let gatewayGlobal = $state<GlobalSettings>(savedGateway.global);
-let gatewayAgents = $state<GatewayAgent[]>(savedGateway.agents);
-let gatewayActiveAgentId = $state<string | null>(savedGateway.activeAgentId);
+// Global settings state
+let globalSettings = $state<GlobalSettings>(loadSettingsFromStorage());
 
 // Reactive state using Svelte 5 runes
 let sessions = $state<Session[]>([]);
@@ -48,12 +48,14 @@ let streamingContent = $state<string>('');
 let isStreaming = $state(false);
 let isTyping = $state(false);
 let agents = $state<Agent[]>([]);
+let activeAgentId = $state<string | null>(null);
 let cronJobs = $state<CronJob[]>([]);
+let rules = $state<Rule[]>([]);
 let inbox = $state<InboxItem[]>([]);
 let contacts = $state<Contact[]>([]);
 let notifications = $state<WsMessage[]>([]);
 let sidebarOpen = $state(true);
-let currentView = $state<'chat' | 'cron' | 'memories' | 'soul' | 'analytics'>('chat');
+let currentView = $state<'profile' | 'actions' | 'analytics' | 'config'>('profile');
 let authenticated = $state(false);
 let memories = $state<Memories>({ memory: '', user: '' });
 let soul = $state<string>('');
@@ -103,90 +105,25 @@ ws.onMessage((msg: WsMessage) => {
 });
 
 export const store = {
-	// Gateway
-	get gateway() { return { global: gatewayGlobal, agents: gatewayAgents, activeAgentId: gatewayActiveAgentId }; },
-	get gatewayGlobal() { return gatewayGlobal; },
-	get gatewayAgents() { return gatewayAgents; },
-	get gatewayActiveAgentId() { return gatewayActiveAgentId; },
-	set gatewayActiveAgentId(id: string | null) { gatewayActiveAgentId = id; saveGatewayToStorage(); },
-
-	get activeGatewayAgent(): GatewayAgent | undefined {
-		return gatewayAgents.find(a => a.id === gatewayActiveAgentId);
-	},
+	// Global settings (persisted to localStorage)
+	get gatewayGlobal() { return globalSettings; },
 
 	updateGlobalSettings(settings: Partial<GlobalSettings>) {
-		gatewayGlobal = { ...gatewayGlobal, ...settings };
-		saveGatewayToStorage();
+		globalSettings = { ...globalSettings, ...settings };
+		saveSettingsToStorage();
 	},
 
-	createAgent(name: string, avatar?: string): GatewayAgent {
-		const agent: GatewayAgent = {
-			id: crypto.randomUUID(),
-			name,
-			avatar,
-			status: 'setting_up',
-			services: [],
-			createdAt: new Date().toISOString()
-		};
-		gatewayAgents = [...gatewayAgents, agent];
-		gatewayActiveAgentId = agent.id;
-		saveGatewayToStorage();
-		return agent;
+	// Agents (from gateway API — source of truth)
+	get agents() { return agents; },
+	get activeAgentId() { return activeAgentId; },
+	set activeAgentId(id: string | null) {
+		activeAgentId = id;
+		if (id) localStorage.setItem('vulti_active_agent', id);
+		else localStorage.removeItem('vulti_active_agent');
 	},
 
-	forkAgent(sourceId: string): GatewayAgent | undefined {
-		const source = gatewayAgents.find(a => a.id === sourceId);
-		if (!source) return undefined;
-		const forked: GatewayAgent = {
-			...structuredClone(source),
-			id: crypto.randomUUID(),
-			name: `${source.name} (Copy)`,
-			status: 'setting_up',
-			createdAt: new Date().toISOString()
-		};
-		gatewayAgents = [...gatewayAgents, forked];
-		gatewayActiveAgentId = forked.id;
-		saveGatewayToStorage();
-		return forked;
-	},
-
-	updateAgent(id: string, updates: Partial<GatewayAgent>) {
-		gatewayAgents = gatewayAgents.map(a =>
-			a.id === id ? { ...a, ...updates } : a
-		);
-		saveGatewayToStorage();
-	},
-
-	deleteAgent(id: string) {
-		gatewayAgents = gatewayAgents.filter(a => a.id !== id);
-		if (gatewayActiveAgentId === id) {
-			gatewayActiveAgentId = gatewayAgents[0]?.id ?? null;
-		}
-		saveGatewayToStorage();
-	},
-
-	addServiceToAgent(agentId: string, service: AgentService) {
-		gatewayAgents = gatewayAgents.map(a =>
-			a.id === agentId ? { ...a, services: [...a.services, service] } : a
-		);
-		saveGatewayToStorage();
-	},
-
-	removeServiceFromAgent(agentId: string, serviceId: string) {
-		gatewayAgents = gatewayAgents.map(a =>
-			a.id === agentId ? { ...a, services: a.services.filter(s => s.id !== serviceId) } : a
-		);
-		saveGatewayToStorage();
-	},
-
-	updateServiceInAgent(agentId: string, serviceId: string, updates: Partial<AgentService>) {
-		gatewayAgents = gatewayAgents.map(a =>
-			a.id === agentId ? {
-				...a,
-				services: a.services.map(s => s.id === serviceId ? { ...s, ...updates } : s)
-			} : a
-		);
-		saveGatewayToStorage();
+	get activeAgent(): Agent | undefined {
+		return agents.find(a => a.id === activeAgentId);
 	},
 
 	// App state
@@ -196,8 +133,8 @@ export const store = {
 	get streamingContent() { return streamingContent; },
 	get isStreaming() { return isStreaming; },
 	get isTyping() { return isTyping; },
-	get agents() { return agents; },
 	get cronJobs() { return cronJobs; },
+	get rules() { return rules; },
 	get inbox() { return inbox; },
 	get contacts() { return contacts; },
 	get notifications() { return notifications; },
@@ -219,12 +156,12 @@ export const store = {
 
 	async loadSessions() {
 		try {
-			sessions = await api.listSessions();
+			sessions = await api.listSessions(activeAgentId ?? undefined);
 		} catch { sessions = []; }
 	},
 
 	async createSession(name?: string) {
-		const session = await api.createSession(name);
+		const session = await api.createSession(activeAgentId ?? undefined, name);
 		sessions = [session, ...sessions];
 		await this.switchSession(session.id);
 	},
@@ -260,12 +197,96 @@ export const store = {
 		isTyping = true;
 	},
 
+	async ensureToken() {
+		if (getToken()) return;
+		const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+		if (isTauri) {
+			try {
+				const { invoke } = await import('@tauri-apps/api/core');
+				const token = await invoke<string>('get_gateway_token');
+				if (token) setToken(token);
+			} catch {}
+		}
+	},
+
 	async loadAgents() {
-		try { agents = await api.listAgents(); } catch { agents = []; }
+		try {
+			await this.ensureToken();
+			agents = await api.listAgents();
+			if (!activeAgentId) {
+				const saved = localStorage.getItem('vulti_active_agent');
+				if (saved && agents.find(a => a.id === saved)) {
+					activeAgentId = saved;
+				} else if (agents.length > 0) {
+					activeAgentId = agents[0].id;
+				}
+			}
+		} catch { agents = []; }
+	},
+
+	async createAgent(data: { name: string; avatar?: string; personality?: string; description?: string; inherit_from?: string }) {
+		const agent = await api.createAgent(data);
+		agents = [...agents, agent];
+		this.activeAgentId = agent.id;
+		await this.reloadAgentResources();
+		return agent;
+	},
+
+	async updateAgent(agentId: string, updates: Partial<Agent>) {
+		const updated = await api.updateAgent(agentId, updates);
+		agents = agents.map(a => a.id === agentId ? { ...a, ...updated } : a);
+		return updated;
+	},
+
+	async deleteAgent(agentId: string) {
+		await api.deleteAgent(agentId);
+		agents = agents.filter(a => a.id !== agentId);
+		if (activeAgentId === agentId) {
+			this.activeAgentId = agents.length > 0 ? agents[0].id : null;
+			if (activeAgentId) await this.reloadAgentResources();
+		}
+	},
+
+	async addServiceToAgent(agentId: string, service: Partial<AgentService>) {
+		// Service management is stored in agent config -- update via API
+		const updated = await api.updateAgent(agentId, { services: [...(store.activeAgent?.services ?? []), service as AgentService] } as Partial<Agent>);
+		agents = agents.map(a => a.id === agentId ? { ...a, ...updated } : a);
+	},
+
+	async removeServiceFromAgent(agentId: string, serviceId: string) {
+		const currentServices = store.activeAgent?.services?.filter(s => s.id !== serviceId) ?? [];
+		const updated = await api.updateAgent(agentId, { services: currentServices } as Partial<Agent>);
+		agents = agents.map(a => a.id === agentId ? { ...a, ...updated } : a);
+	},
+
+	async reloadAgentResources() {
+		// Clear stale data
+		sessions = [];
+		messages = [];
+		memories = { memory: '', user: '' };
+		soul = '';
+		cronJobs = [];
+		rules = [];
+		analytics = null;
+		activeSessionId = null;
+		ws.disconnect();
+
+		if (!activeAgentId) return;
+
+		await Promise.all([
+			this.loadSessions(),
+			this.loadMemories(),
+			this.loadSoul(),
+			this.loadCron(),
+		]);
 	},
 
 	async loadCron() {
-		try { cronJobs = await api.listCron(); } catch { cronJobs = []; }
+		try { cronJobs = await api.listCron(activeAgentId ?? undefined); } catch { cronJobs = []; }
+	},
+
+	async loadRules() {
+		try { rules = await api.listRules(); } catch { rules = []; }
 	},
 
 	async loadInbox() {
@@ -277,24 +298,24 @@ export const store = {
 	},
 
 	async loadMemories() {
-		try { memories = await api.getMemories(); } catch { memories = { memory: '', user: '' }; }
+		try { memories = await api.getMemories(activeAgentId ?? undefined); } catch { memories = { memory: '', user: '' }; }
 	},
 
 	async saveMemory(file: 'memory' | 'user', content: string) {
-		await api.updateMemory(file, content);
+		await api.updateMemory(file, content, activeAgentId ?? undefined);
 		if (file === 'memory') memories = { ...memories, memory: content };
 		else memories = { ...memories, user: content };
 	},
 
 	async loadSoul() {
 		try {
-			const res = await api.getSoul();
+			const res = await api.getSoul(activeAgentId ?? undefined);
 			soul = res.content;
 		} catch { soul = ''; }
 	},
 
 	async saveSoul(content: string) {
-		await api.updateSoul(content);
+		await api.updateSoul(content, activeAgentId ?? undefined);
 		soul = content;
 	},
 

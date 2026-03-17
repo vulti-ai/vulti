@@ -71,7 +71,7 @@ class WebAdapter(BasePlatformAdapter):
 
     def _build_app(self):
         """Build the FastAPI application with all routes."""
-        from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query, Header
+        from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query, Header, Request
         from fastapi.middleware.cors import CORSMiddleware
         from pydantic import BaseModel
 
@@ -126,6 +126,25 @@ class WebAdapter(BasePlatformAdapter):
             schedule: Optional[str] = None
             status: Optional[str] = None
 
+        class CreateRuleRequest(BaseModel):
+            name: str = "Untitled Rule"
+            condition: str
+            action: str
+            priority: int = 0
+            max_triggers: Optional[int] = None
+            cooldown_minutes: Optional[int] = None
+            tags: Optional[list] = None
+
+        class UpdateRuleRequest(BaseModel):
+            name: Optional[str] = None
+            condition: Optional[str] = None
+            action: Optional[str] = None
+            priority: Optional[int] = None
+            max_triggers: Optional[int] = None
+            cooldown_minutes: Optional[int] = None
+            tags: Optional[list] = None
+            enabled: Optional[bool] = None
+
         # --- Auth endpoint ---
 
         @app.post("/api/auth")
@@ -133,6 +152,14 @@ class WebAdapter(BasePlatformAdapter):
             if not verify_token(req.token):
                 raise HTTPException(status_code=401, detail="Invalid token")
             return {"ok": True}
+
+        @app.get("/api/bootstrap")
+        async def bootstrap(request: Request):
+            """Return auth token for local hub bootstrap (localhost only)."""
+            host = request.client.host if request.client else ""
+            if host not in ("127.0.0.1", "::1", "localhost"):
+                raise HTTPException(status_code=403, detail="Local access only")
+            return {"token": adapter._auth_token or ""}
 
         # --- Session endpoints ---
 
@@ -174,6 +201,62 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return adapter._get_agents()
 
+        @app.post("/api/agents")
+        async def create_agent(req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._create_agent(data)
+
+        @app.get("/api/agents/{agent_id}")
+        async def get_agent(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_agent(agent_id)
+
+        @app.put("/api/agents/{agent_id}")
+        async def update_agent(agent_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._update_agent(agent_id, data)
+
+        @app.delete("/api/agents/{agent_id}")
+        async def delete_agent(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._delete_agent(agent_id)
+
+        # --- Agent-scoped resource endpoints ---
+
+        @app.get("/api/agents/{agent_id}/memories")
+        async def get_agent_memories(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_memories(agent_id=agent_id)
+
+        @app.put("/api/agents/{agent_id}/memories")
+        async def update_agent_memories(agent_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._update_memory(data.get("file", "memory"), data.get("content", ""), agent_id=agent_id)
+
+        @app.get("/api/agents/{agent_id}/soul")
+        async def get_agent_soul(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_soul(agent_id=agent_id)
+
+        @app.put("/api/agents/{agent_id}/soul")
+        async def update_agent_soul(agent_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._update_soul(data.get("content", ""), agent_id=agent_id)
+
+        @app.get("/api/agents/{agent_id}/cron")
+        async def get_agent_cron(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_cron_jobs(agent_id=agent_id)
+
+        @app.get("/api/agents/{agent_id}/sessions")
+        async def list_agent_sessions(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_sessions(agent_id=agent_id)
+
         # --- Cron endpoints ---
 
         @app.get("/api/cron")
@@ -195,6 +278,28 @@ class WebAdapter(BasePlatformAdapter):
         async def delete_cron(job_id: str, authorization: str = Header("")):
             await get_current_user(authorization)
             return adapter._delete_cron_job(job_id)
+
+        # --- Rules ---
+
+        @app.get("/api/rules")
+        async def list_rules(authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_rules()
+
+        @app.post("/api/rules")
+        async def create_rule(req: CreateRuleRequest, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._create_rule(req.model_dump())
+
+        @app.put("/api/rules/{rule_id}")
+        async def update_rule(rule_id: str, req: UpdateRuleRequest, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._update_rule(rule_id, req.model_dump(exclude_none=True))
+
+        @app.delete("/api/rules/{rule_id}")
+        async def delete_rule(rule_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._delete_rule(rule_id)
 
         # --- Inbox & Contacts ---
 
@@ -606,21 +711,216 @@ class WebAdapter(BasePlatformAdapter):
         with open(d / f"{session_id}.jsonl", "a") as f:
             f.write(json.dumps(message) + "\n")
 
+    def _get_agent_registry(self):
+        """Get or create the agent registry instance."""
+        if not hasattr(self, "_agent_registry"):
+            from vulti_cli.agent_registry import AgentRegistry
+            self._agent_registry = AgentRegistry()
+            self._agent_registry.ensure_initialized()
+        return self._agent_registry
+
     def _get_agents(self) -> list:
-        """List connected agents/platforms from gateway config."""
+        """List all registered agents."""
         try:
+            registry = self._get_agent_registry()
+            agents = registry.list_agents()
+            # Get connected platforms for context
             from gateway.config import load_gateway_config
             config = load_gateway_config()
-            platforms = config.get_connected_platforms()
+            connected = [p.value for p in config.get_connected_platforms()]
+
             return [{
-                "id": "local",
-                "name": "Vulti",
+                "id": a.id,
+                "name": a.name,
                 "url": f"http://{self._host}:{self._port}",
-                "status": "connected" if self._running else "disconnected",
-                "platforms": [p.value for p in platforms],
-            }]
-        except Exception:
+                "status": "connected" if self._running and a.status == "active" else a.status,
+                "platforms": connected if a.id == registry.default_agent_id else [],
+                "avatar": a.avatar,
+                "description": a.description,
+                "createdAt": a.created_at,
+                "createdFrom": a.created_from,
+            } for a in agents]
+        except Exception as e:
+            logger.error("[web] Failed to list agents: %s", e)
             return []
+
+    def _get_agent(self, agent_id: str) -> dict:
+        """Get a single agent by ID."""
+        registry = self._get_agent_registry()
+        agent = registry.get_agent(agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+        return {
+            "id": agent.id,
+            "name": agent.name,
+            "url": f"http://{self._host}:{self._port}",
+            "status": agent.status,
+            "avatar": agent.avatar,
+            "description": agent.description,
+            "createdAt": agent.created_at,
+            "createdFrom": agent.created_from,
+        }
+
+    def _create_agent(self, data: dict) -> dict:
+        """Create a new agent."""
+        registry = self._get_agent_registry()
+        name = data.get("name", "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Agent name is required")
+
+        # Generate agent_id from name
+        import re
+        agent_id = re.sub(r"[^a-z0-9\-]", "-", name.lower()).strip("-")[:32]
+        if not agent_id:
+            agent_id = "agent"
+
+        # Deduplicate if needed
+        base_id = agent_id
+        counter = 2
+        while registry.get_agent(agent_id) is not None:
+            agent_id = f"{base_id}-{counter}"[:32]
+            counter += 1
+
+        try:
+            meta = registry.create_agent(
+                agent_id=agent_id,
+                name=name,
+                clone_from=data.get("inherit_from"),
+                avatar=data.get("avatar"),
+                description=data.get("description", ""),
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # New agents from the wizard start in setting_up so the UI shows AgentSetup
+        registry.update_agent(agent_id, status="setting_up")
+
+        # Write personality to soul if provided
+        if data.get("personality"):
+            soul_path = registry.agent_soul_path(agent_id)
+            soul_path.write_text(data["personality"], encoding="utf-8")
+
+        return {
+            "id": meta.id,
+            "name": meta.name,
+            "url": f"http://{self._host}:{self._port}",
+            "status": "setting_up",
+            "avatar": meta.avatar,
+            "description": meta.description,
+            "createdAt": meta.created_at,
+            "createdFrom": meta.created_from,
+        }
+
+    def _update_agent(self, agent_id: str, data: dict) -> dict:
+        """Update an agent's metadata."""
+        registry = self._get_agent_registry()
+        if registry.get_agent(agent_id) is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+        updates = {}
+        for field in ("name", "status", "avatar", "description"):
+            if field in data:
+                updates[field] = data[field]
+
+        try:
+            meta = registry.update_agent(agent_id, **updates) if updates else registry.get_agent(agent_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # Update personality/soul if provided
+        if "personality" in data:
+            soul_path = registry.agent_soul_path(agent_id)
+            soul_path.write_text(data["personality"], encoding="utf-8")
+
+        return {
+            "id": meta.id,
+            "name": meta.name,
+            "status": meta.status,
+            "avatar": meta.avatar,
+            "description": meta.description,
+        }
+
+    def _delete_agent(self, agent_id: str) -> dict:
+        """Delete an agent and all its data."""
+        registry = self._get_agent_registry()
+        try:
+            if not registry.delete_agent(agent_id):
+                raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"ok": True}
+
+    def _get_memories(self, agent_id: str = None) -> dict:
+        """Get memory files for an agent."""
+        if agent_id:
+            registry = self._get_agent_registry()
+            mem_dir = registry.agent_memories_dir(agent_id)
+        else:
+            from vulti_cli.config import get_vulti_home
+            mem_dir = get_vulti_home() / "memories"
+
+        memory = ""
+        user = ""
+        try:
+            mem_file = mem_dir / "MEMORY.md"
+            if mem_file.exists():
+                memory = mem_file.read_text(encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            user_file = mem_dir / "USER.md"
+            if user_file.exists():
+                user = user_file.read_text(encoding="utf-8")
+        except Exception:
+            pass
+        return {"memory": memory, "user": user}
+
+    def _update_memory(self, file: str, content: str, agent_id: str = None) -> dict:
+        """Update a memory file for an agent."""
+        if agent_id:
+            registry = self._get_agent_registry()
+            mem_dir = registry.agent_memories_dir(agent_id)
+        else:
+            from vulti_cli.config import get_vulti_home
+            mem_dir = get_vulti_home() / "memories"
+
+        mem_dir.mkdir(parents=True, exist_ok=True)
+        filename = "MEMORY.md" if file == "memory" else "USER.md"
+        (mem_dir / filename).write_text(content, encoding="utf-8")
+        return {"ok": True}
+
+    def _get_soul(self, agent_id: str = None) -> dict:
+        """Get the soul/personality file for an agent."""
+        if agent_id:
+            registry = self._get_agent_registry()
+            soul_path = registry.agent_soul_path(agent_id)
+        else:
+            from vulti_cli.config import get_vulti_home
+            soul_path = get_vulti_home() / "SOUL.md"
+
+        content = ""
+        if soul_path.exists():
+            content = soul_path.read_text(encoding="utf-8")
+        return {"content": content}
+
+    def _update_soul(self, content: str, agent_id: str = None) -> dict:
+        """Update the soul/personality file for an agent."""
+        if agent_id:
+            registry = self._get_agent_registry()
+            soul_path = registry.agent_soul_path(agent_id)
+        else:
+            from vulti_cli.config import get_vulti_home
+            soul_path = get_vulti_home() / "SOUL.md"
+
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text(content, encoding="utf-8")
+        return {"ok": True}
+
+    def _get_sessions(self, agent_id: str = None) -> list:
+        """Get sessions, optionally filtered by agent."""
+        # For now, return all sessions from the web adapter's storage
+        # In future, filter by agent_id prefix in session keys
+        return self._list_sessions()
 
     def _get_cron_jobs(self) -> list:
         """List cron jobs from the cron system."""
@@ -675,6 +975,74 @@ class WebAdapter(BasePlatformAdapter):
         try:
             from tools.cronjob_tools import cronjob
             result = cronjob(action="remove", job_id=job_id)
+            return json.loads(result) if isinstance(result, str) else result
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _get_rules(self) -> list:
+        """List all rules."""
+        try:
+            from rules.rules import list_rules
+            rules = list_rules(include_disabled=True)
+            return [{
+                "id": r.get("id", ""),
+                "name": r.get("name", ""),
+                "condition": r.get("condition", ""),
+                "action": r.get("action", ""),
+                "enabled": r.get("enabled", True),
+                "priority": r.get("priority", 0),
+                "trigger_count": r.get("trigger_count", 0),
+                "max_triggers": r.get("max_triggers"),
+                "cooldown_minutes": r.get("cooldown_minutes"),
+                "last_triggered_at": r.get("last_triggered_at"),
+                "tags": r.get("tags", []),
+            } for r in rules]
+        except Exception as e:
+            logger.debug("[web] Could not load rules: %s", e)
+        return []
+
+    def _create_rule(self, data: dict) -> dict:
+        """Create a rule via the rule tool."""
+        try:
+            from tools.rule_tools import rule
+            result = rule(
+                action="create",
+                condition=data.get("condition", ""),
+                action_prompt=data.get("action", ""),
+                name=data.get("name"),
+                priority=data.get("priority", 0),
+                max_triggers=data.get("max_triggers"),
+                cooldown_minutes=data.get("cooldown_minutes"),
+                tags=data.get("tags"),
+            )
+            return json.loads(result) if isinstance(result, str) else result
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _update_rule(self, rule_id: str, updates: dict) -> dict:
+        """Update a rule."""
+        try:
+            from tools.rule_tools import rule
+            if "enabled" in updates:
+                action = "enable" if updates.pop("enabled") else "disable"
+                if not updates:
+                    result = rule(action=action, rule_id=rule_id)
+                    return json.loads(result) if isinstance(result, str) else result
+
+            # Map 'action' field to 'action_prompt' to avoid collision
+            if "action" in updates:
+                updates["action_prompt"] = updates.pop("action")
+
+            result = rule(action="update", rule_id=rule_id, **updates)
+            return json.loads(result) if isinstance(result, str) else result
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _delete_rule(self, rule_id: str) -> dict:
+        """Delete a rule."""
+        try:
+            from tools.rule_tools import rule
+            result = rule(action="remove", rule_id=rule_id)
             return json.loads(result) if isinstance(result, str) else result
         except Exception as e:
             return {"error": str(e)}
@@ -900,40 +1268,6 @@ class WebAdapter(BasePlatformAdapter):
     def _get_vulti_home(self) -> Path:
         from vulti_cli.config import get_vulti_home
         return get_vulti_home()
-
-    def _get_memories(self) -> dict:
-        """Read MEMORY.md and USER.md from ~/.vulti/memories/."""
-        home = self._get_vulti_home()
-        mem_dir = home / "memories"
-        result = {"memory": "", "user": ""}
-        for key, fname in [("memory", "MEMORY.md"), ("user", "USER.md")]:
-            f = mem_dir / fname
-            if f.exists():
-                result[key] = f.read_text()
-        return result
-
-    def _update_memory(self, file_key: str, content: str) -> dict:
-        """Update MEMORY.md or USER.md."""
-        if file_key not in ("memory", "user"):
-            return {"error": "Invalid file key. Use 'memory' or 'user'."}
-        home = self._get_vulti_home()
-        mem_dir = home / "memories"
-        mem_dir.mkdir(parents=True, exist_ok=True)
-        fname = "MEMORY.md" if file_key == "memory" else "USER.md"
-        (mem_dir / fname).write_text(content)
-        return {"ok": True}
-
-    def _get_soul(self) -> dict:
-        """Read SOUL.md."""
-        home = self._get_vulti_home()
-        f = home / "SOUL.md"
-        return {"content": f.read_text() if f.exists() else ""}
-
-    def _update_soul(self, content: str) -> dict:
-        """Update SOUL.md."""
-        home = self._get_vulti_home()
-        (home / "SOUL.md").write_text(content)
-        return {"ok": True}
 
     # --- System Status ---
 

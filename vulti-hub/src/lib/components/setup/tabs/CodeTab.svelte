@@ -5,7 +5,7 @@
 	let { agent }: { agent: GatewayAgent } = $props();
 
 	function getService(type: string) {
-		return agent.services.find(s => s.type === type);
+		return (agent.services ?? []).find(s => s.type === type);
 	}
 
 	function connectService(type: string, label: string) {

@@ -345,6 +345,11 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             },
         )
 
+        # Set agent identity env var for inter-agent messaging from cron jobs
+        cron_agent_id = job.get("agent", "default")
+        os.environ["VULTI_AGENT_ID"] = cron_agent_id
+        os.environ["VULTI_AGENT_HOP_COUNT"] = "0"
+
         agent = AIAgent(
             model=turn_route["model"],
             api_key=turn_route["runtime"].get("api_key"),
