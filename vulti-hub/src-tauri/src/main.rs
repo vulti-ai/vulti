@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    hector_gateway_lib::run()
+    vulti_hub_lib::run()
 }

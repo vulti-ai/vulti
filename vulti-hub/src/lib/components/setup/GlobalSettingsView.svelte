@@ -1,8 +1,16 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
 	import TailscaleStep from './TailscaleStep.svelte';
+	import GatewayStep from './GatewayStep.svelte';
 
 	let tailscaleConnected = $derived(store.gatewayGlobal.tailscale.connected);
+	let gatewayConnected = $derived(store.gatewayGlobal.gateway?.connected ?? false);
+
+	function handleGatewayComplete() {
+		store.updateGlobalSettings({
+			gateway: { connected: true }
+		});
+	}
 
 	function handleTailscaleComplete() {
 		store.updateGlobalSettings({
@@ -11,11 +19,17 @@
 	}
 </script>
 
-<div class="mx-auto max-w-2xl p-8">
-	<h2 class="mb-6 text-2xl font-bold text-ink">Global Settings</h2>
+<div class="mx-auto max-w-2xl space-y-8 overflow-y-auto p-8">
+	<section>
+		<GatewayStep
+			status={gatewayConnected ? 'connected' : 'pending'}
+			onComplete={handleGatewayComplete}
+		/>
+	</section>
 
-	<!-- Tailscale -->
-	<section class="mb-8">
+	<hr class="border-border" />
+
+	<section>
 		<TailscaleStep
 			status={tailscaleConnected ? 'connected' : 'pending'}
 			onComplete={handleTailscaleComplete}

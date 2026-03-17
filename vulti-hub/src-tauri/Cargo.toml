@@ -1,12 +1,12 @@
 [package]
-name = "hector-gateway"
+name = "vulti-hub"
 version = "0.1.0"
-description = "Hector Gateway - Personal AI Agent Hub"
+description = "Vulti - Personal AI Agent Hub"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "hector_gateway_lib"
+name = "vulti_hub_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

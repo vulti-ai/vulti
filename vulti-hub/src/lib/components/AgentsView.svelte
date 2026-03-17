@@ -41,7 +41,7 @@
 					<input
 						type="url"
 						bind:value={newUrl}
-						placeholder="Gateway URL (e.g. http://localhost:8080)"
+						placeholder="Agent URL (e.g. http://localhost:8080)"
 						class="w-full rounded-lg border border-border bg-surface px-4 py-2 text-sm text-white placeholder-slate-500 focus:border-primary focus:outline-none"
 					/>
 					<button class="rounded-lg bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover">

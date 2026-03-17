@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
 	import { onMount } from 'svelte';
+	import QRCode from 'qrcode';
 
 	let { status, onComplete }: {
 		status: 'pending' | 'connected' | 'skipped';
@@ -13,18 +14,43 @@
 	let tailscaleIp = $state(store.gatewayGlobal.tailscale.ip || '');
 	let error = $state('');
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
+	let qrDataUrl = $state('');
+	let notified = false;
 
-	// Check if we're running inside Tauri
 	const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+
+	let connectUrl = $derived(tailscaleIp ? `http://${tailscaleIp}:5173` : '');
+
+	function notifyOnce() {
+		if (!notified) {
+			notified = true;
+			onComplete();
+		}
+	}
 
 	onMount(() => {
 		checkTailscale();
 		return () => { if (pollInterval) clearInterval(pollInterval); };
 	});
 
+	// Generate QR code when URL changes
+	$effect(() => {
+		if (connectUrl) {
+			QRCode.toDataURL(connectUrl, {
+				width: 200,
+				margin: 2,
+				color: { dark: '#000000', light: '#ffffff' }
+			}).then((url: string) => { qrDataUrl = url; });
+		}
+	});
+
+	// Auto-notify parent when connected
+	$effect(() => {
+		if (phase === 'connected') notifyOnce();
+	});
+
 	async function checkTailscale() {
 		if (!isTauri) {
-			// Fallback for browser dev: show manual IP input
 			phase = 'installed_not_running';
 			return;
 		}
@@ -73,7 +99,6 @@
 	}
 
 	function startPolling() {
-		// Poll every 3s to detect when Tailscale connects
 		if (pollInterval) clearInterval(pollInterval);
 		pollInterval = setInterval(async () => {
 			if (!isTauri) return;
@@ -102,15 +127,17 @@
 
 <div class="space-y-6">
 	<div>
-		<div class="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-500/10">
-			<svg class="h-7 w-7 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
-			</svg>
+		<div class="mb-3 flex items-center gap-3">
+			<div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-500/10">
+				<svg class="h-7 w-7 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+				</svg>
+			</div>
+			<div>
+				<h2 class="text-2xl font-bold text-ink">Connect</h2>
+				<p class="text-ink-dim">Tailscale connects your devices over a secure private network.</p>
+			</div>
 		</div>
-		<h2 class="text-2xl font-bold text-ink">Tailscale</h2>
-		<p class="mt-2 text-ink-dim">
-			Tailscale creates a secure private network so your phone can reach this Gateway.
-		</p>
 	</div>
 
 	{#if phase === 'checking'}
@@ -194,16 +221,21 @@
 				<div>
 					<p class="font-medium text-green-400">Tailscale Connected</p>
 					<p class="text-sm text-ink-muted">
-						Devices can reach this Gateway at <code class="rounded bg-paper-shadow px-1.5 py-0.5 text-xs font-mono">{tailscaleIp}</code>
+						Devices can reach Vulti at <code class="rounded bg-paper-shadow px-1.5 py-0.5 text-xs font-mono">http://{tailscaleIp}:5173</code>
 					</p>
 				</div>
 			</div>
 		</div>
-		<button
-			onclick={onComplete}
-			class="w-full rounded-lg bg-primary py-3 text-sm font-medium text-white hover:bg-primary-hover"
-		>
-			Continue
-		</button>
+
+		<!-- QR Code -->
+		{#if qrDataUrl && connectUrl}
+			<div class="flex flex-col items-center gap-3 rounded-xl border border-border bg-surface p-6">
+				<img src={qrDataUrl} alt="QR Code" class="rounded-lg" width="200" height="200" />
+				<div class="text-center">
+					<p class="text-sm font-medium text-ink">Scan to connect</p>
+					<code class="text-xs text-ink-muted">{connectUrl}</code>
+				</div>
+			</div>
+		{/if}
 	{/if}
 </div>

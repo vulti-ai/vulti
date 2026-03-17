@@ -90,9 +90,9 @@
 	<div class="flex-1 overflow-y-auto p-6">
 		<div class="mx-auto max-w-3xl space-y-8">
 
-			<!-- Gateway Status -->
+			<!-- Agent Status -->
 			<section>
-				<h3 class="mb-3 text-sm font-medium uppercase text-slate-400">Gateway Status</h3>
+				<h3 class="mb-3 text-sm font-medium uppercase text-slate-400">Agent Status</h3>
 				<div class="rounded-xl border border-border bg-surface p-4">
 					<div class="flex items-center gap-2">
 						<div

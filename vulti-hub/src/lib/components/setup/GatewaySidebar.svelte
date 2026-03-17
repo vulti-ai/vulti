@@ -28,7 +28,7 @@
 	<!-- Header -->
 	<div class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
 		<div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">H</div>
-		<span class="text-lg font-semibold text-ink">Gateway</span>
+		<span class="text-lg font-semibold text-ink">Vulti</span>
 	</div>
 
 	<!-- Settings -->

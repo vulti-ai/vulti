@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Vulti Gateway - Setup</title>
+	<title>Vulti - Setup</title>
 </svelte:head>
 
 <SetupWizard />

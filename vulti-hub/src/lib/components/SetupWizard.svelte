@@ -3,17 +3,21 @@
 	import GatewaySidebar from './setup/GatewaySidebar.svelte';
 	import AgentSetup from './setup/AgentSetup.svelte';
 	import GlobalSettingsView from './setup/GlobalSettingsView.svelte';
+	import GatewayStep from './setup/GatewayStep.svelte';
 	import TailscaleStep from './setup/TailscaleStep.svelte';
 
-	let showSettings = $state(!store.gatewayGlobal.tailscale.connected);
+	let gatewayConnected = $derived(store.gatewayGlobal.gateway?.connected ?? false);
+	let tailscaleConnected = $derived(store.gatewayGlobal.tailscale.connected);
+	let onboardingComplete = $derived(gatewayConnected && tailscaleConnected);
+
+	let showSettings = $state(!store.gatewayGlobal.tailscale.connected || !(store.gatewayGlobal.gateway?.connected ?? false));
 	let showNewAgentPrompt = $state(false);
 	let newAgentName = $state('');
 	let fillFromAgentId = $state<string | null>(null);
 
 	let activeAgent = $derived(store.activeGatewayAgent);
-	let tailscaleConnected = $derived(store.gatewayGlobal.tailscale.connected);
 	let hasAgents = $derived(store.gatewayAgents.length > 0);
-	let needsFirstAgent = $derived(tailscaleConnected && !hasAgents && !showSettings);
+	let needsFirstAgent = $derived(onboardingComplete && !hasAgents && !showSettings);
 
 	function selectSettings() {
 		showSettings = true;
@@ -40,6 +44,12 @@
 		}
 		showNewAgentPrompt = false;
 		showSettings = false;
+	}
+
+	function handleGatewayComplete() {
+		store.updateGlobalSettings({
+			gateway: { connected: true }
+		});
 	}
 
 	function handleTailscaleComplete() {
@@ -71,9 +81,16 @@
 	/>
 
 	<!-- Main content -->
-	<div class="flex flex-1 flex-col overflow-hidden">
-		{#if !tailscaleConnected}
-			<!-- First-time: Tailscale gate -->
+	<div class="flex flex-1 flex-col overflow-y-auto">
+		{#if !gatewayConnected}
+			<!-- First-time: Gateway gate -->
+			<div class="flex flex-1 items-center justify-center overflow-y-auto">
+				<div class="w-full max-w-2xl p-8">
+					<GatewayStep status="pending" onComplete={handleGatewayComplete} />
+				</div>
+			</div>
+		{:else if !tailscaleConnected}
+			<!-- Second: Tailscale gate -->
 			<div class="flex flex-1 items-center justify-center overflow-y-auto">
 				<div class="w-full max-w-2xl p-8">
 					<TailscaleStep status="pending" onComplete={handleTailscaleComplete} />

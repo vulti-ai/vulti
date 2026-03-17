@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/templates/tauri_conf_schema.json",
-  "productName": "Vulti Gateway",
+  "productName": "Vulti Hub",
   "version": "0.1.0",
   "identifier": "com.vulti.gateway",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Vulti Gateway",
+        "title": "Vulti Hub",
         "width": 1100,
         "height": 750,
         "center": true,
@@ -24,7 +24,7 @@
     "trayIcon": {
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true,
-      "tooltip": "Vulti Gateway"
+      "tooltip": "Vulti Hub"
     }
   },
   "bundle": {

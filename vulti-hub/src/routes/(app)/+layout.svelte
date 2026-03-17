@@ -96,7 +96,7 @@
 						{/each}
 						{#if store.gatewayAgents.length === 0}
 							<p class="px-3 py-2 text-xs text-slate-500">No agents configured</p>
-							<p class="px-3 pb-2 text-xs text-slate-600">Set up agents in the Gateway app</p>
+							<p class="px-3 pb-2 text-xs text-slate-600">Set up agents in Vulti settings</p>
 						{/if}
 					</div>
 				{/if}

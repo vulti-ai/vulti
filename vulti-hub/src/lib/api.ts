@@ -260,6 +260,7 @@ export interface GatewayAgent {
 
 export interface GlobalSettings {
 	tailscale: { ip: string; connected: boolean };
+	gateway: { connected: boolean };
 }
 
 export interface GatewayState {

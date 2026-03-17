@@ -6,7 +6,7 @@ export type { GatewayAgent, AgentService, GlobalSettings, GatewayState, ServiceC
 
 // Gateway state persistence
 const DEFAULT_GATEWAY: GatewayState = {
-	global: { tailscale: { ip: '', connected: false } },
+	global: { tailscale: { ip: '', connected: false }, gateway: { connected: false } },
 	agents: [],
 	activeAgentId: null
 };
@@ -14,7 +14,14 @@ const DEFAULT_GATEWAY: GatewayState = {
 function loadGatewayFromStorage(): GatewayState {
 	try {
 		const saved = localStorage.getItem('vulti_gateway');
-		if (saved) return JSON.parse(saved);
+		if (saved) {
+			const parsed = JSON.parse(saved);
+			// Ensure gateway field exists (migration from older schema)
+			if (parsed.global && !parsed.global.gateway) {
+				parsed.global.gateway = { connected: false };
+			}
+			return parsed;
+		}
 	} catch {}
 	return { ...DEFAULT_GATEWAY };
 }
