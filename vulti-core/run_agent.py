@@ -1924,15 +1924,13 @@ class AIAgent:
             prompt_parts.append(skills_prompt)
 
         if not self.skip_context_files:
-            from orchestrator.agent_context import AgentContext
-            _agent_id_for_context = AgentContext.current_agent_id()
+            _agent_id_for_context = os.getenv("VULTI_AGENT_ID")
             context_files_prompt = build_context_files_prompt(agent_id=_agent_id_for_context)
             if context_files_prompt:
                 prompt_parts.append(context_files_prompt)
 
         # Conditional rules — injected for all platforms including cron
-        from orchestrator.agent_context import AgentContext as _AC
-        _agent_id_for_rules = _AC.current_agent_id()
+        _agent_id_for_rules = os.getenv("VULTI_AGENT_ID")
         rules_prompt = build_rules_prompt(agent_id=_agent_id_for_rules)
         if rules_prompt:
             prompt_parts.append(rules_prompt)

@@ -65,9 +65,8 @@ def send_message_tool(args, **kw):
 
 def _handle_agent_send(target_agent_id: str, message: str) -> str:
     """Send a message to another agent via the inter-agent bus."""
-    from orchestrator.agent_context import AgentContext
-    hop_count = AgentContext.current_hop_count()
-    sender_agent_id = AgentContext.current_agent_id()
+    hop_count = int(os.getenv("VULTI_AGENT_HOP_COUNT", "0"))
+    sender_agent_id = os.getenv("VULTI_AGENT_ID", "default")
 
     if hop_count >= 3:
         return json.dumps({
@@ -77,7 +76,7 @@ def _handle_agent_send(target_agent_id: str, message: str) -> str:
 
     try:
         import asyncio
-        from orchestrator.agent_bus import send_to_agent
+        from gateway.agent_bus import send_to_agent
 
         # Run the async agent bus call
         try:
@@ -122,10 +121,9 @@ def _handle_list():
 
     # Include available agents
     try:
-        from orchestrator.agent_registry import AgentRegistry
-        from orchestrator.agent_context import AgentContext
+        from vulti_cli.agent_registry import AgentRegistry
         registry = AgentRegistry()
-        current_agent = AgentContext.current_agent_id()
+        current_agent = os.getenv("VULTI_AGENT_ID", "default")
         agents = [
             f"agent:{a.id} — {a.name} ({a.description})"
             for a in registry.list_agents()
@@ -649,8 +647,7 @@ async def _send_matrix(extra, chat_id, message):
 
         if not access_token or not user_id:
             # Try loading from agent credentials
-            from orchestrator.agent_context import AgentContext
-            agent_id = AgentContext.current_agent_id()
+            agent_id = os.getenv("VULTI_AGENT_ID", "default")
             try:
                 from gateway.matrix_agents import get_agent_matrix_credentials
                 creds = get_agent_matrix_credentials(agent_id)

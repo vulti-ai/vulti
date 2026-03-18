@@ -434,8 +434,10 @@ export const store = {
 	async createRelationship(fromId: string, toId: string, relType: 'manages' | 'collaborates') {
 		const rel = await api.createRelationship(fromId, toId, relType);
 		relationships = [...relationships, rel];
-		// Fire-and-forget: create private DM room for the pair
-		api.createRelationshipRoom(fromId, toId, relType).then(({ room_id }) => {
+		// Fire-and-forget: create "{Name} & {Name} Channel" for the pair
+		const fromName = agents.find(a => a.id === fromId)?.name || fromId;
+		const toName = agents.find(a => a.id === toId)?.name || toId;
+		api.createRelationshipRoom(fromId, toId, relType, fromName, toName).then(({ room_id }) => {
 			if (room_id) {
 				api.updateRelationship(rel.id, { matrixRoomId: room_id } as Partial<AgentRelationship>).catch(() => {});
 				relationships = relationships.map(r =>

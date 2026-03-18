@@ -1,19 +1,21 @@
 """
-VultiGatewayRunner — multi-agent gateway built on hermes-agent's GatewayRunner.
+VultiGatewayRunner — multi-agent gateway on top of upstream hermes-agent.
 
-Phase 1: Thin subclass that adds orchestrator-aware agent resolution and
-AgentContext scoping. The base GatewayRunner already contains the multi-agent
-code inline; this module extracts the pattern so that in Phase 2 (when
-hermes-agent becomes a clean external dependency) we can override without
-modifying upstream code.
+Subclasses hermes-agent's GatewayRunner to add:
+  - Multi-agent routing (@mention, routing table, default agent)
+  - AgentContext scoping per message
+  - Per-agent AIAgent creation via AgentFactory
+  - Agent registry initialization
 
-Phase 2 plan: Override _handle_message to wrap agent execution in
-AgentContext.scope(), and override _create_agent (once contributed upstream)
-to use AgentFactory.
+The upstream GatewayRunner handles all platform adapters, session management,
+command processing, and message delivery. We only override the parts that
+need multi-agent awareness.
 """
 
+import asyncio
 import logging
-from typing import Dict, Optional
+import os
+from typing import Any, Dict, Optional
 
 from orchestrator.agent_context import AgentContext
 from orchestrator.agent_factory import AgentFactory
@@ -24,13 +26,13 @@ logger = logging.getLogger(__name__)
 
 
 class VultiGatewayRunner:
-    """Multi-agent gateway runner.
+    """Multi-agent gateway runner wrapping hermes-agent's GatewayRunner.
 
-    In Phase 1, this is a composition wrapper around the existing GatewayRunner.
-    It initializes orchestrator components and provides the same public interface.
+    Usage::
 
-    In Phase 2, this will subclass hermes-agent's GatewayRunner directly and
-    override key methods for agent scoping.
+        from orchestrator.gateway.runner import VultiGatewayRunner
+        runner = VultiGatewayRunner()
+        await runner.run()
     """
 
     def __init__(self, config=None):
@@ -45,8 +47,46 @@ class VultiGatewayRunner:
         self.routing_table = load_agent_routing()
         self.factory = AgentFactory(self.registry)
 
-        # Delegate to base gateway runner
+        # Create the base gateway runner
         self._runner = GatewayRunner(self.config)
+
+        # Monkey-patch the base runner's _handle_message to inject agent routing.
+        # We save the original and wrap it with agent context scoping.
+        self._original_handle_message = self._runner._handle_message
+        self._runner._handle_message = self._handle_message_with_agent_routing
+
+    async def _handle_message_with_agent_routing(self, event) -> Optional[str]:
+        """Wrap upstream _handle_message with multi-agent routing and scoping.
+
+        1. Resolve which agent should handle this message
+        2. Strip @mention from message text if present
+        3. Set AgentContext so all downstream code sees the correct agent
+        4. Delegate to the upstream _handle_message
+        """
+        source = event.source
+        platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
+
+        # Resolve target agent
+        agent_id, clean_text = resolve_agent_for_message(
+            platform=platform_name,
+            chat_id=str(source.chat_id),
+            message_text=event.text or "",
+            registry=self.registry,
+            routing_table=self.routing_table,
+        )
+
+        # Update event text if @mention was stripped
+        if clean_text != (event.text or ""):
+            event.text = clean_text
+
+        # Store agent_id on event for downstream access
+        event._agent_id = agent_id
+
+        # Run the upstream handler within agent context scope.
+        # AgentContext.scope() sets both thread-local and VULTI_AGENT_ID env var,
+        # so hermes-agent code that reads the env var gets the right agent.
+        with AgentContext.scope(agent_id, hop_count=0):
+            return await self._original_handle_message(event)
 
     def resolve_agent(self, platform: str, chat_id: str, message_text: str):
         """Resolve which agent should handle a message.
@@ -61,21 +101,18 @@ class VultiGatewayRunner:
             routing_table=self.routing_table,
         )
 
-    def create_agent_for_turn(self, agent_id: str, **kwargs):
-        """Create an AIAgent instance configured for a specific agent.
-
-        The returned agent should be run within an AgentContext.scope().
-        """
-        return self.factory.create_agent(agent_id, **kwargs)
-
     async def start(self):
-        """Start the gateway (delegates to base runner)."""
+        """Start the gateway."""
         return await self._runner.start()
 
     async def stop(self):
-        """Stop the gateway (delegates to base runner)."""
+        """Stop the gateway."""
         return await self._runner.stop()
 
     async def run(self):
-        """Run the gateway until stopped (delegates to base runner)."""
+        """Run the gateway until stopped."""
         return await self._runner.run()
+
+    def __getattr__(self, name):
+        """Proxy attribute access to the base runner for compatibility."""
+        return getattr(self._runner, name)

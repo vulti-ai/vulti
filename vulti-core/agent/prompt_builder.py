@@ -457,11 +457,7 @@ def build_context_files_prompt(cwd: Optional[str] = None, agent_id: Optional[str
         logger.debug("Could not ensure VULTI_HOME before loading SOUL.md: %s", e)
 
     _vulti_home = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
-    try:
-        from orchestrator.agent_context import AgentContext
-        _agent_id = agent_id or AgentContext.current_agent_id()
-    except ImportError:
-        _agent_id = agent_id or os.getenv("VULTI_AGENT_ID")
+    _agent_id = agent_id or os.getenv("VULTI_AGENT_ID")
     soul_path = None
     if _agent_id:
         _agent_soul = _vulti_home / "agents" / _agent_id / "SOUL.md"

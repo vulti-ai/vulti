@@ -239,7 +239,7 @@ async def sync_agents_to_matrix(
     Returns dict mapping agent_id -> matrix_user_id for successfully
     registered agents.
     """
-    from orchestrator.agent_registry import AgentRegistry
+    from vulti_cli.agent_registry import AgentRegistry
 
     registry = AgentRegistry()
     agents = registry.list_agents()
@@ -270,13 +270,13 @@ async def create_relationship_room(
     server_name: str,
     agent_a_id: str,
     agent_b_id: str,
+    agent_a_name: str = "",
+    agent_b_name: str = "",
     purpose: str = "manages",
 ) -> Optional[str]:
-    """Create a private Matrix room for two agents to communicate.
+    """Create a private channel for agents with a direct relationship.
 
-    The room is created using agent A's credentials, then agent B is
-    invited and auto-joined.
-
+    Room is named "{AgentA} & {AgentB} Channel". Owner is also invited.
     Returns the room_id on success, None on failure.
     """
     import httpx
@@ -294,12 +294,20 @@ async def create_relationship_room(
     headers_a = {"Authorization": f"Bearer {creds_a['access_token']}"}
     headers_b = {"Authorization": f"Bearer {creds_b['access_token']}"}
 
-    room_name = f"{agent_a_id} ↔ {agent_b_id}"
-    topic = f"Relationship: {purpose}"
+    name_a = agent_a_name or agent_a_id.capitalize()
+    name_b = agent_b_name or agent_b_id.capitalize()
+    room_name = f"{name_a} & {name_b} Channel"
+    topic = f"Direct channel: {purpose}"
+
+    invite_list = [creds_b["user_id"]]
+
+    # Also invite owner
+    owner_creds = _get_owner_matrix_credentials()
+    if owner_creds:
+        invite_list.append(owner_creds["user_id"])
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            # Create the room as agent A
             resp = await client.post(
                 f"{homeserver_url}/_matrix/client/v3/createRoom",
                 headers=headers_a,
@@ -308,7 +316,7 @@ async def create_relationship_room(
                     "topic": topic,
                     "visibility": "private",
                     "preset": "private_chat",
-                    "invite": [creds_b["user_id"]],
+                    "invite": invite_list,
                     "initial_state": [
                         {
                             "type": "m.room.history_visibility",
@@ -327,16 +335,24 @@ async def create_relationship_room(
 
             room_id = resp.json()["room_id"]
 
-            # Agent B joins the room
+            # Agent B joins
             await client.post(
                 f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
                 headers=headers_b,
                 json={},
             )
 
+            # Owner joins
+            if owner_creds:
+                await client.post(
+                    f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                    headers={"Authorization": f"Bearer {owner_creds['access_token']}"},
+                    json={},
+                )
+
             logger.info(
-                "Matrix: created relationship room %s for %s ↔ %s (%s)",
-                room_id, agent_a_id, agent_b_id, purpose,
+                "Matrix: created relationship channel %s for %s & %s (%s)",
+                room_id, name_a, name_b, purpose,
             )
             return room_id
 
@@ -354,8 +370,9 @@ async def ensure_room_topology(
     """Create standard rooms for agent communication.
 
     Creates:
-    - #hub:{server_name} — Main room for all agents + humans
-    - #agents:{server_name} — Inter-agent coordination room
+    - #chatter:{server_name} — Agent Chatter: casual, agents talk freely
+    - #daily:{server_name} — VultiSquad Daily: formal daily updates from all agents
+    - #coordination:{server_name} — Agent Coordination: human talking to all agents
 
     Returns dict mapping room alias -> room_id.
     """
@@ -366,8 +383,9 @@ async def ensure_room_topology(
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         for alias_local, room_name, topic in [
-            ("hub", "Vulti Hub", "Main communication hub for agents and humans"),
-            ("agents", "Agent Coordination", "Inter-agent messaging and coordination"),
+            ("chatter", "Agent Chatter", "Casual chat — agents talk freely, no restrictions"),
+            ("daily", "VultiSquad Daily", "Formal daily updates from all agents"),
+            ("coordination", "Agent Coordination", "Human talking to all agents at once"),
         ]:
             full_alias = f"#{alias_local}:{server_name}"
 
@@ -793,14 +811,14 @@ async def onboard_agent_to_matrix(
 
     import httpx
 
-    # Step 2: Join global rooms (#hub, #agents)
+    # Step 2: Join all 3 global rooms (chatter, daily, coordination)
+    chatter_room_id = None
     creds = get_agent_matrix_credentials(agent_id)
     if creds:
         agent_headers = {"Authorization": f"Bearer {creds['access_token']}"}
         # Need an existing member's token to invite
         inviter_creds = _get_owner_matrix_credentials()
         if not inviter_creds:
-            # Use any existing agent token
             for f in _tokens_dir().iterdir():
                 if f.suffix == ".json" and f.stem != agent_id:
                     try:
@@ -813,24 +831,26 @@ async def onboard_agent_to_matrix(
             inviter_headers = {"Authorization": f"Bearer {inviter_creds['access_token']}"}
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    for room_alias in ["hub", "agents"]:
+                    for room_alias in ["chatter", "daily", "coordination"]:
                         try:
                             resp = await client.get(
                                 f"{homeserver_url}/_matrix/client/v3/directory/room/%23{room_alias}:{server_name}",
                             )
                             if resp.status_code == 200:
-                                room_id = resp.json().get("room_id")
-                                if room_id:
+                                rid = resp.json().get("room_id")
+                                if rid:
                                     await client.post(
-                                        f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/invite",
+                                        f"{homeserver_url}/_matrix/client/v3/rooms/{rid}/invite",
                                         headers=inviter_headers,
                                         json={"user_id": matrix_user_id},
                                     )
                                     await client.post(
-                                        f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                                        f"{homeserver_url}/_matrix/client/v3/join/{rid}",
                                         headers=agent_headers,
                                         json={},
                                     )
+                                    if room_alias == "chatter":
+                                        chatter_room_id = rid
                         except Exception:
                             pass
             except Exception as e:
@@ -844,13 +864,22 @@ async def onboard_agent_to_matrix(
     )
     result["dm_room_id"] = dm_room_id
 
-    # Step 4: Send greeting
+    # Step 4: Send greeting DM to owner
     if dm_room_id:
         await send_room_message(
             homeserver_url=homeserver_url,
             agent_id=agent_id,
             room_id=dm_room_id,
             body=f"Hey! I'm {agent_name}, and I'm ready to go. What can I help you with?",
+        )
+
+    # Step 5: Say hi in Agent Chatter
+    if chatter_room_id:
+        await send_room_message(
+            homeserver_url=homeserver_url,
+            agent_id=agent_id,
+            room_id=chatter_room_id,
+            body=f"Hey everyone, {agent_name} here. Just joined the squad!",
         )
 
     return result

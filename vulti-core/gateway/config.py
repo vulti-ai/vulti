@@ -496,7 +496,7 @@ def resolve_agent_routing(source, routing_table: dict = None) -> str:
     Returns:
         agent_id string. Falls back to the registry's default agent.
     """
-    from orchestrator.agent_registry import get_default_agent_id
+    from vulti_cli.agent_registry import get_default_agent_id
 
     if routing_table is None:
         routing_table = load_agent_routing()

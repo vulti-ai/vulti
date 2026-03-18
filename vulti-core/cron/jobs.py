@@ -21,21 +21,14 @@ logger = logging.getLogger(__name__)
 def _get_default_agent_id() -> str:
     """Lazy import to avoid circular dependencies."""
     try:
-        from orchestrator.agent_registry import get_default_agent_id
+        from vulti_cli.agent_registry import get_default_agent_id
         return get_default_agent_id()
     except Exception:
         return "default"
 
 
 def _current_agent_id() -> str:
-    """Return the active agent ID from AgentContext, env var, or registry default."""
-    try:
-        from orchestrator.agent_context import AgentContext
-        aid = AgentContext.current_agent_id()
-        if aid != "default":
-            return aid
-    except Exception:
-        pass
+    """Return the active agent ID from env var or registry default."""
     return os.getenv("VULTI_AGENT_ID") or _get_default_agent_id()
 
 

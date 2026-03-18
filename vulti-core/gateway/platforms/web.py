@@ -492,7 +492,7 @@ class WebAdapter(BasePlatformAdapter):
                     owner_headers = {"Authorization": f"Bearer {result['access_token']}"}
                     agent_headers = {"Authorization": f"Bearer {agent_token}"}
                     async with httpx.AsyncClient(timeout=10.0) as hc:
-                        for room_alias in ["hub", "agents"]:
+                        for room_alias in ["chatter", "daily", "coordination"]:
                             try:
                                 resp = await hc.get(
                                     f"{homeserver_url}/_matrix/client/v3/directory/room/%23{room_alias}:{server_name}",
@@ -533,12 +533,17 @@ class WebAdapter(BasePlatformAdapter):
             homeserver_url = f"http://127.0.0.1:{port}"
             server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
 
+            from_agent_name = data.get("from_agent_name", "").strip()
+            to_agent_name = data.get("to_agent_name", "").strip()
+
             from gateway.matrix_agents import create_relationship_room as _create_room
             room_id = await _create_room(
                 homeserver_url=homeserver_url,
                 server_name=server_name,
                 agent_a_id=from_agent_id,
                 agent_b_id=to_agent_id,
+                agent_a_name=from_agent_name,
+                agent_b_name=to_agent_name,
                 purpose=rel_type,
             )
 
@@ -1055,7 +1060,7 @@ class WebAdapter(BasePlatformAdapter):
     def _get_agent_registry(self):
         """Get or create the agent registry instance."""
         if not hasattr(self, "_agent_registry"):
-            from orchestrator.agent_registry import AgentRegistry
+            from vulti_cli.agent_registry import AgentRegistry
             self._agent_registry = AgentRegistry()
             self._agent_registry.ensure_initialized()
         return self._agent_registry

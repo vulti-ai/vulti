@@ -3,40 +3,21 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vulti-agent"
+name = "vulti-orchestrator"
 version = "0.1.0"
-description = "The self-improving AI agent — creates skills from experience, improves them during use, and runs anywhere"
+description = "Multi-agent orchestrator for Vulti — lifecycle management, routing, rules, and inter-agent messaging on top of hermes-agent"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "Nous Research" }]
+authors = [{ name = "Vulti AI" }]
 license = { text = "MIT" }
 dependencies = [
-  # Core
-  "openai",
-  "anthropic>=0.39.0",
-  "python-dotenv",
-  "fire",
-  "httpx",
-  "rich",
-  "tenacity",
+  # Hermes Agent — the upstream single-agent runtime (provides AIAgent,
+  # tool registry, gateway, platform adapters, skills, memory, cron).
+  # Pin to a specific tag for reproducible builds.
+  "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@v2026.3.17",
+  # Vulti-specific deps not covered by hermes-agent
   "pyyaml",
-  "requests",
-  "jinja2",
-  "pydantic>=2.0",
-  # Interactive CLI (prompt_toolkit is used directly by cli.py)
-  "prompt_toolkit",
-  # Tools
-  "firecrawl-py",
-  "fal-client",
-  # Text-to-speech (Edge TTS is free, no API key needed)
-  "edge-tts",
-  "faster-whisper>=1.0.0",
-  # mini-swe-agent deps (terminal tool)
-  "litellm>=1.75.5",
-  "typer",
-  "platformdirs",
-  # Skills Hub (GitHub App JWT auth — optional, only needed for bot identity)
-  "PyJWT[crypto]",
+  "python-dotenv",
 ]
 
 [project.optional-dependencies]
@@ -66,20 +47,20 @@ rl = [
 ]
 yc-bench = ["yc-bench @ git+https://github.com/collinear-ai/yc-bench.git"]
 all = [
-  "vulti-agent[modal]",
-  "vulti-agent[daytona]",
-  "vulti-agent[messaging]",
-  "vulti-agent[cron]",
-  "vulti-agent[cli]",
-  "vulti-agent[dev]",
-  "vulti-agent[tts-premium]",
-  "vulti-agent[slack]",
-  "vulti-agent[pty]",
-  "vulti-agent[honcho]",
-  "vulti-agent[mcp]",
-  "vulti-agent[homeassistant]",
-  "vulti-agent[acp]",
-  "vulti-agent[voice]",
+  "vulti-orchestrator[modal]",
+  "vulti-orchestrator[daytona]",
+  "vulti-orchestrator[messaging]",
+  "vulti-orchestrator[cron]",
+  "vulti-orchestrator[cli]",
+  "vulti-orchestrator[dev]",
+  "vulti-orchestrator[tts-premium]",
+  "vulti-orchestrator[slack]",
+  "vulti-orchestrator[pty]",
+  "vulti-orchestrator[honcho]",
+  "vulti-orchestrator[mcp]",
+  "vulti-orchestrator[homeassistant]",
+  "vulti-orchestrator[acp]",
+  "vulti-orchestrator[voice]",
 ]
 
 [project.scripts]
@@ -88,10 +69,14 @@ vulti-agent = "run_agent:main"
 vulti-acp = "acp_adapter.entry:main"
 
 [tool.setuptools]
-py-modules = ["run_agent", "model_tools", "toolsets", "batch_runner", "trajectory_compressor", "toolset_distributions", "cli", "vulti_constants", "vulti_state", "vulti_time", "mini_swe_runner", "rl_cli", "utils"]
+# Vulti-specific modules only. All hermes-agent modules (run_agent, model_tools,
+# toolsets, agent/, tools/, gateway/, cron/, etc.) come from the hermes-agent
+# dependency. The orchestrator injects multi-agent behavior via hooks and wrappers.
+py-modules = ["vulti_constants", "vulti_state", "vulti_time", "hermes_constants", "hermes_state", "hermes_time"]
 
 [tool.setuptools.packages.find]
-include = ["agent", "tools", "tools.*", "vulti_cli", "gateway", "gateway.*", "cron", "honcho_integration", "acp_adapter", "orchestrator", "orchestrator.*", "rules"]
+# Vulti-only packages. hermes-agent provides: agent, tools, gateway, cron, honcho_integration
+include = ["orchestrator", "orchestrator.*", "vulti_cli", "rules"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -317,13 +317,6 @@ class GatewayRunner:
         self.config = config or load_gateway_config()
         self.adapters: Dict[Platform, BasePlatformAdapter] = {}
 
-        # Multi-agent registry and routing (via orchestrator)
-        from orchestrator.agent_registry import AgentRegistry
-        from orchestrator.gateway.routing import load_agent_routing
-        self.agent_registry = AgentRegistry()
-        self.agent_registry.ensure_initialized()
-        self._agent_routing_table = load_agent_routing()
-
         # Load ephemeral config from config.yaml / env vars.
         # Both are injected at API-call time only and never persisted.
         self._prefill_messages = self._load_prefill_messages()
@@ -597,26 +590,12 @@ class GatewayRunner:
         return self._exit_reason
 
     def _resolve_agent_for_source(self, source: SessionSource, message_text: str = "") -> tuple[str, str]:
-        """Resolve which agent should handle a message and extract clean message text.
-
-        Delegates to orchestrator.gateway.routing for the actual resolution logic.
+        """Resolve which agent should handle a message.
 
         Returns (agent_id, cleaned_message_text).
-
-        Resolution order:
-          1. @agent_name mention in message text
-          2. Routing table match from SessionSource
-          3. Default agent
+        Stub for upstream compatibility — real routing is in VultiGatewayRunner.
         """
-        from orchestrator.gateway.routing import resolve_agent_for_message
-
-        return resolve_agent_for_message(
-            platform=source.platform.value if hasattr(source.platform, 'value') else str(source.platform),
-            chat_id=str(source.chat_id),
-            message_text=message_text,
-            registry=self.agent_registry,
-            routing_table=self._agent_routing_table,
-        )
+        return "default", message_text
 
     def _session_key_for_source(self, source: SessionSource, agent_id: str = "default") -> str:
         """Resolve the current session key for a source, honoring gateway config when available."""
@@ -944,14 +923,14 @@ class GatewayRunner:
                                     server_name=server_name,
                                     agent_matrix_ids=agent_matrix_ids,
                                 )
-                                # Set home channel if not configured
-                                hub_alias = f"#hub:{server_name}"
-                                if hub_alias in rooms and not matrix_config.home_channel:
+                                # Set home channel to Agent Coordination if not configured
+                                coordination_alias = f"#coordination:{server_name}"
+                                if coordination_alias in rooms and not matrix_config.home_channel:
                                     from gateway.config import HomeChannel
                                     matrix_config.home_channel = HomeChannel(
                                         platform=Platform.MATRIX,
-                                        chat_id=rooms[hub_alias],
-                                        name="Hub",
+                                        chat_id=rooms[coordination_alias],
+                                        name="Agent Coordination",
                                     )
                             except Exception as e:
                                 logger.warning("Matrix room topology setup: %s", e)
@@ -1386,10 +1365,7 @@ class GatewayRunner:
         # Store resolved agent_id on event so command handlers can access it
         event._agent_id = _resolved_agent_id
 
-        # Set agent context so tools know which agent they serve.
-        # AgentContext.scope() also sets VULTI_AGENT_ID env var for compat.
-        from orchestrator.agent_context import AgentContext
-        AgentContext._local.agent_id = _resolved_agent_id
+        # Set agent identity env var so tools know which agent they serve.
         os.environ["VULTI_AGENT_ID"] = _resolved_agent_id
 
         # PRIORITY handling when an agent is already running for this session.

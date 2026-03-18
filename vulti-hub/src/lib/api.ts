@@ -206,10 +206,10 @@ export const api = {
 	},
 
 	// Matrix operations (HTTP — needs running gateway)
-	createRelationshipRoom(fromAgentId: string, toAgentId: string, relType: string) {
+	createRelationshipRoom(fromAgentId: string, toAgentId: string, relType: string, fromAgentName?: string, toAgentName?: string) {
 		return request<{ room_id: string }>('/matrix/relationship-room', {
 			method: 'POST',
-			body: JSON.stringify({ from_agent_id: fromAgentId, to_agent_id: toAgentId, rel_type: relType })
+			body: JSON.stringify({ from_agent_id: fromAgentId, to_agent_id: toAgentId, rel_type: relType, from_agent_name: fromAgentName || '', to_agent_name: toAgentName || '' })
 		});
 	},
 

@@ -1,21 +1,16 @@
 """
-Prompt hooks — enriches AIAgent system prompts with per-agent context.
+Prompt hooks — enriches upstream AIAgent system prompts with per-agent context.
 
-In the current architecture, hermes-agent's prompt_builder.py already
-contains the vulti-specific code inline (build_rules_prompt, per-agent
-SOUL.md resolution). It reads VULTI_AGENT_ID from the environment,
-which AgentContext.scope() sets automatically.
+Monkey-patches AIAgent._build_system_prompt to append:
+  - Per-agent SOUL.md (if VULTI_AGENT_ID is set)
+  - Active rules block (condition/action pairs)
+  - Agent identity context (list of peer agents)
 
-This module provides higher-level functions for when we need to
-programmatically inject agent-specific context outside of the
-standard _build_system_prompt() flow.
+Call ``patch_prompt_builder()`` once at startup.
 
-Phase 2 plan: When hermes-agent becomes an external dependency with
-an unmodified prompt_builder, these hooks will be called by
-VultiGatewayRunner to augment the base system prompt with:
-  - Per-agent SOUL.md
-  - Active rules block
-  - Agent identity context (other available agents)
+The upstream _build_system_prompt already reads env vars for some context.
+AgentContext.scope() sets VULTI_AGENT_ID, which the upstream prompt_builder
+may not read — so we append our content after the upstream builds its prompt.
 """
 
 import logging
@@ -26,6 +21,58 @@ from typing import Optional
 from orchestrator.agent_context import AgentContext
 
 logger = logging.getLogger(__name__)
+
+_patched = False
+
+
+def patch_prompt_builder():
+    """Monkey-patch AIAgent._build_system_prompt to inject vulti-specific context.
+
+    Safe to call multiple times — patches only once.
+    """
+    global _patched
+    if _patched:
+        return
+
+    try:
+        from run_agent import AIAgent
+    except ImportError:
+        logger.debug("run_agent.AIAgent not available — skipping prompt patch")
+        return
+
+    _original_build = AIAgent._build_system_prompt
+
+    def _vulti_build_system_prompt(self, system_message=None):
+        """Build system prompt with vulti multi-agent enrichment."""
+        # Call upstream to get the base prompt
+        base_prompt = _original_build(self, system_message)
+
+        # Enrich with per-agent context
+        agent_id = AgentContext.current_agent_id()
+        extra_parts = []
+
+        # Per-agent SOUL.md (if not already loaded by upstream)
+        soul = get_agent_soul(agent_id)
+        if soul and soul not in base_prompt:
+            extra_parts.append(soul)
+
+        # Active rules
+        rules = get_agent_rules_prompt(agent_id)
+        if rules:
+            extra_parts.append(rules)
+
+        # Agent identity context (peer agents)
+        identity = get_agent_identity_context(agent_id)
+        if identity:
+            extra_parts.append(identity)
+
+        if extra_parts:
+            return base_prompt + "\n\n" + "\n\n".join(extra_parts)
+        return base_prompt
+
+    AIAgent._build_system_prompt = _vulti_build_system_prompt
+    _patched = True
+    logger.debug("Patched AIAgent._build_system_prompt with vulti enrichment")
 
 
 def get_agent_soul(agent_id: Optional[str] = None) -> str:
@@ -58,23 +105,51 @@ def get_agent_soul(agent_id: Optional[str] = None) -> str:
 
 
 def get_agent_rules_prompt(agent_id: Optional[str] = None) -> str:
-    """Build the active rules block for a specific agent.
-
-    Delegates to the rules engine's build_rules_prompt.
-    """
+    """Build the active rules block for a specific agent."""
     agent_id = agent_id or AgentContext.current_agent_id()
     try:
-        from agent.prompt_builder import build_rules_prompt
-        return build_rules_prompt(agent_id=agent_id)
+        from rules.rules import get_active_rules
     except ImportError:
         return ""
 
+    rules = get_active_rules(agent_id)
+    if not rules:
+        return ""
+
+    MAX_RULES = 20
+    MAX_CHARS = 200
+
+    shown = rules[:MAX_RULES]
+    lines = []
+    for r in shown:
+        name = r.get("name", "unnamed")
+        rid = r["id"]
+        cond = r.get("condition", "").strip().replace("\n", " ")[:MAX_CHARS]
+        act = r.get("action", "").strip().replace("\n", " ")[:MAX_CHARS]
+        lines.append(f'  [p={r.get("priority", 0)}] {name} (id:{rid}): IF "{cond}" THEN "{act}"')
+
+    rules_block = "\n".join(lines)
+    overflow = ""
+    if len(rules) > MAX_RULES:
+        overflow = f"\n  ({len(rules) - MAX_RULES} more rules not shown)"
+
+    return (
+        "## Active Rules\n\n"
+        "You have conditional rules. For EVERY incoming message, silently evaluate whether\n"
+        "any rule's condition matches. If a rule matches, execute its action using your\n"
+        "tools BEFORE composing your normal response. Multiple rules can match the same message.\n"
+        "Execute them in priority order (lowest number first). After executing a rule's action,\n"
+        "call rule(action='record', rule_id='...') to log the trigger.\n"
+        "Do not mention rule evaluation to the user unless the rule's action produces a visible result.\n"
+        "If no rules match, proceed normally without mentioning rules.\n\n"
+        "<rules>\n"
+        f"{rules_block}{overflow}\n"
+        "</rules>"
+    )
+
 
 def get_agent_identity_context(agent_id: Optional[str] = None) -> str:
-    """Build an identity context block listing other available agents.
-
-    This helps agents know about their peers for inter-agent messaging.
-    """
+    """Build an identity context block listing other available agents."""
     agent_id = agent_id or AgentContext.current_agent_id()
 
     try:
@@ -95,39 +170,3 @@ def get_agent_identity_context(agent_id: Optional[str] = None) -> str:
     lines.append("Use send_message(target='agent:<id>', message='...') to communicate with them.")
 
     return "\n".join(lines)
-
-
-def enrich_system_prompt(
-    base_prompt: str,
-    agent_id: Optional[str] = None,
-    include_rules: bool = True,
-    include_identity: bool = True,
-) -> str:
-    """Enrich a base system prompt with per-agent orchestrator context.
-
-    This is the main hook for Phase 2, when hermes-agent builds the base
-    prompt and the orchestrator adds multi-agent features on top.
-
-    Args:
-        base_prompt: The system prompt from hermes-agent's prompt builder.
-        agent_id: Agent ID (defaults to AgentContext.current_agent_id()).
-        include_rules: Whether to inject the rules block.
-        include_identity: Whether to inject the agent identity context.
-
-    Returns:
-        The enriched system prompt.
-    """
-    agent_id = agent_id or AgentContext.current_agent_id()
-    parts = [base_prompt]
-
-    if include_rules:
-        rules = get_agent_rules_prompt(agent_id)
-        if rules:
-            parts.append(rules)
-
-    if include_identity:
-        identity = get_agent_identity_context(agent_id)
-        if identity:
-            parts.append(identity)
-
-    return "\n\n".join(parts)

@@ -36,11 +36,8 @@ logger = logging.getLogger(__name__)
 # Where memory files live — resolves per-agent if VULTI_AGENT_ID is set
 def _resolve_memory_dir() -> Path:
     """Resolve the memory directory, checking per-agent path first."""
-    from orchestrator.agent_context import AgentContext
     vulti_home = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
-    agent_id = AgentContext.current_agent_id()
-    if agent_id == "default":
-        agent_id = os.getenv("VULTI_AGENT_ID")  # fallback for non-orchestrator contexts
+    agent_id = os.getenv("VULTI_AGENT_ID")
     if agent_id:
         agent_mem = vulti_home / "agents" / agent_id / "memories"
         if agent_mem.exists():
