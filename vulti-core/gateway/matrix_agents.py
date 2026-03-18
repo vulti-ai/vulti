@@ -789,13 +789,15 @@ async def onboard_agent_to_matrix(
     """Full Matrix onboarding for a newly created agent.
 
     1. Register as Matrix user
-    2. Join the global #hub and #agents rooms
-    3. Create a DM with the owner
-    4. Send a greeting in the DM
+    2. Join the 3 global rooms (chatter, daily, coordination)
+    3. Say hi in Agent Chatter
 
-    Returns dict with matrix_user_id, dm_room_id (both optional).
+    DMs with the owner are only created when the user explicitly creates
+    a relationship between the owner and the agent.
+
+    Returns dict with matrix_user_id.
     """
-    result: Dict[str, Any] = {"matrix_user_id": None, "dm_room_id": None}
+    result: Dict[str, Any] = {"matrix_user_id": None}
 
     # Step 1: Register
     matrix_user_id = await ensure_agent_matrix_user(
@@ -816,7 +818,6 @@ async def onboard_agent_to_matrix(
     creds = get_agent_matrix_credentials(agent_id)
     if creds:
         agent_headers = {"Authorization": f"Bearer {creds['access_token']}"}
-        # Need an existing member's token to invite
         inviter_creds = _get_owner_matrix_credentials()
         if not inviter_creds:
             for f in _tokens_dir().iterdir():
@@ -856,24 +857,7 @@ async def onboard_agent_to_matrix(
             except Exception as e:
                 logger.warning("Matrix: error joining global rooms for %s: %s", agent_id, e)
 
-    # Step 3: Create DM with owner
-    dm_room_id = await create_owner_dm_room(
-        homeserver_url=homeserver_url,
-        server_name=server_name,
-        agent_id=agent_id,
-    )
-    result["dm_room_id"] = dm_room_id
-
-    # Step 4: Send greeting DM to owner
-    if dm_room_id:
-        await send_room_message(
-            homeserver_url=homeserver_url,
-            agent_id=agent_id,
-            room_id=dm_room_id,
-            body=f"Hey! I'm {agent_name}, and I'm ready to go. What can I help you with?",
-        )
-
-    # Step 5: Say hi in Agent Chatter
+    # Step 3: Say hi in Agent Chatter
     if chatter_room_id:
         await send_room_message(
             homeserver_url=homeserver_url,
@@ -883,3 +867,33 @@ async def onboard_agent_to_matrix(
         )
 
     return result
+
+
+async def create_owner_relationship(
+    homeserver_url: str,
+    server_name: str,
+    agent_id: str,
+    agent_name: str,
+) -> Optional[str]:
+    """Create a DM room between the owner and an agent.
+
+    Called when the user explicitly creates a relationship with an agent.
+    The agent sends a greeting in the DM.
+
+    Returns dm_room_id or None.
+    """
+    dm_room_id = await create_owner_dm_room(
+        homeserver_url=homeserver_url,
+        server_name=server_name,
+        agent_id=agent_id,
+    )
+
+    if dm_room_id:
+        await send_room_message(
+            homeserver_url=homeserver_url,
+            agent_id=agent_id,
+            room_id=dm_room_id,
+            body=f"Hey! I'm {agent_name}, and I'm ready to go. What can I help you with?",
+        )
+
+    return dm_room_id

@@ -6,10 +6,17 @@
 	import { computeLayout } from '$lib/canvas/layout';
 	import AgentNode from './canvas/AgentNode.svelte';
 	import OwnerNode from './canvas/OwnerNode.svelte';
+	import DeletableEdge from './canvas/DeletableEdge.svelte';
 	import SlideOutPanel from './SlideOutPanel.svelte';
 	import GatewayStep from './setup/GatewayStep.svelte';
 
 	const nodeTypes = { agent: AgentNode, owner: OwnerNode };
+	const edgeTypes = { deletable: DeletableEdge };
+
+	function handleEdgeDelete(edgeId: string) {
+		if (edgeId.startsWith('owner-')) return;
+		store.deleteRelationship(edgeId);
+	}
 
 	// Panel
 	let panelMode = $state<'none' | 'agent' | 'owner' | 'settings' | 'create'>('none');
@@ -61,21 +68,36 @@
 				targetPosition: Position.Top,
 			}));
 
-		flowEdges = layout.edges.map(e => ({
-			id: e.id,
-			source: e.fromId,
-			target: e.toId,
-			type: 'default',
-			animated: false,
-			markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 12 },
-			style: 'stroke-width: 1.5; opacity: 0.25;',
-		}));
+		flowEdges = layout.edges.map(e => {
+			const isImplicit = e.id.startsWith('owner-');
+			return {
+				id: e.id,
+				source: e.fromId,
+				target: e.toId,
+				type: 'deletable',
+				animated: false,
+				markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 12 },
+				style: 'stroke-width: 1.5; opacity: 0.25;',
+				data: { deletable: !isImplicit, ondelete: handleEdgeDelete },
+			};
+		});
 	});
 
-	function onConnect(connection: Connection) {
-		if (connection.source && connection.target) {
-			store.createRelationship(connection.source, connection.target, 'manages');
-		}
+	function onBeforeConnect(connection: Connection): Connection | false | null {
+		const src = connection.source;
+		const tgt = connection.target;
+		if (!src || !tgt) return false;
+		if (src === tgt) return false;
+		// Don't allow connecting TO the owner (owner is always source)
+		if (tgt === '__owner__') return false;
+
+		// Map owner node id
+		const fromId = src === '__owner__' ? 'owner' : src;
+		const toId = tgt;
+
+		store.createRelationship(fromId, toId, 'manages');
+		// Return false — we manage edges ourselves via the store
+		return false;
 	}
 
 	function onNodeClick({ node }: { node: Node; event: MouseEvent | TouchEvent }) {
@@ -88,32 +110,10 @@
 		}
 	}
 
-	// Edge context menu
-	let contextMenu = $state<{ x: number; y: number; edgeId: string } | null>(null);
-
-	function onEdgeContextMenu({ edge, event }: { edge: Edge; event: MouseEvent }) {
-		event.preventDefault();
-		if (edge.id.startsWith('owner-')) return;
-		contextMenu = { x: event.clientX, y: event.clientY, edgeId: edge.id };
-	}
-
-	function onEdgeClick({ edge, event }: { edge: Edge; event: MouseEvent }) {
-		if (edge.id.startsWith('owner-')) return;
-		contextMenu = { x: event.clientX, y: event.clientY, edgeId: edge.id };
-	}
-
-	function deleteEdge() {
-		if (contextMenu) {
-			store.deleteRelationship(contextMenu.edgeId);
-			contextMenu = null;
-		}
-	}
-
 	function closePanel() { panelMode = 'none'; }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="relative h-full w-full" onclick={() => { contextMenu = null; }}>
+<div class="relative h-full w-full">
 	{#if !gatewayConnected}
 		<div class="absolute inset-0 z-20 flex items-center justify-center bg-paper/80 backdrop-blur-sm">
 			<div class="w-full max-w-md">
@@ -144,10 +144,9 @@
 				nodes={flowNodes}
 				edges={flowEdges}
 				{nodeTypes}
+				{edgeTypes}
 				onconnect={onConnect}
 				onnodeclick={onNodeClick}
-				onedgecontextmenu={onEdgeContextMenu}
-				onedgeclick={onEdgeClick}
 				fitView
 				connectionRadius={40}
 				defaultEdgeOptions={{ type: 'default', animated: false }}
@@ -155,21 +154,6 @@
 			>
 				<Background variant={BackgroundVariant.Dots} gap={24} size={1} />
 			</SvelteFlow>
-		</div>
-	{/if}
-
-	<!-- Edge context menu -->
-	{#if contextMenu}
-		<div
-			class="fixed z-50 rounded-lg border border-ink/8 bg-paper p-1 shadow-lg"
-			style="left: {contextMenu.x}px; top: {contextMenu.y}px"
-		>
-			<button
-				class="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-r-rose hover:bg-r-rose/10"
-				onclick={deleteEdge}
-			>
-				Remove relationship
-			</button>
 		</div>
 	{/if}
 

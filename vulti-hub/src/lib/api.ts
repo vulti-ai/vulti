@@ -213,6 +213,13 @@ export const api = {
 		});
 	},
 
+	createOwnerDm(agentId: string, agentName: string) {
+		return request<{ room_id: string }>('/matrix/owner-dm', {
+			method: 'POST',
+			body: JSON.stringify({ agent_id: agentId, agent_name: agentName })
+		});
+	},
+
 	onboardAgentToMatrix(agentId: string, agentName: string) {
 		return request<{ matrix_user_id: string | null; dm_room_id: string | null }>('/matrix/onboard-agent', {
 			method: 'POST',

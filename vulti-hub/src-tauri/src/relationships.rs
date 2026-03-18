@@ -26,11 +26,11 @@ pub fn create_relationship(
 ) -> Result<RelationshipResponse, String> {
     let mut reg = load_registry();
 
-    // Validate agents exist
-    if !reg.agents.contains_key(&from_id) {
+    // Validate agents exist ("owner" is always valid)
+    if from_id != "owner" && !reg.agents.contains_key(&from_id) {
         return Err(format!("Agent '{}' not found", from_id));
     }
-    if !reg.agents.contains_key(&to_id) {
+    if to_id != "owner" && !reg.agents.contains_key(&to_id) {
         return Err(format!("Agent '{}' not found", to_id));
     }
 

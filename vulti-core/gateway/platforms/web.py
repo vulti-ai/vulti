@@ -582,6 +582,34 @@ class WebAdapter(BasePlatformAdapter):
 
             return result
 
+        @app.post("/api/matrix/owner-dm")
+        async def matrix_owner_dm(req: Request, authorization: str = Header("")):
+            """Create a DM between the owner and an agent. Agent sends a greeting."""
+            await get_current_user(authorization)
+            data = await req.json()
+            agent_id = data.get("agent_id", "").strip()
+            agent_name = data.get("agent_name", "").strip()
+
+            if not agent_id or not agent_name:
+                raise HTTPException(status_code=400, detail="agent_id and agent_name are required")
+
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            homeserver_url = f"http://127.0.0.1:{port}"
+            server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+
+            from gateway.matrix_agents import create_owner_relationship
+            dm_room_id = await create_owner_relationship(
+                homeserver_url=homeserver_url,
+                server_name=server_name,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            )
+
+            if not dm_room_id:
+                raise HTTPException(status_code=500, detail="Failed to create owner DM")
+
+            return {"room_id": dm_room_id}
+
         @app.post("/api/matrix/squad-room")
         async def matrix_squad_room(req: Request, authorization: str = Header("")):
             """Create a group room for a squad of agents."""

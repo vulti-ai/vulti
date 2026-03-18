@@ -432,45 +432,56 @@ export const store = {
 	},
 
 	async createRelationship(fromId: string, toId: string, relType: 'manages' | 'collaborates') {
+		const isOwnerFrom = fromId === 'owner';
+		const isOwnerTo = toId === 'owner';
+
 		const rel = await api.createRelationship(fromId, toId, relType);
 		relationships = [...relationships, rel];
-		// Fire-and-forget: create "{Name} & {Name} Channel" for the pair
-		const fromName = agents.find(a => a.id === fromId)?.name || fromId;
-		const toName = agents.find(a => a.id === toId)?.name || toId;
-		api.createRelationshipRoom(fromId, toId, relType, fromName, toName).then(({ room_id }) => {
-			if (room_id) {
-				api.updateRelationship(rel.id, { matrixRoomId: room_id } as Partial<AgentRelationship>).catch(() => {});
-				relationships = relationships.map(r =>
-					r.id === rel.id ? { ...r, matrixRoomId: room_id } : r
-				);
-			}
-		}).catch(() => {});
 
-		// Fire-and-forget: create/update squad room for all connected agents
-		const connectedIds = this._getConnectedAgentIds(fromId);
-		if (connectedIds.length >= 2) {
-			const names = connectedIds
-				.map(id => agents.find(a => a.id === id)?.name || id)
-				.join(', ');
-			api.createSquadRoom(connectedIds, `Squad: ${names}`).catch(() => {});
+		if (isOwnerFrom || isOwnerTo) {
+			// Owner-agent relationship: create DM, agent greets owner
+			const agentId = isOwnerFrom ? toId : fromId;
+			const agentName = agents.find(a => a.id === agentId)?.name || agentId;
+			api.createOwnerDm(agentId, agentName).then(({ room_id }) => {
+				if (room_id) {
+					api.updateRelationship(rel.id, { matrixRoomId: room_id } as Partial<AgentRelationship>).catch(() => {});
+					relationships = relationships.map(r =>
+						r.id === rel.id ? { ...r, matrixRoomId: room_id } : r
+					);
+				}
+			}).catch(() => {});
+		} else if (relType === 'collaborates') {
+			// Peer-peer: create "{Name} & {Name} Channel"
+			const fromName = agents.find(a => a.id === fromId)?.name || fromId;
+			const toName = agents.find(a => a.id === toId)?.name || toId;
+			api.createRelationshipRoom(fromId, toId, relType, fromName, toName).then(({ room_id }) => {
+				if (room_id) {
+					api.updateRelationship(rel.id, { matrixRoomId: room_id } as Partial<AgentRelationship>).catch(() => {});
+					relationships = relationships.map(r =>
+						r.id === rel.id ? { ...r, matrixRoomId: room_id } : r
+					);
+				}
+			}).catch(() => {});
+		} else if (relType === 'manages') {
+			// Hierarchical: managed agent joins the manager's team room
+			// fromId = manager, toId = managed agent
+			const managerId = fromId;
+			const teamMembers = this._getTeamMembers(managerId);
+			const managerName = agents.find(a => a.id === managerId)?.name || managerId;
+			api.createSquadRoom(teamMembers, `${managerName}'s Team`).catch(() => {});
 		}
 		return rel;
 	},
 
-	/** Get all agent IDs transitively connected to the given agent via relationships. */
-	_getConnectedAgentIds(agentId: string): string[] {
-		const visited = new Set<string>();
-		const queue = [agentId];
-		while (queue.length > 0) {
-			const current = queue.pop()!;
-			if (visited.has(current)) continue;
-			visited.add(current);
-			for (const r of relationships) {
-				if (r.fromAgentId === current && !visited.has(r.toAgentId)) queue.push(r.toAgentId);
-				if (r.toAgentId === current && !visited.has(r.fromAgentId)) queue.push(r.fromAgentId);
+	/** Get all agent IDs in a manager's team (manager + all agents they manage). */
+	_getTeamMembers(managerId: string): string[] {
+		const members = [managerId];
+		for (const r of relationships) {
+			if (r.fromAgentId === managerId && r.type === 'manages' && !members.includes(r.toAgentId)) {
+				members.push(r.toAgentId);
 			}
 		}
-		return Array.from(visited);
+		return members;
 	},
 
 	async deleteRelationship(id: string) {
