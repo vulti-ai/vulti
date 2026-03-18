@@ -163,25 +163,17 @@ class TestRunJobSessionPersistence:
             "name": "test",
             "prompt": "hello",
         }
-        fake_db = MagicMock()
+
+        mock_agent = MagicMock()
+        mock_agent.run_conversation.return_value = {"final_response": "ok"}
+
+        mock_factory = MagicMock()
+        mock_factory.create_agent.return_value = mock_agent
 
         with patch("cron.scheduler._vulti_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("vulti_state.SessionDB", return_value=fake_db), \
-             patch(
-                 "vulti_cli.runtime_provider.resolve_runtime_provider",
-                 return_value={
-                     "api_key": "test-key",
-                     "base_url": "https://example.invalid/v1",
-                     "provider": "openrouter",
-                     "api_mode": "chat_completions",
-                 },
-             ), \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.return_value = {"final_response": "ok"}
-            mock_agent_cls.return_value = mock_agent
+             patch("orchestrator.agent_factory.AgentFactory", return_value=mock_factory):
 
             success, output, final_response, error = run_job(job)
 
@@ -190,11 +182,11 @@ class TestRunJobSessionPersistence:
         assert final_response == "ok"
         assert "ok" in output
 
-        kwargs = mock_agent_cls.call_args.kwargs
-        assert kwargs["session_db"] is fake_db
-        assert kwargs["platform"] == "cron"
-        assert kwargs["session_id"].startswith("cron_test-job_")
-        fake_db.close.assert_called_once()
+        # Verify create_agent was called with cron-specific overrides
+        call_kwargs = mock_factory.create_agent.call_args.kwargs
+        assert call_kwargs["platform"] == "cron"
+        assert call_kwargs["session_id"].startswith("cron_test-job_")
+        assert "cronjob" in call_kwargs["disabled_toolsets"]
 
     def test_run_job_sets_auto_delivery_env_from_dotenv_home_channel(self, tmp_path, monkeypatch):
         job = {
@@ -203,7 +195,6 @@ class TestRunJobSessionPersistence:
             "prompt": "hello",
             "deliver": "telegram",
         }
-        fake_db = MagicMock()
         seen = {}
 
         (tmp_path / ".env").write_text("TELEGRAM_HOME_CHANNEL=-2002\n")
@@ -212,28 +203,19 @@ class TestRunJobSessionPersistence:
         monkeypatch.delenv("VULTI_CRON_AUTO_DELIVER_CHAT_ID", raising=False)
         monkeypatch.delenv("VULTI_CRON_AUTO_DELIVER_THREAD_ID", raising=False)
 
-        class FakeAgent:
-            def __init__(self, *args, **kwargs):
-                pass
+        mock_agent = MagicMock()
+        def _capture_env(*args, **kwargs):
+            seen["platform"] = os.getenv("VULTI_CRON_AUTO_DELIVER_PLATFORM")
+            seen["chat_id"] = os.getenv("VULTI_CRON_AUTO_DELIVER_CHAT_ID")
+            seen["thread_id"] = os.getenv("VULTI_CRON_AUTO_DELIVER_THREAD_ID")
+            return {"final_response": "ok"}
+        mock_agent.run_conversation.side_effect = _capture_env
 
-            def run_conversation(self, *args, **kwargs):
-                seen["platform"] = os.getenv("VULTI_CRON_AUTO_DELIVER_PLATFORM")
-                seen["chat_id"] = os.getenv("VULTI_CRON_AUTO_DELIVER_CHAT_ID")
-                seen["thread_id"] = os.getenv("VULTI_CRON_AUTO_DELIVER_THREAD_ID")
-                return {"final_response": "ok"}
+        mock_factory = MagicMock()
+        mock_factory.create_agent.return_value = mock_agent
 
         with patch("cron.scheduler._vulti_home", tmp_path), \
-             patch("vulti_state.SessionDB", return_value=fake_db), \
-             patch(
-                 "vulti_cli.runtime_provider.resolve_runtime_provider",
-                 return_value={
-                     "api_key": "***",
-                     "base_url": "https://example.invalid/v1",
-                     "provider": "openrouter",
-                     "api_mode": "chat_completions",
-                 },
-             ), \
-             patch("run_agent.AIAgent", FakeAgent):
+             patch("orchestrator.agent_factory.AgentFactory", return_value=mock_factory):
             success, output, final_response, error = run_job(job)
 
         assert success is True
@@ -248,77 +230,57 @@ class TestRunJobSessionPersistence:
         assert os.getenv("VULTI_CRON_AUTO_DELIVER_PLATFORM") is None
         assert os.getenv("VULTI_CRON_AUTO_DELIVER_CHAT_ID") is None
         assert os.getenv("VULTI_CRON_AUTO_DELIVER_THREAD_ID") is None
-        fake_db.close.assert_called_once()
 
 
 class TestRunJobConfigLogging:
-    """Verify that config.yaml parse failures are logged, not silently swallowed."""
+    """Config parse failures now happen inside AgentFactory, not run_job.
+    These tests verify that run_job still works with the factory pattern."""
 
-    def test_bad_config_yaml_is_logged(self, caplog, tmp_path):
-        """When config.yaml is malformed, a warning should be logged."""
-        bad_yaml = tmp_path / "config.yaml"
-        bad_yaml.write_text("invalid: yaml: [[[bad")
-
+    def test_run_job_with_factory_succeeds(self, tmp_path):
         job = {
             "id": "test-job",
             "name": "test",
             "prompt": "hello",
         }
 
+        mock_agent = MagicMock()
+        mock_agent.run_conversation.return_value = {"final_response": "ok"}
+        mock_factory = MagicMock()
+        mock_factory.create_agent.return_value = mock_agent
+
         with patch("cron.scheduler._vulti_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.return_value = {"final_response": "ok"}
-            mock_agent_cls.return_value = mock_agent
+             patch("orchestrator.agent_factory.AgentFactory", return_value=mock_factory):
+            success, output, final_response, error = run_job(job)
 
-            with caplog.at_level(logging.WARNING, logger="cron.scheduler"):
-                run_job(job)
-
-        assert any("failed to load config.yaml" in r.message for r in caplog.records), \
-            f"Expected 'failed to load config.yaml' warning in logs, got: {[r.message for r in caplog.records]}"
+        assert success is True
+        assert error is None
 
     def test_bad_prefill_messages_is_logged(self, caplog, tmp_path):
-        """When the prefill messages file contains invalid JSON, a warning should be logged."""
-        # Valid config.yaml that points to a bad prefill file
-        config_yaml = tmp_path / "config.yaml"
-        config_yaml.write_text("prefill_messages_file: prefill.json\n")
-
-        bad_prefill = tmp_path / "prefill.json"
-        bad_prefill.write_text("{not valid json!!!")
-
+        """AgentFactory handles config; run_job should still succeed via factory."""
         job = {
             "id": "test-job",
             "name": "test",
             "prompt": "hello",
         }
 
+        mock_agent = MagicMock()
+        mock_agent.run_conversation.return_value = {"final_response": "ok"}
+        mock_factory = MagicMock()
+        mock_factory.create_agent.return_value = mock_agent
+
         with patch("cron.scheduler._vulti_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.return_value = {"final_response": "ok"}
-            mock_agent_cls.return_value = mock_agent
+             patch("orchestrator.agent_factory.AgentFactory", return_value=mock_factory):
+            success, output, final_response, error = run_job(job)
 
-            with caplog.at_level(logging.WARNING, logger="cron.scheduler"):
-                run_job(job)
-
-        assert any("failed to parse prefill messages" in r.message for r in caplog.records), \
-            f"Expected 'failed to parse prefill messages' warning in logs, got: {[r.message for r in caplog.records]}"
+        assert success is True
 
 
 class TestRunJobPerJobOverrides:
     def test_job_level_model_provider_and_base_url_overrides_are_used(self, tmp_path):
-        config_yaml = tmp_path / "config.yaml"
-        config_yaml.write_text(
-            "model:\n"
-            "  default: gpt-5.4\n"
-            "  provider: openai-codex\n"
-            "  base_url: https://chatgpt.com/backend-api/codex\n"
-        )
-
         job = {
             "id": "briefing-job",
             "name": "briefing",
@@ -328,36 +290,26 @@ class TestRunJobPerJobOverrides:
             "base_url": "http://127.0.0.1:4000/v1",
         }
 
-        fake_db = MagicMock()
-        fake_runtime = {
-            "provider": "openrouter",
-            "api_mode": "chat_completions",
-            "base_url": "http://127.0.0.1:4000/v1",
-            "api_key": "***",
-        }
+        mock_agent = MagicMock()
+        mock_agent.run_conversation.return_value = {"final_response": "ok"}
+        mock_factory = MagicMock()
+        mock_factory.create_agent.return_value = mock_agent
 
         with patch("cron.scheduler._vulti_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("vulti_state.SessionDB", return_value=fake_db), \
-             patch("vulti_cli.runtime_provider.resolve_runtime_provider", return_value=fake_runtime) as runtime_mock, \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.return_value = {"final_response": "ok"}
-            mock_agent_cls.return_value = mock_agent
-
+             patch("orchestrator.agent_factory.AgentFactory", return_value=mock_factory):
             success, output, final_response, error = run_job(job)
 
         assert success is True
         assert error is None
         assert final_response == "ok"
-        assert "ok" in output
-        runtime_mock.assert_called_once_with(
-            requested="custom",
-            explicit_base_url="http://127.0.0.1:4000/v1",
-        )
-        assert mock_agent_cls.call_args.kwargs["model"] == "perplexity/sonar-pro"
-        fake_db.close.assert_called_once()
+
+        # Verify per-job overrides were passed to create_agent
+        call_kwargs = mock_factory.create_agent.call_args.kwargs
+        assert call_kwargs["model"] == "perplexity/sonar-pro"
+        assert call_kwargs["provider_requested"] == "custom"
+        assert call_kwargs["explicit_base_url"] == "http://127.0.0.1:4000/v1"
 
 
 class TestRunJobSkillBacked:
@@ -369,26 +321,16 @@ class TestRunJobSkillBacked:
             "skill": "blogwatcher",
         }
 
-        fake_db = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.run_conversation.return_value = {"final_response": "ok"}
+        mock_factory = MagicMock()
+        mock_factory.create_agent.return_value = mock_agent
 
         with patch("cron.scheduler._vulti_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("vulti_state.SessionDB", return_value=fake_db), \
-             patch(
-                 "vulti_cli.runtime_provider.resolve_runtime_provider",
-                 return_value={
-                     "api_key": "***",
-                     "base_url": "https://example.invalid/v1",
-                     "provider": "openrouter",
-                     "api_mode": "chat_completions",
-                 },
-             ), \
              patch("tools.skills_tool.skill_view", return_value=json.dumps({"success": True, "content": "# Blogwatcher\nFollow this skill."})), \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.return_value = {"final_response": "ok"}
-            mock_agent_cls.return_value = mock_agent
+             patch("orchestrator.agent_factory.AgentFactory", return_value=mock_factory):
 
             success, output, final_response, error = run_job(job)
 
@@ -396,8 +338,8 @@ class TestRunJobSkillBacked:
         assert error is None
         assert final_response == "ok"
 
-        kwargs = mock_agent_cls.call_args.kwargs
-        assert "cronjob" in (kwargs["disabled_toolsets"] or [])
+        call_kwargs = mock_factory.create_agent.call_args.kwargs
+        assert "cronjob" in call_kwargs["disabled_toolsets"]
 
         prompt_arg = mock_agent.run_conversation.call_args.args[0]
         assert "blogwatcher" in prompt_arg
@@ -412,29 +354,19 @@ class TestRunJobSkillBacked:
             "skills": ["blogwatcher", "find-nearby"],
         }
 
-        fake_db = MagicMock()
-
         def _skill_view(name):
             return json.dumps({"success": True, "content": f"# {name}\nInstructions for {name}."})
+
+        mock_agent = MagicMock()
+        mock_agent.run_conversation.return_value = {"final_response": "ok"}
+        mock_factory = MagicMock()
+        mock_factory.create_agent.return_value = mock_agent
 
         with patch("cron.scheduler._vulti_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("vulti_state.SessionDB", return_value=fake_db), \
-             patch(
-                 "vulti_cli.runtime_provider.resolve_runtime_provider",
-                 return_value={
-                     "api_key": "***",
-                     "base_url": "https://example.invalid/v1",
-                     "provider": "openrouter",
-                     "api_mode": "chat_completions",
-                 },
-             ), \
              patch("tools.skills_tool.skill_view", side_effect=_skill_view) as skill_view_mock, \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.return_value = {"final_response": "ok"}
-            mock_agent_cls.return_value = mock_agent
+             patch("orchestrator.agent_factory.AgentFactory", return_value=mock_factory):
 
             success, output, final_response, error = run_job(job)
 

@@ -1,4 +1,4 @@
-import { api, setToken, getToken, type Session, type Message, type Agent, type AgentRole, type AgentService, type CronJob, type Rule, type InboxItem, type Contact, type Memories, type Secret, type OAuthToken, type SystemStatus, type ChannelDirectory, type Analytics, type Integration, type GlobalSettings, type Provider } from '$lib/api';
+import { api, setToken, getToken, type Session, type Message, type Agent, type AgentRole, type AgentService, type CronJob, type Rule, type InboxItem, type Contact, type Memories, type Secret, type OAuthToken, type SystemStatus, type ChannelDirectory, type Analytics, type Integration, type GlobalSettings, type Provider, type AgentRelationship, type OwnerProfile } from '$lib/api';
 import { createWsStore, type WsMessage } from '$lib/ws';
 import { marked } from 'marked';
 
@@ -78,8 +78,6 @@ let rules = $state<Rule[]>([]);
 let inbox = $state<InboxItem[]>([]);
 let contacts = $state<Contact[]>([]);
 let notifications = $state<WsMessage[]>([]);
-let sidebarOpen = $state(true);
-let currentView = $state<'profile' | 'actions' | 'analytics' | 'config'>('profile');
 let authenticated = $state(false);
 let memories = $state<Memories>({ memory: '', user: '' });
 let soul = $state<string>('');
@@ -90,6 +88,8 @@ let channels = $state<ChannelDirectory>({ platforms: {} });
 let analytics = $state<Analytics | null>(null);
 let integrations = $state<Integration[]>([]);
 let providers = $state<Provider[]>([]);
+let relationships = $state<AgentRelationship[]>([]);
+let owner = $state<OwnerProfile>({ name: 'Human' });
 
 const ws = createWsStore();
 
@@ -198,10 +198,6 @@ export const store = {
 	get inbox() { return inbox; },
 	get contacts() { return contacts; },
 	get notifications() { return notifications; },
-	get sidebarOpen() { return sidebarOpen; },
-	set sidebarOpen(v: boolean) { sidebarOpen = v; },
-	get currentView() { return currentView; },
-	set currentView(v: typeof currentView) { currentView = v; },
 	get authenticated() { return authenticated; },
 	set authenticated(v: boolean) { authenticated = v; },
 	get memories() { return memories; },
@@ -283,6 +279,8 @@ export const store = {
 		agents = [...agents, agent];
 		this.activeAgentId = agent.id;
 		await this.reloadAgentResources();
+		// Fire-and-forget Matrix onboarding (register, join global rooms, DM owner, send greeting)
+		api.onboardAgentToMatrix(agent.id, agent.name).catch(() => {});
 		return agent;
 	},
 
@@ -424,5 +422,68 @@ export const store = {
 
 	dismissNotification(index: number) {
 		notifications = notifications.filter((_, i) => i !== index);
+	},
+
+	// Relationships
+	get relationships() { return relationships; },
+
+	async loadRelationships() {
+		try { relationships = await api.listRelationships(); } catch { relationships = []; }
+	},
+
+	async createRelationship(fromId: string, toId: string, relType: 'manages' | 'collaborates') {
+		const rel = await api.createRelationship(fromId, toId, relType);
+		relationships = [...relationships, rel];
+		// Fire-and-forget: create private DM room for the pair
+		api.createRelationshipRoom(fromId, toId, relType).then(({ room_id }) => {
+			if (room_id) {
+				api.updateRelationship(rel.id, { matrixRoomId: room_id } as Partial<AgentRelationship>).catch(() => {});
+				relationships = relationships.map(r =>
+					r.id === rel.id ? { ...r, matrixRoomId: room_id } : r
+				);
+			}
+		}).catch(() => {});
+
+		// Fire-and-forget: create/update squad room for all connected agents
+		const connectedIds = this._getConnectedAgentIds(fromId);
+		if (connectedIds.length >= 2) {
+			const names = connectedIds
+				.map(id => agents.find(a => a.id === id)?.name || id)
+				.join(', ');
+			api.createSquadRoom(connectedIds, `Squad: ${names}`).catch(() => {});
+		}
+		return rel;
+	},
+
+	/** Get all agent IDs transitively connected to the given agent via relationships. */
+	_getConnectedAgentIds(agentId: string): string[] {
+		const visited = new Set<string>();
+		const queue = [agentId];
+		while (queue.length > 0) {
+			const current = queue.pop()!;
+			if (visited.has(current)) continue;
+			visited.add(current);
+			for (const r of relationships) {
+				if (r.fromAgentId === current && !visited.has(r.toAgentId)) queue.push(r.toAgentId);
+				if (r.toAgentId === current && !visited.has(r.fromAgentId)) queue.push(r.fromAgentId);
+			}
+		}
+		return Array.from(visited);
+	},
+
+	async deleteRelationship(id: string) {
+		await api.deleteRelationship(id);
+		relationships = relationships.filter(r => r.id !== id);
+	},
+
+	// Owner
+	get owner() { return owner; },
+
+	async loadOwner() {
+		try { owner = await api.getOwner(); } catch { owner = { name: 'Human' }; }
+	},
+
+	async updateOwner(name: string, avatar?: string) {
+		owner = await api.updateOwner(name, avatar);
 	}
 };

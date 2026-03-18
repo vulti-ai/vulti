@@ -27,6 +27,18 @@ def _get_default_agent_id() -> str:
         return "default"
 
 
+def _current_agent_id() -> str:
+    """Return the active agent ID from AgentContext, env var, or registry default."""
+    try:
+        from orchestrator.agent_context import AgentContext
+        aid = AgentContext.current_agent_id()
+        if aid != "default":
+            return aid
+    except Exception:
+        pass
+    return os.getenv("VULTI_AGENT_ID") or _get_default_agent_id()
+
+
 from vulti_time import now as _vulti_now
 
 try:
@@ -379,7 +391,7 @@ def create_job(
         "deliver": deliver,
         "origin": origin,  # Tracks where job was created for "origin" delivery
         # Agent scope -- which agent owns this cron job
-        "agent": agent or os.getenv("VULTI_AGENT_ID") or _get_default_agent_id(),
+        "agent": agent or _current_agent_id(),
     }
 
     jobs = load_jobs()

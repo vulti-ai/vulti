@@ -517,6 +517,145 @@ class WebAdapter(BasePlatformAdapter):
 
             return {"user_id": result["user_id"], "username": username}
 
+        @app.post("/api/matrix/relationship-room")
+        async def create_relationship_room(req: Request, authorization: str = Header("")):
+            """Create a private Matrix room for two agents to communicate."""
+            await get_current_user(authorization)
+            data = await req.json()
+            from_agent_id = data.get("from_agent_id", "").strip()
+            to_agent_id = data.get("to_agent_id", "").strip()
+            rel_type = data.get("rel_type", "manages")
+
+            if not from_agent_id or not to_agent_id:
+                raise HTTPException(status_code=400, detail="from_agent_id and to_agent_id are required")
+
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            homeserver_url = f"http://127.0.0.1:{port}"
+            server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+
+            from gateway.matrix_agents import create_relationship_room as _create_room
+            room_id = await _create_room(
+                homeserver_url=homeserver_url,
+                server_name=server_name,
+                agent_a_id=from_agent_id,
+                agent_b_id=to_agent_id,
+                purpose=rel_type,
+            )
+
+            if not room_id:
+                raise HTTPException(status_code=500, detail="Failed to create Matrix room")
+
+            return {"room_id": room_id}
+
+        @app.post("/api/matrix/onboard-agent")
+        async def matrix_onboard_agent(req: Request, authorization: str = Header("")):
+            """Onboard an agent to Matrix: register, join global rooms, create owner DM, send greeting."""
+            await get_current_user(authorization)
+            data = await req.json()
+            agent_id = data.get("agent_id", "").strip()
+            agent_name = data.get("agent_name", "").strip()
+
+            if not agent_id or not agent_name:
+                raise HTTPException(status_code=400, detail="agent_id and agent_name are required")
+
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            homeserver_url = f"http://127.0.0.1:{port}"
+            server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+
+            from gateway.continuwuity import _continuwuity_dir
+            reg_token_path = _continuwuity_dir() / "registration_token"
+            registration_token = reg_token_path.read_text().strip() if reg_token_path.exists() else ""
+
+            from gateway.matrix_agents import onboard_agent_to_matrix
+            result = await onboard_agent_to_matrix(
+                homeserver_url=homeserver_url,
+                server_name=server_name,
+                registration_token=registration_token,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            )
+
+            return result
+
+        @app.post("/api/matrix/squad-room")
+        async def matrix_squad_room(req: Request, authorization: str = Header("")):
+            """Create a group room for a squad of agents."""
+            await get_current_user(authorization)
+            data = await req.json()
+            agent_ids = data.get("agent_ids", [])
+            squad_name = data.get("squad_name", "").strip()
+            topic = data.get("topic", "")
+
+            if not agent_ids or len(agent_ids) < 2:
+                raise HTTPException(status_code=400, detail="At least 2 agent_ids are required")
+            if not squad_name:
+                raise HTTPException(status_code=400, detail="squad_name is required")
+
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            homeserver_url = f"http://127.0.0.1:{port}"
+            server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+
+            from gateway.matrix_agents import create_squad_room
+            room_id = await create_squad_room(
+                homeserver_url=homeserver_url,
+                server_name=server_name,
+                agent_ids=agent_ids,
+                squad_name=squad_name,
+                topic=topic,
+            )
+
+            if not room_id:
+                raise HTTPException(status_code=500, detail="Failed to create squad room")
+
+            return {"room_id": room_id}
+
+        @app.post("/api/matrix/rooms/{room_id}/members")
+        async def matrix_add_member(room_id: str, req: Request, authorization: str = Header("")):
+            """Add an agent to a Matrix room."""
+            await get_current_user(authorization)
+            data = await req.json()
+            agent_id = data.get("agent_id", "").strip()
+            inviter_agent_id = data.get("inviter_agent_id", "").strip() or None
+
+            if not agent_id:
+                raise HTTPException(status_code=400, detail="agent_id is required")
+
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            homeserver_url = f"http://127.0.0.1:{port}"
+
+            from gateway.matrix_agents import add_agent_to_room
+            ok = await add_agent_to_room(
+                homeserver_url=homeserver_url,
+                agent_id=agent_id,
+                room_id=room_id,
+                inviter_agent_id=inviter_agent_id,
+            )
+
+            if not ok:
+                raise HTTPException(status_code=500, detail="Failed to add agent to room")
+
+            return {"ok": True}
+
+        @app.delete("/api/matrix/rooms/{room_id}/members/{agent_id}")
+        async def matrix_remove_member(room_id: str, agent_id: str, authorization: str = Header("")):
+            """Remove an agent from a Matrix room."""
+            await get_current_user(authorization)
+
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            homeserver_url = f"http://127.0.0.1:{port}"
+
+            from gateway.matrix_agents import remove_agent_from_room
+            ok = await remove_agent_from_room(
+                homeserver_url=homeserver_url,
+                agent_id=agent_id,
+                room_id=room_id,
+            )
+
+            if not ok:
+                raise HTTPException(status_code=500, detail="Failed to remove agent from room")
+
+            return {"ok": True}
+
         # --- System Status ---
 
         @app.get("/api/status")

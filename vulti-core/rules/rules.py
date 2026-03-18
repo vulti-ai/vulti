@@ -26,6 +26,18 @@ def _get_default_agent_id() -> str:
         return "default"
 
 
+def _current_agent_id() -> str:
+    """Return the active agent ID from AgentContext, env var, or registry default."""
+    try:
+        from orchestrator.agent_context import AgentContext
+        aid = AgentContext.current_agent_id()
+        if aid != "default":
+            return aid
+    except Exception:
+        pass
+    return os.getenv("VULTI_AGENT_ID") or _get_default_agent_id()
+
+
 from vulti_time import now as _vulti_now
 
 # =============================================================================
@@ -139,7 +151,7 @@ def create_rule(
         "max_triggers": max_triggers,
         "cooldown_minutes": cooldown_minutes,
         "tags": tags or [],
-        "agent": agent or os.getenv("VULTI_AGENT_ID") or _get_default_agent_id(),
+        "agent": agent or _current_agent_id(),
     }
 
     rules = load_rules()
@@ -234,7 +246,7 @@ def get_active_rules(agent_id: Optional[str] = None) -> List[Dict[str, Any]]:
     Returns rules sorted by priority (lowest first).
     """
     now = _vulti_now()
-    effective_agent = agent_id or os.getenv("VULTI_AGENT_ID") or _get_default_agent_id()
+    effective_agent = agent_id or _current_agent_id()
     rules = load_rules()
     active = []
 

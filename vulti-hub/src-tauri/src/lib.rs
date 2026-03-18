@@ -11,6 +11,7 @@ mod rules;
 mod cron;
 mod secrets;
 mod sessions;
+mod relationships;
 mod status;
 
 // Hold the gateway child process so we can kill it on exit
@@ -279,6 +280,10 @@ pub fn run() {
             // Sessions
             sessions::list_sessions, sessions::create_session, sessions::delete_session,
             sessions::get_history,
+            // Relationships & Owner
+            relationships::list_relationships, relationships::create_relationship,
+            relationships::delete_relationship, relationships::update_relationship,
+            relationships::get_owner, relationships::update_owner,
             // Status
             status::get_system_status, status::get_channel_directory, status::get_integrations,
         ])

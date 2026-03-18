@@ -28,12 +28,12 @@ class AgentContext:
     @classmethod
     def current_agent_id(cls) -> str:
         """Return the active agent ID, defaulting to 'default'."""
-        return getattr(cls._local, "agent_id", "default")
+        return getattr(cls._local, "agent_id", None) or "default"
 
     @classmethod
     def current_hop_count(cls) -> int:
         """Return the current inter-agent hop count."""
-        return getattr(cls._local, "hop_count", 0)
+        return getattr(cls._local, "hop_count", None) or 0
 
     @classmethod
     @contextmanager

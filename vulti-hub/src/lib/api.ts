@@ -183,6 +183,63 @@ export const api = {
 		return invoke<Integration[]>('get_integrations');
 	},
 
+	// Relationships
+	listRelationships() {
+		return invoke<AgentRelationship[]>('list_relationships');
+	},
+	createRelationship(fromId: string, toId: string, relType: string) {
+		return invoke<AgentRelationship>('create_relationship', { fromId, toId, relType });
+	},
+	deleteRelationship(relId: string) {
+		return invoke<{ ok: boolean }>('delete_relationship', { relId });
+	},
+	updateRelationship(relId: string, updates: Partial<AgentRelationship>) {
+		return invoke<AgentRelationship>('update_relationship', { relId, updates });
+	},
+
+	// Owner
+	getOwner() {
+		return invoke<OwnerProfile>('get_owner');
+	},
+	updateOwner(name: string, avatar?: string | null) {
+		return invoke<OwnerProfile>('update_owner', { name, avatar: avatar || null });
+	},
+
+	// Matrix operations (HTTP — needs running gateway)
+	createRelationshipRoom(fromAgentId: string, toAgentId: string, relType: string) {
+		return request<{ room_id: string }>('/matrix/relationship-room', {
+			method: 'POST',
+			body: JSON.stringify({ from_agent_id: fromAgentId, to_agent_id: toAgentId, rel_type: relType })
+		});
+	},
+
+	onboardAgentToMatrix(agentId: string, agentName: string) {
+		return request<{ matrix_user_id: string | null; dm_room_id: string | null }>('/matrix/onboard-agent', {
+			method: 'POST',
+			body: JSON.stringify({ agent_id: agentId, agent_name: agentName })
+		});
+	},
+
+	createSquadRoom(agentIds: string[], squadName: string, topic?: string) {
+		return request<{ room_id: string }>('/matrix/squad-room', {
+			method: 'POST',
+			body: JSON.stringify({ agent_ids: agentIds, squad_name: squadName, topic: topic || '' })
+		});
+	},
+
+	addAgentToRoom(roomId: string, agentId: string, inviterAgentId?: string) {
+		return request<{ ok: boolean }>(`/matrix/rooms/${encodeURIComponent(roomId)}/members`, {
+			method: 'POST',
+			body: JSON.stringify({ agent_id: agentId, inviter_agent_id: inviterAgentId || '' })
+		});
+	},
+
+	removeAgentFromRoom(roomId: string, agentId: string) {
+		return request<{ ok: boolean }>(`/matrix/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(agentId)}`, {
+			method: 'DELETE'
+		});
+	},
+
 	// === HTTP calls (still need running gateway) ===
 
 	// Auth (remote access only)
@@ -364,6 +421,20 @@ export interface AgentService {
 
 // Keep GatewayAgent as alias for backward compat
 export type GatewayAgent = Agent;
+
+export interface AgentRelationship {
+	id: string;
+	fromAgentId: string;
+	toAgentId: string;
+	type: 'manages' | 'collaborates';
+	matrixRoomId?: string;
+	createdAt: string;
+}
+
+export interface OwnerProfile {
+	name: string;
+	avatar?: string;
+}
 
 export interface GlobalSettings {
 	gateway: { connected: boolean };

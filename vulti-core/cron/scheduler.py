@@ -339,11 +339,6 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             "VULTI_CRON_AUTO_DELIVER_THREAD_ID",
         ):
             os.environ.pop(key, None)
-        if _session_db:
-            try:
-                _session_db.close()
-            except Exception as e:
-                logger.debug("Job '%s': failed to close SQLite session store: %s", job_id, e)
 
 
 def tick(verbose: bool = True) -> int:

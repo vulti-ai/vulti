@@ -265,6 +265,86 @@ async def sync_agents_to_matrix(
     return registered
 
 
+async def create_relationship_room(
+    homeserver_url: str,
+    server_name: str,
+    agent_a_id: str,
+    agent_b_id: str,
+    purpose: str = "manages",
+) -> Optional[str]:
+    """Create a private Matrix room for two agents to communicate.
+
+    The room is created using agent A's credentials, then agent B is
+    invited and auto-joined.
+
+    Returns the room_id on success, None on failure.
+    """
+    import httpx
+
+    creds_a = get_agent_matrix_credentials(agent_a_id)
+    creds_b = get_agent_matrix_credentials(agent_b_id)
+
+    if not creds_a or not creds_b:
+        logger.warning(
+            "Matrix: cannot create relationship room — missing credentials for %s or %s",
+            agent_a_id, agent_b_id,
+        )
+        return None
+
+    headers_a = {"Authorization": f"Bearer {creds_a['access_token']}"}
+    headers_b = {"Authorization": f"Bearer {creds_b['access_token']}"}
+
+    room_name = f"{agent_a_id} ↔ {agent_b_id}"
+    topic = f"Relationship: {purpose}"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Create the room as agent A
+            resp = await client.post(
+                f"{homeserver_url}/_matrix/client/v3/createRoom",
+                headers=headers_a,
+                json={
+                    "name": room_name,
+                    "topic": topic,
+                    "visibility": "private",
+                    "preset": "private_chat",
+                    "invite": [creds_b["user_id"]],
+                    "initial_state": [
+                        {
+                            "type": "m.room.history_visibility",
+                            "content": {"history_visibility": "shared"},
+                        }
+                    ],
+                },
+            )
+
+            if resp.status_code != 200:
+                logger.warning(
+                    "Matrix: failed to create relationship room: %s",
+                    resp.text[:200],
+                )
+                return None
+
+            room_id = resp.json()["room_id"]
+
+            # Agent B joins the room
+            await client.post(
+                f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                headers=headers_b,
+                json={},
+            )
+
+            logger.info(
+                "Matrix: created relationship room %s for %s ↔ %s (%s)",
+                room_id, agent_a_id, agent_b_id, purpose,
+            )
+            return room_id
+
+    except Exception as e:
+        logger.error("Matrix: error creating relationship room: %s", e)
+        return None
+
+
 async def ensure_room_topology(
     homeserver_url: str,
     access_token: str,
@@ -364,3 +444,413 @@ async def ensure_room_topology(
                     pass
 
     return rooms_created
+
+
+def _get_owner_matrix_credentials() -> Optional[Dict[str, Any]]:
+    """Read stored Matrix credentials for the owner."""
+    from gateway.continuwuity import _continuwuity_dir
+    owner_creds_path = _continuwuity_dir() / "owner_credentials.json"
+    if owner_creds_path.exists():
+        try:
+            return json.loads(owner_creds_path.read_text())
+        except Exception as e:
+            logger.warning("Failed to read owner Matrix credentials: %s", e)
+    return None
+
+
+async def create_owner_dm_room(
+    homeserver_url: str,
+    server_name: str,
+    agent_id: str,
+) -> Optional[str]:
+    """Create a DM room between an agent and the owner.
+
+    Returns the room_id on success, None on failure.
+    """
+    import httpx
+
+    agent_creds = get_agent_matrix_credentials(agent_id)
+    owner_creds = _get_owner_matrix_credentials()
+
+    if not agent_creds:
+        logger.warning("Matrix: cannot create owner DM — missing agent credentials for %s", agent_id)
+        return None
+
+    if not owner_creds:
+        logger.warning("Matrix: cannot create owner DM — owner not registered on Matrix")
+        return None
+
+    agent_headers = {"Authorization": f"Bearer {agent_creds['access_token']}"}
+    owner_headers = {"Authorization": f"Bearer {owner_creds['access_token']}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{homeserver_url}/_matrix/client/v3/createRoom",
+                headers=agent_headers,
+                json={
+                    "is_direct": True,
+                    "visibility": "private",
+                    "preset": "trusted_private_chat",
+                    "invite": [owner_creds["user_id"]],
+                    "initial_state": [
+                        {
+                            "type": "m.room.history_visibility",
+                            "content": {"history_visibility": "shared"},
+                        }
+                    ],
+                },
+            )
+
+            if resp.status_code != 200:
+                logger.warning("Matrix: failed to create owner DM for %s: %s", agent_id, resp.text[:200])
+                return None
+
+            room_id = resp.json()["room_id"]
+
+            # Owner auto-joins the DM
+            await client.post(
+                f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                headers=owner_headers,
+                json={},
+            )
+
+            logger.info("Matrix: created owner DM %s for agent %s", room_id, agent_id)
+            return room_id
+
+    except Exception as e:
+        logger.error("Matrix: error creating owner DM for %s: %s", agent_id, e)
+        return None
+
+
+async def send_room_message(
+    homeserver_url: str,
+    agent_id: str,
+    room_id: str,
+    body: str,
+) -> bool:
+    """Send a text message to a Matrix room as the given agent.
+
+    Returns True on success.
+    """
+    import httpx
+    import uuid
+
+    creds = get_agent_matrix_credentials(agent_id)
+    if not creds:
+        return False
+
+    headers = {"Authorization": f"Bearer {creds['access_token']}"}
+    txn_id = str(uuid.uuid4())
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.put(
+                f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}",
+                headers=headers,
+                json={
+                    "msgtype": "m.text",
+                    "body": body,
+                },
+            )
+            return resp.status_code == 200
+    except Exception as e:
+        logger.warning("Matrix: failed to send message for %s in %s: %s", agent_id, room_id, e)
+        return False
+
+
+async def create_squad_room(
+    homeserver_url: str,
+    server_name: str,
+    agent_ids: List[str],
+    squad_name: str,
+    topic: str = "",
+) -> Optional[str]:
+    """Create a group room for a squad of agents.
+
+    The first agent creates the room and invites the others.
+    Returns the room_id on success, None on failure.
+    """
+    import httpx
+
+    if len(agent_ids) < 2:
+        logger.warning("Matrix: squad room needs at least 2 agents")
+        return None
+
+    all_creds = {}
+    for aid in agent_ids:
+        c = get_agent_matrix_credentials(aid)
+        if not c:
+            logger.warning("Matrix: missing credentials for %s, skipping squad room", aid)
+            return None
+        all_creds[aid] = c
+
+    creator_id = agent_ids[0]
+    creator_creds = all_creds[creator_id]
+    creator_headers = {"Authorization": f"Bearer {creator_creds['access_token']}"}
+
+    invite_ids = [all_creds[aid]["user_id"] for aid in agent_ids[1:]]
+
+    # Also invite owner if registered
+    owner_creds = _get_owner_matrix_credentials()
+    if owner_creds:
+        invite_ids.append(owner_creds["user_id"])
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{homeserver_url}/_matrix/client/v3/createRoom",
+                headers=creator_headers,
+                json={
+                    "name": squad_name,
+                    "topic": topic or f"Squad: {squad_name}",
+                    "visibility": "private",
+                    "preset": "private_chat",
+                    "invite": invite_ids,
+                    "initial_state": [
+                        {
+                            "type": "m.room.history_visibility",
+                            "content": {"history_visibility": "shared"},
+                        }
+                    ],
+                },
+            )
+
+            if resp.status_code != 200:
+                logger.warning("Matrix: failed to create squad room '%s': %s", squad_name, resp.text[:200])
+                return None
+
+            room_id = resp.json()["room_id"]
+
+            # All invited agents join immediately
+            for aid in agent_ids[1:]:
+                c = all_creds[aid]
+                await client.post(
+                    f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                    headers={"Authorization": f"Bearer {c['access_token']}"},
+                    json={},
+                )
+
+            # Owner joins if registered
+            if owner_creds:
+                await client.post(
+                    f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                    headers={"Authorization": f"Bearer {owner_creds['access_token']}"},
+                    json={},
+                )
+
+            logger.info("Matrix: created squad room '%s' (%s) with %d agents", squad_name, room_id, len(agent_ids))
+            return room_id
+
+    except Exception as e:
+        logger.error("Matrix: error creating squad room '%s': %s", squad_name, e)
+        return None
+
+
+async def add_agent_to_room(
+    homeserver_url: str,
+    agent_id: str,
+    room_id: str,
+    inviter_agent_id: Optional[str] = None,
+) -> bool:
+    """Add an agent to an existing Matrix room.
+
+    If inviter_agent_id is given, that agent sends the invite.
+    Otherwise the owner's credentials are used.
+    Returns True on success.
+    """
+    import httpx
+
+    agent_creds = get_agent_matrix_credentials(agent_id)
+    if not agent_creds:
+        logger.warning("Matrix: cannot add agent %s — no credentials", agent_id)
+        return False
+
+    # Determine who sends the invite
+    if inviter_agent_id:
+        inviter_creds = get_agent_matrix_credentials(inviter_agent_id)
+    else:
+        inviter_creds = _get_owner_matrix_credentials()
+
+    if not inviter_creds:
+        # Fall back: try any agent token from the tokens dir
+        for f in _tokens_dir().iterdir():
+            if f.suffix == ".json" and f.stem != agent_id:
+                try:
+                    inviter_creds = json.loads(f.read_text())
+                    break
+                except Exception:
+                    pass
+
+    if not inviter_creds:
+        logger.warning("Matrix: no inviter credentials available to add %s to room", agent_id)
+        return False
+
+    inviter_headers = {"Authorization": f"Bearer {inviter_creds['access_token']}"}
+    agent_headers = {"Authorization": f"Bearer {agent_creds['access_token']}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Invite
+            resp = await client.post(
+                f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/invite",
+                headers=inviter_headers,
+                json={"user_id": agent_creds["user_id"]},
+            )
+            if resp.status_code not in (200, 403):  # 403 = already in room
+                logger.warning("Matrix: invite failed for %s to %s: %s", agent_id, room_id, resp.status_code)
+                return False
+
+            # Join
+            resp = await client.post(
+                f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                headers=agent_headers,
+                json={},
+            )
+            ok = resp.status_code == 200
+            if ok:
+                logger.info("Matrix: agent %s joined room %s", agent_id, room_id)
+            return ok
+
+    except Exception as e:
+        logger.error("Matrix: error adding agent %s to room %s: %s", agent_id, room_id, e)
+        return False
+
+
+async def remove_agent_from_room(
+    homeserver_url: str,
+    agent_id: str,
+    room_id: str,
+) -> bool:
+    """Remove an agent from a Matrix room (leave + forget).
+
+    Returns True on success.
+    """
+    import httpx
+
+    creds = get_agent_matrix_credentials(agent_id)
+    if not creds:
+        logger.warning("Matrix: cannot remove agent %s — no credentials", agent_id)
+        return False
+
+    headers = {"Authorization": f"Bearer {creds['access_token']}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/leave",
+                headers=headers,
+                json={},
+            )
+            if resp.status_code not in (200, 403):
+                logger.warning("Matrix: leave failed for %s from %s: %s", agent_id, room_id, resp.status_code)
+                return False
+
+            # Forget the room so it doesn't show up in sync
+            await client.post(
+                f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/forget",
+                headers=headers,
+                json={},
+            )
+
+            logger.info("Matrix: agent %s left room %s", agent_id, room_id)
+            return True
+
+    except Exception as e:
+        logger.error("Matrix: error removing agent %s from room %s: %s", agent_id, room_id, e)
+        return False
+
+
+async def onboard_agent_to_matrix(
+    homeserver_url: str,
+    server_name: str,
+    registration_token: str,
+    agent_id: str,
+    agent_name: str,
+) -> Dict[str, Any]:
+    """Full Matrix onboarding for a newly created agent.
+
+    1. Register as Matrix user
+    2. Join the global #hub and #agents rooms
+    3. Create a DM with the owner
+    4. Send a greeting in the DM
+
+    Returns dict with matrix_user_id, dm_room_id (both optional).
+    """
+    result: Dict[str, Any] = {"matrix_user_id": None, "dm_room_id": None}
+
+    # Step 1: Register
+    matrix_user_id = await ensure_agent_matrix_user(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        homeserver_url=homeserver_url,
+        server_name=server_name,
+        registration_token=registration_token,
+    )
+    if not matrix_user_id:
+        return result
+    result["matrix_user_id"] = matrix_user_id
+
+    import httpx
+
+    # Step 2: Join global rooms (#hub, #agents)
+    creds = get_agent_matrix_credentials(agent_id)
+    if creds:
+        agent_headers = {"Authorization": f"Bearer {creds['access_token']}"}
+        # Need an existing member's token to invite
+        inviter_creds = _get_owner_matrix_credentials()
+        if not inviter_creds:
+            # Use any existing agent token
+            for f in _tokens_dir().iterdir():
+                if f.suffix == ".json" and f.stem != agent_id:
+                    try:
+                        inviter_creds = json.loads(f.read_text())
+                        break
+                    except Exception:
+                        pass
+
+        if inviter_creds:
+            inviter_headers = {"Authorization": f"Bearer {inviter_creds['access_token']}"}
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    for room_alias in ["hub", "agents"]:
+                        try:
+                            resp = await client.get(
+                                f"{homeserver_url}/_matrix/client/v3/directory/room/%23{room_alias}:{server_name}",
+                            )
+                            if resp.status_code == 200:
+                                room_id = resp.json().get("room_id")
+                                if room_id:
+                                    await client.post(
+                                        f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/invite",
+                                        headers=inviter_headers,
+                                        json={"user_id": matrix_user_id},
+                                    )
+                                    await client.post(
+                                        f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                                        headers=agent_headers,
+                                        json={},
+                                    )
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning("Matrix: error joining global rooms for %s: %s", agent_id, e)
+
+    # Step 3: Create DM with owner
+    dm_room_id = await create_owner_dm_room(
+        homeserver_url=homeserver_url,
+        server_name=server_name,
+        agent_id=agent_id,
+    )
+    result["dm_room_id"] = dm_room_id
+
+    # Step 4: Send greeting
+    if dm_room_id:
+        await send_room_message(
+            homeserver_url=homeserver_url,
+            agent_id=agent_id,
+            room_id=dm_room_id,
+            body=f"Hey! I'm {agent_name}, and I'm ready to go. What can I help you with?",
+        )
+
+    return result

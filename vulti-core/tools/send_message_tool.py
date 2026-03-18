@@ -65,8 +65,9 @@ def send_message_tool(args, **kw):
 
 def _handle_agent_send(target_agent_id: str, message: str) -> str:
     """Send a message to another agent via the inter-agent bus."""
-    hop_count = int(os.getenv("VULTI_AGENT_HOP_COUNT", "0"))
-    sender_agent_id = os.getenv("VULTI_AGENT_ID", "default")
+    from orchestrator.agent_context import AgentContext
+    hop_count = AgentContext.current_hop_count()
+    sender_agent_id = AgentContext.current_agent_id()
 
     if hop_count >= 3:
         return json.dumps({
@@ -648,7 +649,8 @@ async def _send_matrix(extra, chat_id, message):
 
         if not access_token or not user_id:
             # Try loading from agent credentials
-            agent_id = os.getenv("VULTI_AGENT_ID", "default")
+            from orchestrator.agent_context import AgentContext
+            agent_id = AgentContext.current_agent_id()
             try:
                 from gateway.matrix_agents import get_agent_matrix_credentials
                 creds = get_agent_matrix_credentials(agent_id)
