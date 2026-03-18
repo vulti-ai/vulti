@@ -99,6 +99,9 @@ def ensure_vulti_home():
     _secure_dir(home)
     for subdir in ("cron", "sessions", "logs", "memories"):
         d = home / subdir
+        # Skip if path is a symlink (e.g. legacy symlinks to agent dirs)
+        if d.is_symlink() or d.is_dir():
+            continue
         d.mkdir(parents=True, exist_ok=True)
         _secure_dir(d)
     _ensure_default_soul_md(home)

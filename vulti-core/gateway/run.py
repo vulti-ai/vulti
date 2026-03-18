@@ -317,9 +317,9 @@ class GatewayRunner:
         self.config = config or load_gateway_config()
         self.adapters: Dict[Platform, BasePlatformAdapter] = {}
 
-        # Multi-agent registry and routing
-        from vulti_cli.agent_registry import AgentRegistry
-        from gateway.config import load_agent_routing
+        # Multi-agent registry and routing (via orchestrator)
+        from orchestrator.agent_registry import AgentRegistry
+        from orchestrator.gateway.routing import load_agent_routing
         self.agent_registry = AgentRegistry()
         self.agent_registry.ensure_initialized()
         self._agent_routing_table = load_agent_routing()
@@ -345,6 +345,9 @@ class GatewayRunner:
         self._shutdown_event = asyncio.Event()
         self._exit_cleanly = False
         self._exit_reason: Optional[str] = None
+
+        # Continuwuity (Matrix homeserver) lifecycle manager
+        self._continuwuity = None
         
         # Track running agents per session for interrupt support
         # Key: session_key, Value: AIAgent instance
@@ -596,6 +599,8 @@ class GatewayRunner:
     def _resolve_agent_for_source(self, source: SessionSource, message_text: str = "") -> tuple[str, str]:
         """Resolve which agent should handle a message and extract clean message text.
 
+        Delegates to orchestrator.gateway.routing for the actual resolution logic.
+
         Returns (agent_id, cleaned_message_text).
 
         Resolution order:
@@ -603,20 +608,15 @@ class GatewayRunner:
           2. Routing table match from SessionSource
           3. Default agent
         """
-        import re
-        from gateway.config import resolve_agent_routing
+        from orchestrator.gateway.routing import resolve_agent_for_message
 
-        # Check for @agent_name mention
-        if message_text:
-            match = re.match(r"^@([a-z][a-z0-9\-]{0,31})\b\s*(.*)", message_text, re.DOTALL)
-            if match:
-                mentioned_id = match.group(1)
-                if self.agent_registry.get_agent(mentioned_id):
-                    return mentioned_id, match.group(2).strip() or message_text
-
-        # Fall back to routing table
-        agent_id = resolve_agent_routing(source, self._agent_routing_table)
-        return agent_id, message_text
+        return resolve_agent_for_message(
+            platform=source.platform.value if hasattr(source.platform, 'value') else str(source.platform),
+            chat_id=str(source.chat_id),
+            message_text=message_text,
+            registry=self.agent_registry,
+            routing_table=self._agent_routing_table,
+        )
 
     def _session_key_for_source(self, source: SessionSource, agent_id: str = "default") -> str:
         """Resolve the current session key for a source, honoring gateway config when available."""
@@ -908,11 +908,69 @@ class GatewayRunner:
         except Exception as e:
             logger.warning("Process checkpoint recovery: %s", e)
         
+        # Start Continuwuity (embedded Matrix homeserver) if Matrix is enabled
+        matrix_config = self.config.platforms.get(Platform.MATRIX)
+        if matrix_config and matrix_config.enabled:
+            try:
+                from gateway.continuwuity import ContinuwuityManager
+                server_name = matrix_config.extra.get("server_name", "localhost")
+                port = int(matrix_config.extra.get("continuwuity_port", 6167))
+                self._continuwuity = ContinuwuityManager(server_name=server_name, port=port)
+                if await self._continuwuity.start():
+                    logger.info("✓ Continuwuity homeserver started on port %d", port)
+                    # Register agents as Matrix users
+                    try:
+                        from gateway.matrix_agents import sync_agents_to_matrix, ensure_room_topology, get_agent_matrix_credentials
+                        agent_matrix_ids = await sync_agents_to_matrix(
+                            homeserver_url=self._continuwuity.homeserver_url,
+                            server_name=server_name,
+                            registration_token=self._continuwuity.registration_token,
+                        )
+                        # Inject primary agent credentials into Matrix platform config
+                        default_agent_id = self._agent_routing_table.get("*", "")
+                        if not default_agent_id or default_agent_id not in agent_matrix_ids:
+                            # Fall back to registry's default agent
+                            default_agent_id = self.agent_registry.default_agent_id or next(iter(agent_matrix_ids), "")
+                        creds = get_agent_matrix_credentials(default_agent_id)
+                        if creds:
+                            matrix_config.extra["user_id"] = creds["user_id"]
+                            matrix_config.extra["access_token"] = creds["access_token"]
+                            matrix_config.extra["homeserver_url"] = creds["homeserver_url"]
+                            # Set up room topology
+                            try:
+                                rooms = await ensure_room_topology(
+                                    homeserver_url=creds["homeserver_url"],
+                                    access_token=creds["access_token"],
+                                    server_name=server_name,
+                                    agent_matrix_ids=agent_matrix_ids,
+                                )
+                                # Set home channel if not configured
+                                hub_alias = f"#hub:{server_name}"
+                                if hub_alias in rooms and not matrix_config.home_channel:
+                                    from gateway.config import HomeChannel
+                                    matrix_config.home_channel = HomeChannel(
+                                        platform=Platform.MATRIX,
+                                        chat_id=rooms[hub_alias],
+                                        name="Hub",
+                                    )
+                            except Exception as e:
+                                logger.warning("Matrix room topology setup: %s", e)
+                        else:
+                            logger.warning("Matrix: no credentials for default agent, adapter may fail")
+                    except Exception as e:
+                        logger.warning("Matrix agent registration: %s", e)
+                else:
+                    logger.warning("✗ Continuwuity failed to start — Matrix will be disabled")
+                    matrix_config.enabled = False
+            except Exception as e:
+                logger.warning("Continuwuity startup error: %s — Matrix will be disabled", e)
+                matrix_config.enabled = False
+
         connected_count = 0
         enabled_platform_count = 0
         startup_nonretryable_errors: list[str] = []
         startup_retryable_errors: list[str] = []
-        
+
         # Initialize and connect each configured platform
         for platform, platform_config in self.config.platforms.items():
             if not platform_config.enabled:
@@ -1000,10 +1058,6 @@ class GatewayRunner:
         if connected_count > 0:
             logger.info("Gateway running with %s platform(s)", connected_count)
 
-        # Print web UI connection info
-        web_adapter = self.adapters.get(Platform.WEB)
-        if web_adapter:
-            self._print_web_connection_info(web_adapter)
 
         # Build initial channel directory for send_message name resolution
         try:
@@ -1099,6 +1153,16 @@ class GatewayRunner:
         self._pending_messages.clear()
         self._pending_approvals.clear()
         self._shutdown_all_gateway_honcho()
+
+        # Stop Continuwuity homeserver
+        if self._continuwuity:
+            try:
+                await self._continuwuity.stop()
+                logger.info("✓ Continuwuity stopped")
+            except Exception as e:
+                logger.warning("✗ Continuwuity stop error: %s", e)
+            self._continuwuity = None
+
         self._shutdown_event.set()
         
         from gateway.status import remove_pid_file, write_runtime_status
@@ -1114,62 +1178,6 @@ class GatewayRunner:
         """Wait for shutdown signal."""
         await self._shutdown_event.wait()
     
-    def _print_web_connection_info(self, web_adapter) -> None:
-        """Print the web UI connection URL and auth code to the terminal."""
-        host = web_adapter._host
-        port = web_adapter._port
-        token = web_adapter._auth_token
-
-        # Determine the best URL to display
-        if host == "0.0.0.0":
-            display_host = "localhost"
-        else:
-            display_host = host
-
-        url = f"http://{display_host}:{port}"
-        connect_url = f"{url}?token={token}" if token else url
-
-        # Try to generate a QR code
-        qr_text = ""
-        try:
-            import qrcode  # type: ignore
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=1,
-                border=1,
-            )
-            qr.add_data(connect_url)
-            qr.make(fit=True)
-
-            # Render as text
-            import io
-            buf = io.StringIO()
-            qr.print_ascii(out=buf, invert=True)
-            qr_text = buf.getvalue()
-        except ImportError:
-            pass
-
-        # Print connection info
-        print()
-        print("  ┌─────────────────────────────────────────────┐")
-        print("  │           Vulti Web UI Ready                │")
-        print("  ├─────────────────────────────────────────────┤")
-        print(f"  │  URL:   {url:<36s} │")
-        if token:
-            print(f"  │  Token: {token:<36s} │")
-        print("  ├─────────────────────────────────────────────┤")
-        print("  │  Open the URL in your browser and paste     │")
-        print("  │  the token to connect.                      │")
-        print("  └─────────────────────────────────────────────┘")
-
-        if qr_text:
-            print()
-            print("  Scan to connect:")
-            for line in qr_text.strip().split("\n"):
-                print(f"  {line}")
-
-        print()
 
     def _create_adapter(
         self,
@@ -1239,6 +1247,13 @@ class GatewayRunner:
                 return None
             return WebAdapter(config)
 
+        elif platform == Platform.MATRIX:
+            from gateway.platforms.matrix import MatrixAdapter, check_matrix_requirements
+            if not check_matrix_requirements():
+                logger.warning("Matrix: matrix-nio not installed. Run: pip install matrix-nio")
+                return None
+            return MatrixAdapter(config)
+
         return None
     
     def _is_user_authorized(self, source: SessionSource) -> bool:
@@ -1275,6 +1290,7 @@ class GatewayRunner:
             Platform.SIGNAL: "SIGNAL_ALLOWED_USERS",
             Platform.EMAIL: "EMAIL_ALLOWED_USERS",
             Platform.WEB: "WEB_ALLOWED_USERS",
+            Platform.MATRIX: "MATRIX_ALLOWED_USERS",
         }
         platform_allow_all_map = {
             Platform.TELEGRAM: "TELEGRAM_ALLOW_ALL_USERS",
@@ -1284,6 +1300,7 @@ class GatewayRunner:
             Platform.SIGNAL: "SIGNAL_ALLOW_ALL_USERS",
             Platform.EMAIL: "EMAIL_ALLOW_ALL_USERS",
             Platform.WEB: "WEB_ALLOW_ALL_USERS",
+            Platform.MATRIX: "MATRIX_ALLOW_ALL_USERS",
         }
 
         # Per-platform allow-all flag (e.g., DISCORD_ALLOW_ALL_USERS=true)
@@ -1369,7 +1386,10 @@ class GatewayRunner:
         # Store resolved agent_id on event so command handlers can access it
         event._agent_id = _resolved_agent_id
 
-        # Set VULTI_AGENT_ID so tools know which agent they serve
+        # Set agent context so tools know which agent they serve.
+        # AgentContext.scope() also sets VULTI_AGENT_ID env var for compat.
+        from orchestrator.agent_context import AgentContext
+        AgentContext._local.agent_id = _resolved_agent_id
         os.environ["VULTI_AGENT_ID"] = _resolved_agent_id
 
         # PRIORITY handling when an agent is already running for this session.
@@ -1628,8 +1648,9 @@ class GatewayRunner:
         # Build the context prompt to inject
         context_prompt = build_session_context_prompt(context, redact_pii=_redact_pii)
 
-        # Inject agent identity when running a non-default agent
-        if _resolved_agent_id != "default":
+        # Inject agent identity when running a non-primary agent
+        _primary_agent_id = self.agent_registry.default_agent_id if hasattr(self, 'agent_registry') and self.agent_registry else "default"
+        if _resolved_agent_id != _primary_agent_id:
             agent_meta = self.agent_registry.get_agent(_resolved_agent_id)
             if agent_meta:
                 other_agents = [
@@ -1905,9 +1926,78 @@ class GatewayRunner:
                 "Briefly introduce yourself and mention that /help shows available commands. "
                 "Keep the introduction concise -- one or two sentences max.]"
             )
-        
+
+        # Per-agent first-run onboarding: agent has no SOUL.md content yet
+        if not history and _resolved_agent_id:
+            try:
+                _onboard_soul = self.agent_registry.agent_soul_path(_resolved_agent_id)
+                _onboard_content = ""
+                if _onboard_soul.exists():
+                    _onboard_content = _onboard_soul.read_text(encoding="utf-8").strip()
+                if not _onboard_content:
+                    _agent_meta = self.agent_registry.get_agent(_resolved_agent_id)
+                    _agent_name = _agent_meta.name if _agent_meta else _resolved_agent_id
+                    context_prompt += (
+                        f"\n\n[System: You are a brand new agent named {_agent_name}. "
+                        "Your personality file (SOUL.md) is empty -- you have no identity yet. "
+                        "Run conversational onboarding:\n"
+                        "1. Introduce yourself and explain you're ready to be configured.\n"
+                        "2. Ask what role this agent should play and how the user wants you to communicate.\n"
+                        "3. Based on their answers, use write_file to create your SOUL.md at "
+                        f"{_onboard_soul} defining your personality, tone, and role.\n"
+                        "4. Ask if they want to connect any services or enable specific capabilities.\n"
+                        "5. Keep it conversational -- one or two questions at a time, not a wall of text.\n"
+                        "6. After writing SOUL.md, confirm setup is complete. "
+                        "They can always change it later by asking you or editing the Soul in their dashboard.]"
+                    )
+            except Exception as _onboard_err:
+                logger.debug("Agent onboarding check failed: %s", _onboard_err)
+
+        # Hub channel context: inject tab-specific instructions when message
+        # comes from the dashboard chat panel (profile/actions/analytics/config)
+        _hub_channel = getattr(event, '_hub_channel', "")
+        if _hub_channel and _resolved_agent_id:
+            _agent_meta = self.agent_registry.get_agent(_resolved_agent_id)
+            _aname = _agent_meta.name if _agent_meta else _resolved_agent_id
+            _soul_path = self.agent_registry.agent_soul_path(_resolved_agent_id)
+            _mem_dir = self.agent_registry.agent_memories_dir(_resolved_agent_id)
+
+            _HUB_CHANNEL_PROMPTS = {
+                "profile": (
+                    f"[System: The user is on the PROFILE tab in the Hub dashboard for agent '{_aname}'. "
+                    f"They want to edit this agent's identity. When they ask you to change personality, soul, "
+                    f"name, or communication style, USE the write_file tool to update SOUL.md at: {_soul_path}\n"
+                    f"For memory changes, use the memory tool to update entries in {_mem_dir}/MEMORY.md or {_mem_dir}/USER.md.\n"
+                    "ACT on their requests immediately — edit files, don't just describe what you would do.\n"
+                    "After making changes, briefly confirm what you changed.]"
+                ),
+                "actions": (
+                    f"[System: The user is on the ACTIONS tab (cron jobs and rules) for agent '{_aname}'. "
+                    "Help them create, edit, or debug scheduled tasks and conditional rules. "
+                    "Use the cronjob tool to create/list/modify cron jobs. "
+                    "Use the rule tool to create/list/modify rules. "
+                    "ACT on their requests — create the job or rule, don't just explain how.]"
+                ),
+                "analytics": (
+                    f"[System: The user is on the ANALYTICS tab for agent '{_aname}'. "
+                    "Help them understand usage patterns, token costs, session statistics, and model performance. "
+                    "Use session_search or available data to answer their questions about usage.]"
+                ),
+                "config": (
+                    f"[System: The user is on the CONFIG tab for agent '{_aname}'. "
+                    f"Help them connect services, manage integrations, change model settings, or troubleshoot. "
+                    f"Agent config is at: {self.agent_registry.agent_config_path(_resolved_agent_id)}\n"
+                    "Use write_file or terminal tools to edit configuration files when asked. "
+                    "ACT on their requests — make the changes, don't just describe them.]"
+                ),
+            }
+            _hub_prompt = _HUB_CHANNEL_PROMPTS.get(_hub_channel, "")
+            if _hub_prompt:
+                context_prompt += "\n\n" + _hub_prompt
+
         # One-time prompt if no home channel is set for this platform
-        if not history and source.platform and source.platform != Platform.LOCAL:
+        # Skip for web (hub chat handles its own context)
+        if not history and source.platform and source.platform not in (Platform.LOCAL, Platform.WEB):
             platform_name = source.platform.value
             env_key = f"{platform_name.upper()}_HOME_CHANNEL"
             if not os.getenv(env_key):

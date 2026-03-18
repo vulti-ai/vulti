@@ -59,6 +59,7 @@
 					onclick={() => { activeTab = 'memory'; editing = false; }}
 					class="flex-1 rounded-md px-4 py-2 text-sm transition-colors"
 					class:bg-primary={activeTab === 'memory'}
+					class:animate-rainbow={activeTab === 'memory'}
 					class:text-white={activeTab === 'memory'}
 					class:text-slate-400={activeTab !== 'memory'}
 				>
@@ -68,6 +69,7 @@
 					onclick={() => { activeTab = 'user'; editing = false; }}
 					class="flex-1 rounded-md px-4 py-2 text-sm transition-colors"
 					class:bg-primary={activeTab === 'user'}
+					class:animate-rainbow={activeTab === 'user'}
 					class:text-white={activeTab === 'user'}
 					class:text-slate-400={activeTab !== 'user'}
 				>

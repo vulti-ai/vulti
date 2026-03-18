@@ -1039,6 +1039,25 @@ _PLATFORMS = [
              "help": "Only emails from these addresses will be processed."},
         ],
     },
+    {
+        "key": "matrix",
+        "label": "Matrix",
+        "emoji": "🔗",
+        "token_var": "MATRIX_DISABLED",
+        "setup_instructions": [
+            "Matrix is enabled by default for agent-to-agent and agent-to-human communication.",
+            "Vulti embeds a Continuwuity homeserver that starts automatically.",
+            "",
+            "1. Matrix is already running — no setup needed for local use",
+            "2. Set a server name for federation (your Tailscale hostname or custom domain)",
+            "3. Install Element (https://element.io) on your phone for push notifications",
+            "4. Connect Element to your homeserver URL",
+        ],
+        "vars": [
+            {"name": "MATRIX_SERVER_NAME", "prompt": "Server name (e.g., mymachine.tailnet.ts.net, or 'localhost' for local only)", "password": False,
+             "help": "Your Matrix server identity. Use your Tailscale hostname for federation."},
+        ],
+    },
 ]
 
 
@@ -1073,6 +1092,11 @@ def _platform_status(platform: dict) -> str:
         if any([val, pwd, imap, smtp]):
             return "partially configured"
         return "not configured"
+    if platform.get("key") == "matrix":
+        # Matrix is enabled by default — only "not configured" if explicitly disabled
+        if val and val.lower() in ("true", "1", "yes"):
+            return "disabled"
+        return "configured"
     if val:
         return "configured"
     return "not configured"
@@ -1427,6 +1451,8 @@ def gateway_setup():
             _setup_whatsapp()
         elif platform["key"] == "signal":
             _setup_signal()
+        elif platform["key"] == "matrix":
+            _setup_standard_platform(platform)
         else:
             _setup_standard_platform(platform)
 
@@ -1434,8 +1460,9 @@ def gateway_setup():
     any_configured = any(
         bool(get_env_value(p["token_var"]))
         for p in _PLATFORMS
-        if p["key"] != "whatsapp"
-    ) or (get_env_value("WHATSAPP_ENABLED") or "").lower() == "true"
+        if p["key"] not in ("whatsapp", "matrix")
+    ) or (get_env_value("WHATSAPP_ENABLED") or "").lower() == "true" \
+      or True  # Matrix is always enabled by default
 
     if any_configured:
         print()

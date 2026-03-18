@@ -1,5 +1,30 @@
-import { api, setToken, getToken, type Session, type Message, type Agent, type AgentService, type CronJob, type Rule, type InboxItem, type Contact, type Memories, type Secret, type OAuthToken, type SystemStatus, type ChannelDirectory, type Analytics, type Integration, type GlobalSettings } from '$lib/api';
+import { api, setToken, getToken, type Session, type Message, type Agent, type AgentRole, type AgentService, type CronJob, type Rule, type InboxItem, type Contact, type Memories, type Secret, type OAuthToken, type SystemStatus, type ChannelDirectory, type Analytics, type Integration, type GlobalSettings, type Provider } from '$lib/api';
 import { createWsStore, type WsMessage } from '$lib/ws';
+import { marked } from 'marked';
+
+// Configure marked for safe HTML rendering
+marked.setOptions({ breaks: true, gfm: true });
+
+// Markdown render cache — avoids re-parsing on session switch
+const markdownCache = new Map<string, string>();
+
+function renderMarkdown(text: string): string {
+	if (!text) return '';
+	const cached = markdownCache.get(text);
+	if (cached) return cached;
+	try {
+		const html = marked.parse(text) as string;
+		markdownCache.set(text, html);
+		// Evict oldest entries when cache grows large
+		if (markdownCache.size > 500) {
+			const first = markdownCache.keys().next().value;
+			if (first !== undefined) markdownCache.delete(first);
+		}
+		return html;
+	} catch {
+		return text;
+	}
+}
 
 // Re-export types for components
 export type { GlobalSettings };
@@ -8,7 +33,6 @@ export type { Agent as GatewayAgent, ServiceCategory } from '$lib/api';
 
 // Settings persistence (only global settings, not agents)
 const DEFAULT_SETTINGS: GlobalSettings = {
-	tailscale: { ip: '', connected: false },
 	gateway: { connected: false }
 };
 
@@ -65,38 +89,74 @@ let systemStatus = $state<SystemStatus>({ gateway_state: 'unknown', platforms: {
 let channels = $state<ChannelDirectory>({ platforms: {} });
 let analytics = $state<Analytics | null>(null);
 let integrations = $state<Integration[]>([]);
+let providers = $state<Provider[]>([]);
 
 const ws = createWsStore();
+
+// RAF-batched streaming buffer — collapses multiple chunks per frame into one reactive update
+let streamBuffer = '';
+let streamRafId: number | null = null;
+
+function flushStreamBuffer() {
+	streamingContent += streamBuffer;
+	streamBuffer = '';
+	streamRafId = null;
+}
 
 // Subscribe to WebSocket messages
 ws.onMessage((msg: WsMessage) => {
 	switch (msg.type) {
 		case 'chunk':
-			streamingContent += msg.content ?? '';
+			streamBuffer += msg.content ?? '';
 			isStreaming = true;
+			if (!streamRafId) {
+				streamRafId = requestAnimationFrame(flushStreamBuffer);
+			}
 			break;
 		case 'message':
+			// Flush any remaining buffer before committing
+			if (streamRafId) {
+				cancelAnimationFrame(streamRafId);
+				flushStreamBuffer();
+			}
 			if (isStreaming) {
-				messages = [...messages, {
+				messages.push({
 					id: msg.id ?? crypto.randomUUID(),
 					role: 'assistant',
-					content: streamingContent || msg.content || '',
+					content: renderMarkdown(streamingContent || msg.content || ''),
 					timestamp: new Date().toISOString()
-				}];
+				});
 				streamingContent = '';
 				isStreaming = false;
 			} else {
-				messages = [...messages, {
+				messages.push({
 					id: msg.id ?? crypto.randomUUID(),
 					role: 'assistant',
-					content: msg.content || '',
+					content: renderMarkdown(msg.content || ''),
 					timestamp: new Date().toISOString()
-				}];
+				});
 			}
 			isTyping = false;
 			break;
 		case 'typing':
 			isTyping = msg.active ?? false;
+			break;
+		case 'error':
+			// Flush any remaining buffer
+			if (streamRafId) {
+				cancelAnimationFrame(streamRafId);
+				streamBuffer = '';
+				streamRafId = null;
+			}
+			messages.push({
+				id: msg.id ?? crypto.randomUUID(),
+				role: 'assistant',
+				content: renderMarkdown(msg.content || 'An error occurred.'),
+				timestamp: new Date().toISOString()
+			});
+			isTyping = false;
+			isStreaming = false;
+			streamingContent = '';
 			break;
 		case 'notification':
 			notifications = [msg, ...notifications].slice(0, 50);
@@ -170,8 +230,15 @@ export const store = {
 		activeSessionId = id;
 		streamingContent = '';
 		isStreaming = false;
+		isTyping = false;
+		if (!id) {
+			messages = [];
+			ws.disconnect();
+			return;
+		}
 		try {
-			messages = await api.getHistory(id);
+			const raw = await api.getHistory(id);
+			messages = raw.map(m => m.role === 'assistant' ? { ...m, content: renderMarkdown(m.content) } : m);
 		} catch { messages = []; }
 		ws.connect(id);
 	},
@@ -186,32 +253,19 @@ export const store = {
 		}
 	},
 
-	sendMessage(content: string) {
-		messages = [...messages, {
+	sendMessage(content: string, meta?: Record<string, string>) {
+		messages.push({
 			id: crypto.randomUUID(),
 			role: 'user',
 			content,
 			timestamp: new Date().toISOString()
-		}];
-		ws.send(content);
+		});
+		ws.send(content, meta);
 		isTyping = true;
-	},
-
-	async ensureToken() {
-		if (getToken()) return;
-		const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
-		if (isTauri) {
-			try {
-				const { invoke } = await import('@tauri-apps/api/core');
-				const token = await invoke<string>('get_gateway_token');
-				if (token) setToken(token);
-			} catch {}
-		}
 	},
 
 	async loadAgents() {
 		try {
-			await this.ensureToken();
 			agents = await api.listAgents();
 			if (!activeAgentId) {
 				const saved = localStorage.getItem('vulti_active_agent');
@@ -224,7 +278,7 @@ export const store = {
 		} catch { agents = []; }
 	},
 
-	async createAgent(data: { name: string; avatar?: string; personality?: string; description?: string; inherit_from?: string }) {
+	async createAgent(data: { name: string; role?: AgentRole; model?: string; avatar?: string; personality?: string; description?: string; inherit_from?: string }) {
 		const agent = await api.createAgent(data);
 		agents = [...agents, agent];
 		this.activeAgentId = agent.id;
@@ -245,6 +299,10 @@ export const store = {
 			this.activeAgentId = agents.length > 0 ? agents[0].id : null;
 			if (activeAgentId) await this.reloadAgentResources();
 		}
+	},
+
+	async markAgentReady(agentId: string) {
+		await this.updateAgent(agentId, { status: 'ready' });
 	},
 
 	async addServiceToAgent(agentId: string, service: Partial<AgentService>) {
@@ -269,6 +327,9 @@ export const store = {
 		rules = [];
 		analytics = null;
 		activeSessionId = null;
+		isTyping = false;
+		isStreaming = false;
+		streamingContent = '';
 		ws.disconnect();
 
 		if (!activeAgentId) return;
@@ -286,7 +347,7 @@ export const store = {
 	},
 
 	async loadRules() {
-		try { rules = await api.listRules(); } catch { rules = []; }
+		try { rules = await api.listRules(activeAgentId ?? undefined); } catch { rules = []; }
 	},
 
 	async loadInbox() {
@@ -336,11 +397,29 @@ export const store = {
 	},
 
 	async loadAnalytics(days: number = 30) {
-		try { analytics = await api.getAnalytics(days); } catch { analytics = null; }
+		const agentId = store.activeAgentId || undefined;
+		try { analytics = await api.getAnalytics(days, agentId); } catch { analytics = null; }
 	},
 
 	async loadIntegrations() {
 		try { integrations = await api.getIntegrations(); } catch { integrations = []; }
+	},
+
+	// Providers (global intelligence)
+	get providers() { return providers; },
+
+	async loadProviders() {
+		try { providers = await api.getProviders(); } catch { providers = []; }
+	},
+
+	async addSecret(key: string, value: string) {
+		await api.addSecret(key, value);
+		await Promise.all([this.loadProviders(), this.loadSecrets()]);
+	},
+
+	async deleteSecret(key: string) {
+		await api.deleteSecret(key);
+		await Promise.all([this.loadProviders(), this.loadSecrets()]);
 	},
 
 	dismissNotification(index: number) {

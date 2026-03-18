@@ -300,10 +300,16 @@ TOOLSETS = {
         "includes": []
     },
 
+    "vulti-matrix": {
+        "description": "Matrix bot toolset - federated messaging with agent-to-agent and agent-to-human communication",
+        "tools": _VULTI_CORE_TOOLS,
+        "includes": []
+    },
+
     "vulti-gateway": {
         "description": "Gateway toolset - union of all messaging platform tools",
         "tools": [],
-        "includes": ["vulti-telegram", "vulti-discord", "vulti-whatsapp", "vulti-slack", "vulti-signal", "vulti-homeassistant", "vulti-email"]
+        "includes": ["vulti-telegram", "vulti-discord", "vulti-whatsapp", "vulti-slack", "vulti-signal", "vulti-homeassistant", "vulti-email", "vulti-matrix"]
     }
 }
 

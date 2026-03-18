@@ -76,7 +76,7 @@ def _handle_agent_send(target_agent_id: str, message: str) -> str:
 
     try:
         import asyncio
-        from gateway.agent_bus import send_to_agent
+        from orchestrator.agent_bus import send_to_agent
 
         # Run the async agent bus call
         try:
@@ -121,9 +121,10 @@ def _handle_list():
 
     # Include available agents
     try:
-        from vulti_cli.agent_registry import AgentRegistry
+        from orchestrator.agent_registry import AgentRegistry
+        from orchestrator.agent_context import AgentContext
         registry = AgentRegistry()
-        current_agent = os.getenv("VULTI_AGENT_ID", "default")
+        current_agent = AgentContext.current_agent_id()
         agents = [
             f"agent:{a.id} — {a.name} ({a.description})"
             for a in registry.list_agents()
@@ -196,6 +197,7 @@ def _handle_send(args):
         "whatsapp": Platform.WHATSAPP,
         "signal": Platform.SIGNAL,
         "email": Platform.EMAIL,
+        "matrix": Platform.MATRIX,
     }
     platform = platform_map.get(platform_name)
     if not platform:
@@ -405,6 +407,8 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             result = await _send_signal(pconfig.extra, chat_id, chunk)
         elif platform == Platform.EMAIL:
             result = await _send_email(pconfig.extra, chat_id, chunk)
+        elif platform == Platform.MATRIX:
+            result = await _send_matrix(pconfig.extra, chat_id, chunk)
         else:
             result = {"error": f"Direct sending not yet implemented for {platform.value}"}
 
@@ -631,6 +635,53 @@ async def _send_email(extra, chat_id, message):
         return {"success": True, "platform": "email", "chat_id": chat_id}
     except Exception as e:
         return {"error": f"Email send failed: {e}"}
+
+
+async def _send_matrix(extra, chat_id, message):
+    """Send via Matrix (one-shot, using stored credentials)."""
+    try:
+        import nio
+
+        homeserver_url = extra.get("homeserver_url") or os.getenv("MATRIX_HOMESERVER_URL", "http://127.0.0.1:6167")
+        access_token = extra.get("access_token", "")
+        user_id = extra.get("user_id", "")
+
+        if not access_token or not user_id:
+            # Try loading from agent credentials
+            agent_id = os.getenv("VULTI_AGENT_ID", "default")
+            try:
+                from gateway.matrix_agents import get_agent_matrix_credentials
+                creds = get_agent_matrix_credentials(agent_id)
+                if creds:
+                    access_token = creds["access_token"]
+                    user_id = creds["user_id"]
+                    homeserver_url = creds["homeserver_url"]
+            except Exception:
+                pass
+
+        if not access_token:
+            return {"error": "Matrix not configured (no access_token)"}
+
+        client = nio.AsyncClient(homeserver_url, user_id)
+        client.access_token = access_token
+        client.user_id = user_id
+
+        try:
+            resp = await client.room_send(
+                room_id=chat_id,
+                message_type="m.room.message",
+                content={"msgtype": "m.text", "body": message},
+            )
+            if isinstance(resp, nio.RoomSendResponse):
+                return {"success": True, "platform": "matrix", "chat_id": chat_id}
+            return {"error": f"Matrix send failed: {resp}"}
+        finally:
+            await client.close()
+
+    except ImportError:
+        return {"error": "matrix-nio not installed. Run: pip install matrix-nio"}
+    except Exception as e:
+        return {"error": f"Matrix send failed: {e}"}
 
 
 def _check_send_message():

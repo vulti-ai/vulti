@@ -5,7 +5,7 @@
   "identifier": "com.vulti.gateway",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "bash scripts/build-continuwuity.sh && npm run build",
     "devUrl": "http://localhost:5173/setup",
     "frontendDist": "../build"
   },
@@ -30,6 +30,7 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "app"],
+    "externalBin": ["binaries/continuwuity"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

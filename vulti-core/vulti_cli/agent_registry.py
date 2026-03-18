@@ -41,12 +41,30 @@ _RESERVED_IDS = frozenset({"agent", "agents", "api", "ws", "system", "interagent
 DEFAULT_AGENT_ID = "default"
 
 
+def get_default_agent_id() -> str:
+    """Read the default agent ID from the registry, falling back to DEFAULT_AGENT_ID.
+
+    This is a lightweight standalone reader that doesn't require instantiating
+    the full AgentRegistry. Use it anywhere a fallback agent ID is needed
+    instead of hardcoding "default".
+    """
+    from vulti_cli.config import get_vulti_home
+    registry_path = get_vulti_home() / "agents" / "registry.json"
+    try:
+        with open(registry_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("default_agent", DEFAULT_AGENT_ID)
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_AGENT_ID
+
+
 @dataclass
 class AgentMeta:
     """Metadata for a registered agent."""
 
     id: str
     name: str
+    role: str = ""  # assistant | therapist | researcher | engineer | writer | analyst | coach | creative | ops
     status: str = "active"  # active | stopped | error
     created_at: str = ""
     created_from: Optional[str] = None
@@ -127,6 +145,7 @@ class AgentRegistry:
         clone_from: Optional[str] = None,
         avatar: Optional[str] = None,
         description: str = "",
+        role: str = "",
     ) -> AgentMeta:
         """Create a new agent. Optionally clone config/soul from an existing agent."""
         self._validate_agent_id(agent_id)
@@ -142,6 +161,7 @@ class AgentRegistry:
         meta = AgentMeta(
             id=agent_id,
             name=name,
+            role=role,
             status="active",
             created_at=now,
             created_from=clone_from,
@@ -196,7 +216,7 @@ class AgentRegistry:
         if agent_id not in data.get("agents", {}):
             raise ValueError(f"Agent '{agent_id}' not found")
 
-        allowed_fields = {"name", "status", "avatar", "description"}
+        allowed_fields = {"name", "role", "status", "avatar", "description"}
         for key in updates:
             if key not in allowed_fields:
                 raise ValueError(f"Cannot update field '{key}' via registry")

@@ -18,7 +18,7 @@ interface WsStore {
 	status: Readable<WsStatus>;
 	connect(sessionId: string): void;
 	disconnect(): void;
-	send(content: string, attachments?: File[]): void;
+	send(content: string, meta?: Record<string, string>): void;
 	sendAction(notificationId: string, action: string): void;
 	onMessage: (handler: (msg: WsMessage) => void) => () => void;
 }
@@ -33,7 +33,13 @@ export function createWsStore(): WsStore {
 	function connect(sessionId: string) {
 		currentSessionId = sessionId;
 		if (ws) {
+			ws.onclose = null; // Prevent auto-reconnect from old socket
 			ws.close();
+			ws = null;
+		}
+		if (reconnectTimer) {
+			clearTimeout(reconnectTimer);
+			reconnectTimer = null;
 		}
 
 		const token = getToken();
@@ -61,6 +67,8 @@ export function createWsStore(): WsStore {
 
 		ws.onclose = () => {
 			status.set('disconnected');
+			// Notify handlers that connection dropped so they can reset typing state
+			handlers.forEach((h) => h({ type: 'typing', active: false }));
 			// Auto-reconnect after 2s
 			if (currentSessionId) {
 				reconnectTimer = setTimeout(() => {
@@ -87,9 +95,16 @@ export function createWsStore(): WsStore {
 		status.set('disconnected');
 	}
 
-	function send(content: string) {
+	function send(content: string, meta?: Record<string, string>) {
+		const payload = JSON.stringify({ type: 'message', content, ...meta });
 		if (ws?.readyState === WebSocket.OPEN) {
-			ws.send(JSON.stringify({ type: 'message', content }));
+			ws.send(payload);
+		} else if (ws?.readyState === WebSocket.CONNECTING) {
+			const onOpen = () => {
+				ws?.send(payload);
+				ws?.removeEventListener('open', onOpen);
+			};
+			ws.addEventListener('open', onOpen);
 		}
 	}
 

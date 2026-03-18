@@ -358,7 +358,11 @@ class AIAgent:
         """
         _install_safe_stdio()
 
-        self.model = model
+        # Handle model being a dict (from config.yaml where model: {default: ..., provider: ...})
+        if isinstance(model, dict):
+            self.model = model.get("default", "anthropic/claude-opus-4.6")
+        else:
+            self.model = model or "anthropic/claude-opus-4.6"
         self.max_iterations = max_iterations
         # Shared iteration budget — parent creates, children inherit.
         # Consumed by every LLM turn across parent + all subagents.

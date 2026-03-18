@@ -8,9 +8,7 @@
 	let newPrompt = $state('');
 	let newSchedule = $state('');
 
-	onMount(() => {
-		store.loadCron();
-	});
+	// Data preloaded by AgentDashboard
 
 	async function createJob() {
 		if (!newPrompt.trim() || !newSchedule.trim()) return;

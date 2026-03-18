@@ -1,61 +1,14 @@
+import { invoke } from '@tauri-apps/api/core';
+
 const API_BASE = 'http://localhost:8080/api';
 
 let authToken: string | null = null;
 
-// Auto-load token from Tauri on first use
-let tokenLoaded = false;
-async function ensureTokenLoaded() {
-	if (tokenLoaded) return;
-	tokenLoaded = true;
-	// Try localStorage first
-	if (!authToken) {
-		authToken = localStorage.getItem('vulti_token');
-		// Validate the stored token works
-		if (authToken) {
-			try {
-				const res = await fetch(`${API_BASE}/status`, {
-					headers: { Authorization: `Bearer ${authToken}` },
-					signal: AbortSignal.timeout(2000)
-				});
-				if (res.status === 401) {
-					// Stale token, clear it
-					authToken = null;
-					localStorage.removeItem('vulti_token');
-				}
-			} catch {
-				// Gateway not reachable yet, keep the token
-			}
-		}
-	}
-	// Try Tauri if still no token
-	if (!authToken && typeof window !== 'undefined' && '__TAURI__' in window) {
-		try {
-			const { invoke } = await import('@tauri-apps/api/core');
-			const token = await invoke<string>('get_gateway_token');
-			if (token) {
-				authToken = token;
-				localStorage.setItem('vulti_token', token);
-			}
-		} catch {}
-	}
-	// Fallback: bootstrap from gateway (localhost only)
-	if (!authToken) {
-		try {
-			const res = await fetch(`${API_BASE}/bootstrap`, { signal: AbortSignal.timeout(2000) });
-			if (res.ok) {
-				const data = await res.json();
-				if (data.token) {
-					authToken = data.token;
-					localStorage.setItem('vulti_token', data.token);
-				}
-			}
-		} catch {}
-	}
-}
+// Token is only needed for WebSocket connections and remaining HTTP calls
+// (analytics, delete agent with Matrix cleanup, matrix registration).
 
 export function setToken(token: string) {
 	authToken = token;
-	tokenLoaded = true;
 	localStorage.setItem('vulti_token', token);
 }
 
@@ -71,8 +24,32 @@ export function clearToken() {
 	localStorage.removeItem('vulti_token');
 }
 
+// Lightweight cache only for remaining HTTP calls
+const cache = new Map<string, { data: unknown; ts: number }>();
+const CACHE_TTL = 30_000;
+
+function getCached<T>(key: string): T | undefined {
+	const entry = cache.get(key);
+	if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data as T;
+	return undefined;
+}
+
+export function invalidateCache(pattern?: string) {
+	if (!pattern) { cache.clear(); return; }
+	for (const key of cache.keys()) {
+		if (key.includes(pattern)) cache.delete(key);
+	}
+}
+
+// HTTP request helper — only used for endpoints that must stay on HTTP
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-	await ensureTokenLoaded();
+	const method = options.method?.toUpperCase() || 'GET';
+
+	if (method === 'GET') {
+		const cached = getCached<T>(path);
+		if (cached !== undefined) return cached;
+	}
+
 	const token = getToken();
 	const res = await fetch(`${API_BASE}${path}`, {
 		...options,
@@ -86,11 +63,129 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 		const body = await res.text();
 		throw new Error(`API ${res.status}: ${body}`);
 	}
-	return res.json();
+	const data = await res.json();
+
+	if (method === 'GET') {
+		cache.set(path, { data, ts: Date.now() });
+	} else {
+		invalidateCache(path.split('/').slice(0, 3).join('/'));
+	}
+
+	return data;
 }
 
 export const api = {
-	// Auth
+	// === Tauri IPC calls (direct file I/O, sub-millisecond) ===
+
+	// Agents
+	listAgents() {
+		return invoke<Agent[]>('list_agents');
+	},
+	getAgent(agentId: string) {
+		return invoke<Agent>('get_agent', { agentId });
+	},
+	createAgent(data: { name: string; role?: AgentRole; model?: string; avatar?: string; personality?: string; description?: string; inherit_from?: string }) {
+		return invoke<Agent>('create_agent', {
+			name: data.name,
+			role: data.role || null,
+			avatar: data.avatar || null,
+			description: data.description || null,
+			personality: data.personality || null,
+			model: data.model || null,
+			inheritFrom: data.inherit_from || null,
+		});
+	},
+	updateAgent(agentId: string, updates: Partial<Agent>) {
+		return invoke<Agent>('update_agent', { agentId, updates });
+	},
+
+	// Sessions
+	listSessions(agentId?: string) {
+		return invoke<Session[]>('list_sessions', { agentId: agentId || null });
+	},
+	createSession(agentId?: string, name?: string) {
+		return invoke<Session>('create_session', { agentId: agentId || null, name: name || null });
+	},
+	deleteSession(id: string) {
+		return invoke<{ ok: boolean }>('delete_session', { sessionId: id });
+	},
+	getHistory(sessionId: string) {
+		return invoke<Message[]>('get_history', { sessionId });
+	},
+
+	// Memories & Soul
+	getMemories(agentId?: string) {
+		return invoke<Memories>('get_memories', { agentId: agentId || null });
+	},
+	updateMemory(file: 'memory' | 'user', content: string, agentId?: string) {
+		return invoke<{ ok: boolean }>('update_memory', { agentId: agentId || null, file, content });
+	},
+	getSoul(agentId?: string) {
+		return invoke<{ content: string }>('get_soul', { agentId: agentId || null });
+	},
+	updateSoul(content: string, agentId?: string) {
+		return invoke<{ ok: boolean }>('update_soul', { agentId: agentId || null, content });
+	},
+
+	// Rules
+	listRules(agentId?: string) {
+		return invoke<Rule[]>('list_rules', { agentId: agentId || null });
+	},
+	createRule(rule: Partial<Rule>, agentId?: string) {
+		return invoke<Rule>('create_rule', { data: rule, agentId: agentId || null });
+	},
+	updateRule(id: string, updates: Partial<Rule>) {
+		return invoke<Rule>('update_rule', { ruleId: id, updates });
+	},
+	deleteRule(id: string) {
+		return invoke<void>('delete_rule', { ruleId: id });
+	},
+
+	// Cron
+	listCron(agentId?: string) {
+		return invoke<CronJob[]>('list_cron', { agentId: agentId || null });
+	},
+	createCron(job: Partial<CronJob>, agentId?: string) {
+		return invoke<CronJob>('create_cron', { data: job, agentId: agentId || null });
+	},
+	updateCron(id: string, updates: Partial<CronJob>) {
+		return invoke<CronJob>('update_cron', { jobId: id, updates });
+	},
+	deleteCron(id: string) {
+		return invoke<void>('delete_cron', { jobId: id });
+	},
+
+	// Secrets & Providers
+	getSecrets() {
+		return invoke<Secret[]>('list_secrets');
+	},
+	addSecret(key: string, value: string) {
+		return invoke<{ ok: boolean }>('add_secret', { key, value });
+	},
+	deleteSecret(key: string) {
+		return invoke<{ ok: boolean }>('delete_secret', { key });
+	},
+	getProviders() {
+		return invoke<Provider[]>('list_providers');
+	},
+	getOAuth() {
+		return invoke<OAuthToken[]>('get_oauth_status');
+	},
+
+	// Status & Config
+	getStatus() {
+		return invoke<SystemStatus>('get_system_status');
+	},
+	getChannels() {
+		return invoke<ChannelDirectory>('get_channel_directory');
+	},
+	getIntegrations() {
+		return invoke<Integration[]>('get_integrations');
+	},
+
+	// === HTTP calls (still need running gateway) ===
+
+	// Auth (remote access only)
 	auth(token: string) {
 		return request<{ ok: boolean }>('/auth', {
 			method: 'POST',
@@ -98,101 +193,12 @@ export const api = {
 		});
 	},
 
-	// Sessions (backward compat -- default agent)
-	listSessions(agentId?: string) {
-		if (agentId) return request<Session[]>(`/agents/${agentId}/sessions`);
-		return request<Session[]>('/sessions');
-	},
-	createSession(agentId?: string, name?: string) {
-		if (agentId) {
-			return request<Session>(`/agents/${agentId}/sessions`, {
-				method: 'POST',
-				body: JSON.stringify({ name })
-			});
-		}
-		return request<Session>('/sessions', {
-			method: 'POST',
-			body: JSON.stringify({ name })
-		});
-	},
-	deleteSession(id: string) {
-		return request<void>(`/sessions/${id}`, { method: 'DELETE' });
-	},
-	getHistory(sessionId: string) {
-		return request<Message[]>(`/sessions/${sessionId}/history`);
-	},
-
-	// Agent CRUD
-	listAgents() {
-		return request<Agent[]>('/agents');
-	},
-	getAgent(agentId: string) {
-		return request<Agent>(`/agents/${agentId}`);
-	},
-	createAgent(data: { name: string; avatar?: string; personality?: string; description?: string; inherit_from?: string }) {
-		return request<Agent>('/agents', {
-			method: 'POST',
-			body: JSON.stringify(data)
-		});
-	},
-	updateAgent(agentId: string, updates: Partial<Agent>) {
-		return request<Agent>(`/agents/${agentId}`, {
-			method: 'PUT',
-			body: JSON.stringify(updates)
-		});
-	},
+	// Delete agent (needs Matrix cleanup via gateway)
 	deleteAgent(agentId: string) {
 		return request<{ ok: boolean }>(`/agents/${agentId}`, { method: 'DELETE' });
 	},
 
-	// Cron (agent-scoped or default)
-	listCron(agentId?: string) {
-		if (agentId) return request<CronJob[]>(`/agents/${agentId}/cron`);
-		return request<CronJob[]>('/cron');
-	},
-	createCron(job: Partial<CronJob>, agentId?: string) {
-		if (agentId) {
-			return request<CronJob>(`/agents/${agentId}/cron`, {
-				method: 'POST',
-				body: JSON.stringify(job)
-			});
-		}
-		return request<CronJob>('/cron', {
-			method: 'POST',
-			body: JSON.stringify(job)
-		});
-	},
-	updateCron(id: string, updates: Partial<CronJob>) {
-		return request<CronJob>(`/cron/${id}`, {
-			method: 'PUT',
-			body: JSON.stringify(updates)
-		});
-	},
-	deleteCron(id: string) {
-		return request<void>(`/cron/${id}`, { method: 'DELETE' });
-	},
-
-	// Rules
-	listRules() {
-		return request<Rule[]>('/rules');
-	},
-	createRule(rule: Partial<Rule>) {
-		return request<Rule>('/rules', {
-			method: 'POST',
-			body: JSON.stringify(rule)
-		});
-	},
-	updateRule(id: string, updates: Partial<Rule>) {
-		return request<Rule>(`/rules/${id}`, {
-			method: 'PUT',
-			body: JSON.stringify(updates)
-		});
-	},
-	deleteRule(id: string) {
-		return request<void>(`/rules/${id}`, { method: 'DELETE' });
-	},
-
-	// Inbox & Contacts (global)
+	// Inbox & Contacts (low priority, keep HTTP)
 	getInbox() {
 		return request<InboxItem[]>('/inbox');
 	},
@@ -200,64 +206,19 @@ export const api = {
 		return request<Contact[]>('/contacts');
 	},
 
-	// Integrations (global)
-	getIntegrations() {
-		return request<Integration[]>('/integrations');
-	},
-
-	// Memories & Soul (agent-scoped or default)
-	getMemories(agentId?: string) {
-		if (agentId) return request<Memories>(`/agents/${agentId}/memories`);
-		return request<Memories>('/memories');
-	},
-	updateMemory(file: 'memory' | 'user', content: string, agentId?: string) {
-		if (agentId) {
-			return request<{ ok: boolean }>(`/agents/${agentId}/memories`, {
-				method: 'PUT',
-				body: JSON.stringify({ file, content })
-			});
-		}
-		return request<{ ok: boolean }>('/memories', {
-			method: 'PUT',
-			body: JSON.stringify({ file, content })
-		});
-	},
-	getSoul(agentId?: string) {
-		if (agentId) return request<{ content: string }>(`/agents/${agentId}/soul`);
-		return request<{ content: string }>('/soul');
-	},
-	updateSoul(content: string, agentId?: string) {
-		if (agentId) {
-			return request<{ ok: boolean }>(`/agents/${agentId}/soul`, {
-				method: 'PUT',
-				body: JSON.stringify({ content })
-			});
-		}
-		return request<{ ok: boolean }>('/soul', {
-			method: 'PUT',
-			body: JSON.stringify({ content })
+	// Matrix registration (needs gateway for homeserver API)
+	registerMatrixOwner(username: string, password: string, displayName: string) {
+		return request<{ user_id: string; username: string }>('/matrix/register', {
+			method: 'POST',
+			body: JSON.stringify({ username, password, display_name: displayName })
 		});
 	},
 
-	// System Status (global)
-	getStatus() {
-		return request<SystemStatus>('/status');
-	},
-	getChannels() {
-		return request<ChannelDirectory>('/channels');
-	},
-
-	// Secrets & OAuth (global)
-	getSecrets() {
-		return request<Secret[]>('/secrets');
-	},
-	getOAuth() {
-		return request<OAuthToken[]>('/oauth');
-	},
-
-	// Analytics
-	getAnalytics(days: number = 30) {
-		return request<Analytics>(`/analytics?days=${days}`);
+	// Analytics (needs Python InsightsEngine + SQLite)
+	getAnalytics(days: number = 30, agentId?: string) {
+		const params = new URLSearchParams({ days: String(days) });
+		if (agentId) params.set('agent_id', agentId);
+		return request<Analytics>(`/analytics?${params}`);
 	}
 };
 
@@ -277,10 +238,13 @@ export interface Message {
 	timestamp: string;
 }
 
+export type AgentRole = 'assistant' | 'therapist' | 'researcher' | 'engineer' | 'writer' | 'analyst' | 'coach' | 'creative' | 'ops';
+
 // Unified Agent type (merges old Agent + GatewayAgent)
 export interface Agent {
 	id: string;
 	name: string;
+	role?: AgentRole;
 	url?: string;
 	avatar?: string;
 	personality?: string;
@@ -356,6 +320,14 @@ export interface Secret {
 	category: string;
 }
 
+export interface Provider {
+	id: string;
+	name: string;
+	authenticated: boolean;
+	models: string[];
+	env_keys: string[];
+}
+
 export interface OAuthToken {
 	service: string;
 	valid: boolean;
@@ -387,13 +359,13 @@ export interface AgentService {
 	label: string;
 	status: 'connected' | 'pending' | 'error';
 	config: Record<string, unknown>;
+	permission?: 'read' | 'write';
 }
 
 // Keep GatewayAgent as alias for backward compat
 export type GatewayAgent = Agent;
 
 export interface GlobalSettings {
-	tailscale: { ip: string; connected: boolean };
 	gateway: { connected: boolean };
 }
 

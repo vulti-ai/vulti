@@ -4,7 +4,9 @@
 
 	let days = $state(30);
 
-	onMount(() => {
+	// Reload when active agent changes
+	$effect(() => {
+		const _agentId = store.activeAgentId; // track dependency
 		store.loadAnalytics(days);
 	});
 

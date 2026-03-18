@@ -10,9 +10,7 @@
 	let newPriority = $state(0);
 	let newCooldown = $state('');
 
-	onMount(() => {
-		store.loadRules();
-	});
+	// Data preloaded by AgentDashboard
 
 	async function createRule() {
 		if (!newCondition.trim() || !newAction.trim()) return;
@@ -22,7 +20,7 @@
 			action: newAction,
 			priority: newPriority,
 			cooldown_minutes: newCooldown ? parseInt(newCooldown) : undefined,
-		});
+		}, store.activeAgentId ?? undefined);
 		newName = '';
 		newCondition = '';
 		newAction = '';

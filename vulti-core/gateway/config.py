@@ -43,6 +43,7 @@ class Platform(Enum):
     HOMEASSISTANT = "homeassistant"
     EMAIL = "email"
     WEB = "web"
+    MATRIX = "matrix"
 
 
 @dataclass
@@ -234,6 +235,9 @@ class GatewayConfig:
                 connected.append(platform)
             # Email uses extra dict for config (address + imap_host + smtp_host)
             elif platform == Platform.EMAIL and config.extra.get("address"):
+                connected.append(platform)
+            # Matrix uses extra dict for config (homeserver_url)
+            elif platform == Platform.MATRIX and config.extra.get("homeserver_url"):
                 connected.append(platform)
         return connected
     
@@ -490,13 +494,15 @@ def resolve_agent_routing(source, routing_table: dict = None) -> str:
         routing_table: Dict of pattern -> agent_id. If None, loads from config.
 
     Returns:
-        agent_id string. Defaults to 'default' if no match.
+        agent_id string. Falls back to the registry's default agent.
     """
+    from orchestrator.agent_registry import get_default_agent_id
+
     if routing_table is None:
         routing_table = load_agent_routing()
 
     if not routing_table:
-        return "default"
+        return get_default_agent_id()
 
     platform = source.platform.value if hasattr(source.platform, 'value') else str(source.platform)
     chat_type = getattr(source, 'chat_type', 'dm') or 'dm'
@@ -509,7 +515,7 @@ def resolve_agent_routing(source, routing_table: dict = None) -> str:
         if _routing_pattern_matches(pattern, source_key):
             return agent_id
 
-    return "default"
+    return get_default_agent_id()
 
 
 def _routing_pattern_matches(pattern: str, source_key: str) -> bool:
@@ -670,6 +676,24 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
                 name=os.getenv("EMAIL_HOME_ADDRESS_NAME", "Home"),
             )
 
+    # Matrix — enabled by default (core communication layer for agents)
+    matrix_disabled = os.getenv("MATRIX_DISABLED", "").lower() in ("true", "1", "yes")
+    if not matrix_disabled:
+        if Platform.MATRIX not in config.platforms:
+            config.platforms[Platform.MATRIX] = PlatformConfig()
+        config.platforms[Platform.MATRIX].enabled = True
+        config.platforms[Platform.MATRIX].extra.update({
+            "homeserver_url": os.getenv("MATRIX_HOMESERVER_URL", "http://127.0.0.1:6167"),
+            "server_name": os.getenv("MATRIX_SERVER_NAME", "localhost"),
+        })
+        matrix_home = os.getenv("MATRIX_HOME_CHANNEL")
+        if matrix_home:
+            config.platforms[Platform.MATRIX].home_channel = HomeChannel(
+                platform=Platform.MATRIX,
+                chat_id=matrix_home,
+                name=os.getenv("MATRIX_HOME_CHANNEL_NAME", "Hub"),
+            )
+
     # Web — enabled by default (core UI for Vulti)
     web_disabled = os.getenv("WEB_DISABLED", "").lower() in ("true", "1", "yes")
     if not web_disabled:
@@ -682,7 +706,7 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
             web_token = _get_or_create_web_token()
         config.platforms[Platform.WEB].extra.update({
             "port": int(os.getenv("WEB_PORT", "8080")),
-            "host": os.getenv("WEB_HOST", "0.0.0.0"),
+            "host": os.getenv("WEB_HOST", "127.0.0.1"),
             "auth_token": web_token,
             "cors_origins": os.getenv("WEB_CORS_ORIGINS", "http://localhost:5173,http://localhost:4173"),
         })

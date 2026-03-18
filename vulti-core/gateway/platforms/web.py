@@ -94,8 +94,22 @@ class WebAdapter(BasePlatformAdapter):
                 return True  # No token configured = open access
             return token == adapter._auth_token
 
+        # Track whether current request is from localhost
+        from contextvars import ContextVar
+        _is_localhost: ContextVar[bool] = ContextVar('_is_localhost', default=False)
+
+        @app.middleware("http")
+        async def localhost_auth_bypass(request: Request, call_next):
+            host = request.client.host if request.client else ""
+            token = _is_localhost.set(host in ("127.0.0.1", "::1"))
+            try:
+                return await call_next(request)
+            finally:
+                _is_localhost.reset(token)
+
         async def get_current_user(authorization: str = Header("")):
-            # Accept token from Authorization HTTP header
+            if _is_localhost.get(False):
+                return True
             token = ""
             if authorization.startswith("Bearer "):
                 token = authorization[7:]
@@ -221,7 +235,7 @@ class WebAdapter(BasePlatformAdapter):
         @app.delete("/api/agents/{agent_id}")
         async def delete_agent(agent_id: str, authorization: str = Header("")):
             await get_current_user(authorization)
-            return adapter._delete_agent(agent_id)
+            return await adapter._delete_agent(agent_id)
 
         # --- Agent-scoped resource endpoints ---
 
@@ -255,7 +269,23 @@ class WebAdapter(BasePlatformAdapter):
         @app.get("/api/agents/{agent_id}/sessions")
         async def list_agent_sessions(agent_id: str, authorization: str = Header("")):
             await get_current_user(authorization)
-            return adapter._get_sessions(agent_id=agent_id)
+            return adapter._get_agent_sessions(agent_id=agent_id)
+
+        @app.post("/api/agents/{agent_id}/sessions")
+        async def create_agent_session(agent_id: str, req: CreateSessionRequest, authorization: str = Header("")):
+            await get_current_user(authorization)
+            session_id = uuid.uuid4().hex[:12]
+            name = req.name or f"Chat {datetime.now().strftime('%b %d %H:%M')}"
+            session = {
+                "id": session_id,
+                "name": name,
+                "agent_id": agent_id,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "preview": "",
+            }
+            adapter._save_session_meta(session_id, session)
+            return session
 
         # --- Cron endpoints ---
 
@@ -286,10 +316,22 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return adapter._get_rules()
 
+        @app.get("/api/agents/{agent_id}/rules")
+        async def get_agent_rules(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_rules(agent_id=agent_id)
+
         @app.post("/api/rules")
         async def create_rule(req: CreateRuleRequest, authorization: str = Header("")):
             await get_current_user(authorization)
             return adapter._create_rule(req.model_dump())
+
+        @app.post("/api/agents/{agent_id}/rules")
+        async def create_agent_rule(agent_id: str, req: CreateRuleRequest, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = req.model_dump()
+            data["agent"] = agent_id
+            return adapter._create_rule(data)
 
         @app.put("/api/rules/{rule_id}")
         async def update_rule(rule_id: str, req: UpdateRuleRequest, authorization: str = Header("")):
@@ -349,6 +391,132 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return adapter._update_soul(req.content)
 
+        # --- Matrix Well-Known (no auth required — Element needs these) ---
+
+        @app.get("/.well-known/matrix/client")
+        async def matrix_well_known_client():
+            """Serve Matrix client well-known for Element discovery."""
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+            # Use the gateway's own host for the base URL
+            base_url = f"http://localhost:{port}"
+            # If Tailscale is available, use HTTPS
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["tailscale", "status", "--json"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0:
+                    ts_data = json.loads(result.stdout)
+                    ts_name = ts_data.get("Self", {}).get("DNSName", "").rstrip(".")
+                    if ts_name:
+                        base_url = f"https://{ts_name}:{port}"
+            except Exception:
+                pass
+            return {
+                "m.homeserver": {"base_url": base_url},
+                "m.identity_server": {"base_url": "https://matrix.org"},
+            }
+
+        @app.get("/.well-known/matrix/server")
+        async def matrix_well_known_server():
+            """Serve Matrix server well-known for federation."""
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+            return {"m.server": f"{server_name}:{port}"}
+
+        # --- Matrix Account ---
+
+        @app.post("/api/matrix/register")
+        async def matrix_register(req: Request, authorization: str = Header("")):
+            """Create the owner's Matrix account with a custom username and password."""
+            await get_current_user(authorization)
+            data = await req.json()
+            username = data.get("username", "").strip()
+            password = data.get("password", "").strip()
+            display_name = data.get("display_name", "").strip()
+
+            if not username or not password:
+                raise HTTPException(status_code=400, detail="Username and password are required")
+            if len(password) < 8:
+                raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+            from gateway.continuwuity import _continuwuity_dir
+            owner_creds_path = _continuwuity_dir() / "owner_credentials.json"
+            if owner_creds_path.exists():
+                raise HTTPException(status_code=409, detail="Owner account already exists")
+
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            homeserver_url = f"http://127.0.0.1:{port}"
+
+            from gateway.matrix_agents import register_matrix_user
+            result = await register_matrix_user(
+                homeserver_url=homeserver_url,
+                username=username,
+                password=password,
+            )
+            if not result:
+                raise HTTPException(status_code=500, detail="Registration failed")
+
+            # Set display name
+            if display_name:
+                import httpx
+                async with httpx.AsyncClient(timeout=5.0) as hc:
+                    await hc.put(
+                        f"{homeserver_url}/_matrix/client/v3/profile/{result['user_id']}/displayname",
+                        headers={"Authorization": f"Bearer {result['access_token']}"},
+                        json={"displayname": display_name},
+                    )
+
+            # Save credentials
+            owner_creds_path.write_text(json.dumps({
+                "username": username,
+                "password": password,
+                "user_id": result["user_id"],
+                "access_token": result["access_token"],
+            }, indent=2))
+
+            # Invite and join owner to all rooms
+            try:
+                import httpx
+                server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+                tokens_dir = _continuwuity_dir() / "tokens"
+                # Get an agent token for inviting
+                agent_token = None
+                for f in tokens_dir.iterdir():
+                    if f.suffix == ".json":
+                        agent_token = json.loads(f.read_text()).get("access_token")
+                        break
+                if agent_token:
+                    owner_headers = {"Authorization": f"Bearer {result['access_token']}"}
+                    agent_headers = {"Authorization": f"Bearer {agent_token}"}
+                    async with httpx.AsyncClient(timeout=10.0) as hc:
+                        for room_alias in ["hub", "agents"]:
+                            try:
+                                resp = await hc.get(
+                                    f"{homeserver_url}/_matrix/client/v3/directory/room/%23{room_alias}:{server_name}",
+                                )
+                                if resp.status_code == 200:
+                                    room_id = resp.json().get("room_id")
+                                    if room_id:
+                                        await hc.post(
+                                            f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/invite",
+                                            headers=agent_headers,
+                                            json={"user_id": result["user_id"]},
+                                        )
+                                        await hc.post(
+                                            f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                                            headers=owner_headers,
+                                            json={},
+                                        )
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+            return {"user_id": result["user_id"], "username": username}
+
         # --- System Status ---
 
         @app.get("/api/status")
@@ -367,6 +535,22 @@ class WebAdapter(BasePlatformAdapter):
         async def get_secrets(authorization: str = Header("")):
             await get_current_user(authorization)
             return adapter._get_masked_secrets()
+
+        @app.post("/api/secrets")
+        async def add_secret(req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._add_secret(data.get("key", ""), data.get("value", ""))
+
+        @app.delete("/api/secrets/{key}")
+        async def delete_secret(key: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._delete_secret(key)
+
+        @app.get("/api/providers")
+        async def list_providers(authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_providers()
 
         @app.get("/api/oauth")
         async def get_oauth(authorization: str = Header("")):
@@ -408,6 +592,8 @@ class WebAdapter(BasePlatformAdapter):
                         if not content:
                             continue
 
+                        hub_channel = data.get("hub_channel", "")
+
                         # Build source for gateway
                         source = SessionSource(
                             platform=Platform.WEB,
@@ -424,6 +610,9 @@ class WebAdapter(BasePlatformAdapter):
                             message_id=uuid.uuid4().hex[:12],
                             timestamp=datetime.now(),
                         )
+                        # Pass hub channel to gateway for context-aware prompting
+                        if hub_channel:
+                            event._hub_channel = hub_channel
 
                         # Store message in history
                         adapter._append_history(session_id, {
@@ -470,9 +659,16 @@ class WebAdapter(BasePlatformAdapter):
                 await ws.send_text(json.dumps({"type": "typing", "active": True}))
 
             # Call gateway message handler
+            if not callable(self._message_handler):
+                logger.error("[web] _message_handler is not callable: type=%s value=%r", type(self._message_handler).__name__, self._message_handler)
+                raise TypeError(f"_message_handler is {type(self._message_handler).__name__}, not callable")
             response = await self._message_handler(event)
 
-            if response and ws:
+            # Re-fetch WS (may have reconnected during processing)
+            ws = self._connections.get(session_id)
+            if not response:
+                response = "(No response from agent)"
+            if ws:
                 msg_id = uuid.uuid4().hex[:12]
                 # Send complete message
                 await ws.send_text(json.dumps({
@@ -498,13 +694,22 @@ class WebAdapter(BasePlatformAdapter):
                     self._save_session_meta(session_id, meta)
 
         except Exception as e:
-            logger.error("[web] Error handling message: %s", e)
+            import traceback
+            logger.error("[web] Error handling message: %s\n%s", e, traceback.format_exc())
             ws = self._connections.get(session_id)
             if ws:
                 await ws.send_text(json.dumps({
                     "type": "error",
                     "content": f"Error: {e}",
                 }))
+        finally:
+            # Always stop typing indicator
+            ws = self._connections.get(session_id)
+            if ws:
+                try:
+                    await ws.send_text(json.dumps({"type": "typing", "active": False}))
+                except Exception:
+                    pass
 
     # --- BasePlatformAdapter implementation ---
 
@@ -528,9 +733,6 @@ class WebAdapter(BasePlatformAdapter):
         self._server_task = asyncio.create_task(self._server.serve())
         self._mark_connected()
         logger.info("[web] Web adapter started on %s:%s", self._host, self._port)
-
-        # Print QR code for easy mobile connection
-        self._print_connect_qr()
 
         return True
 
@@ -714,7 +916,7 @@ class WebAdapter(BasePlatformAdapter):
     def _get_agent_registry(self):
         """Get or create the agent registry instance."""
         if not hasattr(self, "_agent_registry"):
-            from vulti_cli.agent_registry import AgentRegistry
+            from orchestrator.agent_registry import AgentRegistry
             self._agent_registry = AgentRegistry()
             self._agent_registry.ensure_initialized()
         return self._agent_registry
@@ -732,6 +934,7 @@ class WebAdapter(BasePlatformAdapter):
             return [{
                 "id": a.id,
                 "name": a.name,
+                "role": a.role,
                 "url": f"http://{self._host}:{self._port}",
                 "status": "connected" if self._running and a.status == "active" else a.status,
                 "platforms": connected if a.id == registry.default_agent_id else [],
@@ -753,6 +956,7 @@ class WebAdapter(BasePlatformAdapter):
         return {
             "id": agent.id,
             "name": agent.name,
+            "role": agent.role,
             "url": f"http://{self._host}:{self._port}",
             "status": agent.status,
             "avatar": agent.avatar,
@@ -788,23 +992,38 @@ class WebAdapter(BasePlatformAdapter):
                 clone_from=data.get("inherit_from"),
                 avatar=data.get("avatar"),
                 description=data.get("description", ""),
+                role=data.get("role", ""),
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-
-        # New agents from the wizard start in setting_up so the UI shows AgentSetup
-        registry.update_agent(agent_id, status="setting_up")
 
         # Write personality to soul if provided
         if data.get("personality"):
             soul_path = registry.agent_soul_path(agent_id)
             soul_path.write_text(data["personality"], encoding="utf-8")
 
+        # Write model to agent's config.yaml if provided
+        if data.get("model"):
+            try:
+                import yaml
+                config_path = registry.agent_config_path(agent_id)
+                if config_path.exists():
+                    with open(config_path, encoding="utf-8") as f:
+                        agent_cfg = yaml.safe_load(f) or {}
+                else:
+                    agent_cfg = {}
+                agent_cfg["model"] = data["model"]
+                with open(config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(agent_cfg, f, default_flow_style=False, allow_unicode=True)
+            except Exception as e:
+                logger.debug("Failed to write model to agent config: %s", e)
+
         return {
             "id": meta.id,
             "name": meta.name,
+            "role": meta.role,
             "url": f"http://{self._host}:{self._port}",
-            "status": "setting_up",
+            "status": meta.status,
             "avatar": meta.avatar,
             "description": meta.description,
             "createdAt": meta.created_at,
@@ -818,7 +1037,7 @@ class WebAdapter(BasePlatformAdapter):
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
 
         updates = {}
-        for field in ("name", "status", "avatar", "description"):
+        for field in ("name", "role", "status", "avatar", "description"):
             if field in data:
                 updates[field] = data[field]
 
@@ -835,20 +1054,109 @@ class WebAdapter(BasePlatformAdapter):
         return {
             "id": meta.id,
             "name": meta.name,
+            "role": meta.role,
             "status": meta.status,
             "avatar": meta.avatar,
             "description": meta.description,
         }
 
-    def _delete_agent(self, agent_id: str) -> dict:
-        """Delete an agent and all its data."""
+    async def _delete_agent(self, agent_id: str) -> dict:
+        """Delete an agent and all its data, including Matrix cleanup."""
         registry = self._get_agent_registry()
+
+        # Clean up Matrix user before deleting agent data
+        await self._cleanup_matrix_agent(agent_id)
+
         try:
             if not registry.delete_agent(agent_id):
                 raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         return {"ok": True}
+
+    async def _cleanup_matrix_agent(self, agent_id: str) -> None:
+        """Remove an agent's Matrix user: leave rooms, logout, delete credentials."""
+        try:
+            from gateway.matrix_agents import get_agent_matrix_credentials, _tokens_dir
+
+            creds = get_agent_matrix_credentials(agent_id)
+            if not creds:
+                return
+
+            access_token = creds.get("access_token", "")
+            homeserver_url = creds.get("homeserver_url", "")
+            user_id = creds.get("user_id", "")
+
+            if access_token and homeserver_url:
+                import httpx
+
+                headers = {"Authorization": f"Bearer {access_token}"}
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    # Leave and forget all joined rooms
+                    try:
+                        resp = await client.get(
+                            f"{homeserver_url}/_matrix/client/v3/joined_rooms",
+                            headers=headers,
+                        )
+                        if resp.status_code == 200:
+                            for room_id in resp.json().get("joined_rooms", []):
+                                try:
+                                    await client.post(
+                                        f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/leave",
+                                        headers=headers,
+                                        json={},
+                                    )
+                                    # Forget room so user is fully removed
+                                    await client.post(
+                                        f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/forget",
+                                        headers=headers,
+                                        json={},
+                                    )
+                                except Exception:
+                                    pass
+                            logger.info("Matrix cleanup: agent '%s' left %d room(s)", agent_id, len(resp.json().get("joined_rooms", [])))
+                    except Exception as e:
+                        logger.warning("Matrix cleanup: failed to leave rooms for %s: %s", agent_id, e)
+
+                    # Deactivate the account (best-effort, may not be supported)
+                    try:
+                        await client.post(
+                            f"{homeserver_url}/_matrix/client/v3/account/deactivate",
+                            headers=headers,
+                            json={"erase": True},
+                        )
+                    except Exception:
+                        pass
+
+                    # Logout all sessions to invalidate all access tokens
+                    try:
+                        await client.post(
+                            f"{homeserver_url}/_matrix/client/v3/logout/all",
+                            headers=headers,
+                            json={},
+                        )
+                        logger.info("Matrix cleanup: logged out all sessions for agent '%s'", agent_id)
+                    except Exception as e:
+                        logger.warning("Matrix cleanup: failed to logout %s: %s", agent_id, e)
+
+            # Remove token file so the agent can't be re-registered on restart
+            token_file = _tokens_dir() / f"{agent_id}.json"
+            if token_file.exists():
+                token_file.unlink()
+
+            # Update the Matrix adapter's agent filter so it stops ignoring this user_id
+            if user_id:
+                from gateway.config import Platform
+                matrix_adapter = self._gateway_runner and self._gateway_runner.adapters.get(Platform.MATRIX) if hasattr(self, '_gateway_runner') else None
+                if matrix_adapter and hasattr(matrix_adapter, '_agent_user_ids'):
+                    matrix_adapter._agent_user_ids.discard(user_id)
+
+            logger.info("Matrix cleanup: agent '%s' fully removed (left rooms, logged out, credentials deleted)", agent_id)
+
+        except ImportError:
+            pass  # Matrix not configured
+        except Exception as e:
+            logger.warning("Matrix cleanup failed for agent '%s': %s", agent_id, e)
 
     def _get_memories(self, agent_id: str = None) -> dict:
         """Get memory files for an agent."""
@@ -916,11 +1224,13 @@ class WebAdapter(BasePlatformAdapter):
         soul_path.write_text(content, encoding="utf-8")
         return {"ok": True}
 
-    def _get_sessions(self, agent_id: str = None) -> list:
+    def _get_agent_sessions(self, agent_id: str = None) -> list:
         """Get sessions, optionally filtered by agent."""
-        # For now, return all sessions from the web adapter's storage
-        # In future, filter by agent_id prefix in session keys
-        return self._list_sessions()
+        sessions = self._get_sessions()
+        if agent_id:
+            # Filter to sessions belonging to this agent
+            return [s for s in sessions if s.get("agent_id") == agent_id or not s.get("agent_id")]
+        return sessions
 
     def _get_cron_jobs(self) -> list:
         """List cron jobs from the cron system."""
@@ -979,11 +1289,14 @@ class WebAdapter(BasePlatformAdapter):
         except Exception as e:
             return {"error": str(e)}
 
-    def _get_rules(self) -> list:
-        """List all rules."""
+    def _get_rules(self, agent_id: str = None) -> list:
+        """List rules, optionally filtered by agent."""
         try:
             from rules.rules import list_rules
-            rules = list_rules(include_disabled=True)
+            all_rules = list_rules(include_disabled=True)
+            rules = all_rules
+            if agent_id:
+                rules = [r for r in all_rules if r.get("agent", "default") == agent_id]
             return [{
                 "id": r.get("id", ""),
                 "name": r.get("name", ""),
@@ -1002,20 +1315,20 @@ class WebAdapter(BasePlatformAdapter):
         return []
 
     def _create_rule(self, data: dict) -> dict:
-        """Create a rule via the rule tool."""
+        """Create a rule."""
         try:
-            from tools.rule_tools import rule
-            result = rule(
-                action="create",
+            from rules.rules import create_rule
+            new_rule = create_rule(
                 condition=data.get("condition", ""),
-                action_prompt=data.get("action", ""),
+                action=data.get("action", ""),
                 name=data.get("name"),
                 priority=data.get("priority", 0),
                 max_triggers=data.get("max_triggers"),
                 cooldown_minutes=data.get("cooldown_minutes"),
                 tags=data.get("tags"),
+                agent=data.get("agent"),
             )
-            return json.loads(result) if isinstance(result, str) else result
+            return {"success": True, "rule_id": new_rule["id"], "name": new_rule["name"], "rule": new_rule}
         except Exception as e:
             return {"error": str(e)}
 
@@ -1089,17 +1402,50 @@ class WebAdapter(BasePlatformAdapter):
             "signal": {"name": "Signal", "icon": "signal", "category": "Messaging"},
             "email": {"name": "Email", "icon": "email", "category": "Messaging"},
             "homeassistant": {"name": "Home Assistant", "icon": "homeassistant", "category": "Smart Home"},
+            "matrix": {"name": "Matrix", "icon": "matrix", "category": "Messaging"},
         }
         for pid, info in platforms.items():
             if pid == "web":
                 continue
             meta = platform_meta.get(pid, {"name": pid.title(), "icon": pid, "category": "Platform"})
+            details = {}
+
+            # Enrich Matrix integration with Continuwuity details
+            if pid == "matrix":
+                try:
+                    from gateway.continuwuity import _continuwuity_dir
+                    import os
+                    server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+                    port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+                    https_url = f"https://{server_name}" if server_name != "localhost" else f"http://localhost:{port}"
+                    details = {
+                        "server_name": server_name,
+                        "homeserver_url": https_url,
+                        "port": port,
+                    }
+                    # Count registered agents
+                    tokens_dir = _continuwuity_dir() / "tokens"
+                    if tokens_dir.exists():
+                        details["registered_agents"] = len([f for f in tokens_dir.iterdir() if f.suffix == ".json"])
+
+                    # Include owner credentials if they exist
+                    owner_creds_path = _continuwuity_dir() / "owner_credentials.json"
+                    if owner_creds_path.exists():
+                        try:
+                            owner = json.loads(owner_creds_path.read_text())
+                            details["owner_username"] = owner.get("username", "")
+                            details["owner_password"] = owner.get("password", "")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
             integrations.append({
                 "id": pid,
                 "name": meta["name"],
                 "category": meta["category"],
                 "status": info.get("state", "unknown"),
-                "details": {},
+                "details": details,
                 "updated_at": info.get("updated_at"),
             })
 
@@ -1346,6 +1692,121 @@ class WebAdapter(BasePlatformAdapter):
             })
         return secrets
 
+    def _add_secret(self, key: str, value: str) -> dict:
+        """Add or update an API key in ~/.vulti/.env."""
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            raise HTTPException(status_code=400, detail="Both key and value are required")
+
+        # Validate key name format
+        import re
+        if not re.match(r'^[A-Z][A-Z0-9_]*$', key):
+            raise HTTPException(status_code=400, detail="Key must be uppercase alphanumeric with underscores")
+
+        from vulti_cli.config import save_env_value
+        save_env_value(key, value)
+        return {"ok": True, "key": key}
+
+    def _delete_secret(self, key: str) -> dict:
+        """Remove an API key from ~/.vulti/.env."""
+        key = key.strip()
+        if not key:
+            raise HTTPException(status_code=400, detail="Key is required")
+
+        from vulti_cli.config import save_env_value
+        save_env_value(key, "")
+        return {"ok": True}
+
+    def _get_providers(self) -> list:
+        """Return available LLM providers with auth status and model lists."""
+        # Load all keys from .env file directly (same source as _get_masked_secrets)
+        configured_keys = set()
+        home = self._get_vulti_home()
+        env_file = home / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip("'\"")
+                if value:
+                    configured_keys.add(key)
+
+        # Also check live env vars
+        import os
+        for k in list(os.environ.keys()):
+            if os.environ[k].strip():
+                configured_keys.add(k)
+
+        provider_defs = [
+            {
+                "id": "anthropic",
+                "name": "Anthropic",
+                "env_keys": ["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"],
+                "models": [
+                    "anthropic/claude-opus-4.6",
+                    "anthropic/claude-sonnet-4.6",
+                    "anthropic/claude-haiku-4.5",
+                ],
+            },
+            {
+                "id": "openrouter",
+                "name": "OpenRouter",
+                "env_keys": ["OPENROUTER_API_KEY"],
+                "models": [
+                    "openrouter/anthropic/claude-opus-4",
+                    "openrouter/anthropic/claude-sonnet-4",
+                    "openrouter/google/gemini-2.5-pro",
+                    "openrouter/openai/gpt-4o",
+                    "openrouter/meta-llama/llama-4-maverick",
+                    "openrouter/deepseek/deepseek-chat-v3",
+                ],
+            },
+            {
+                "id": "openai",
+                "name": "OpenAI",
+                "env_keys": ["OPENAI_API_KEY"],
+                "models": [
+                    "openai/gpt-4o",
+                    "openai/gpt-4.1",
+                    "openai/o3",
+                ],
+            },
+            {
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "env_keys": ["DEEPSEEK_API_KEY"],
+                "models": [
+                    "deepseek/deepseek-chat",
+                    "deepseek/deepseek-reasoner",
+                ],
+            },
+            {
+                "id": "google",
+                "name": "Google AI",
+                "env_keys": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+                "models": [
+                    "google/gemini-2.5-pro",
+                    "google/gemini-2.5-flash",
+                ],
+            },
+        ]
+
+        result = []
+        for p in provider_defs:
+            authenticated = any(k in configured_keys for k in p["env_keys"])
+            result.append({
+                "id": p["id"],
+                "name": p["name"],
+                "authenticated": authenticated,
+                "models": p["models"],
+                "env_keys": p["env_keys"],
+            })
+        return result
+
     def _get_oauth_status(self) -> list:
         """Check OAuth token files for validity."""
         home = self._get_vulti_home()
@@ -1405,30 +1866,3 @@ class WebAdapter(BasePlatformAdapter):
             logger.debug("[web] Could not load analytics: %s", e)
             return {"error": str(e), "empty": True}
 
-    # --- QR Code ---
-
-    def _print_connect_qr(self):
-        """Print a QR code to the terminal for easy connection."""
-        web_url = self.config.extra.get("web_url", "")
-        if not web_url:
-            # Default to localhost frontend
-            web_url = f"http://localhost:5173"
-
-        connect_url = f"{web_url}?token={self._auth_token}"
-
-        try:
-            import qrcode
-            qr = qrcode.QRCode(box_size=1, border=1)
-            qr.add_data(connect_url)
-            qr.make(fit=True)
-
-            print("\n" + "=" * 50)
-            print("  Vulti Web Portal")
-            print("=" * 50)
-            print("\n  Scan to connect:\n")
-            qr.print_ascii(invert=True)
-            print(f"\n  Or open: {connect_url}")
-            print("=" * 50 + "\n")
-        except ImportError:
-            # qrcode not installed, just print URL
-            print(f"\n[web] Connect at: {connect_url}\n")

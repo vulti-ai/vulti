@@ -132,6 +132,7 @@ def _deliver_result(job: dict, content: str) -> None:
         "whatsapp": Platform.WHATSAPP,
         "signal": Platform.SIGNAL,
         "email": Platform.EMAIL,
+        "matrix": Platform.MATRIX,
     }
     platform = platform_map.get(platform_name.lower())
     if not platform:
@@ -215,21 +216,17 @@ def _build_job_prompt(job: dict) -> str:
 def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
     """
     Execute a single cron job.
-    
+
+    Uses the orchestrator's AgentFactory and AgentContext for proper
+    per-agent scoping instead of manual environment variable management.
+
     Returns:
         Tuple of (success, full_output_doc, final_response, error_message)
     """
-    from run_agent import AIAgent
-    
-    # Initialize SQLite session store so cron job messages are persisted
-    # and discoverable via session_search (same pattern as gateway/run.py).
-    _session_db = None
-    try:
-        from vulti_state import SessionDB
-        _session_db = SessionDB()
-    except Exception as e:
-        logger.debug("Job '%s': SQLite session store not available: %s", job.get("id", "?"), e)
-    
+    from orchestrator.agent_context import AgentContext
+    from orchestrator.agent_factory import AgentFactory
+    from cron.jobs import _get_default_agent_id
+
     job_id = job["id"]
     job_name = job["name"]
     prompt = _build_job_prompt(job)
@@ -246,8 +243,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             os.environ["VULTI_SESSION_CHAT_NAME"] = origin["chat_name"]
 
     try:
-        # Re-read .env and config.yaml fresh every run so provider/key
-        # changes take effect without a gateway restart.
+        # Re-read .env fresh every run so provider/key changes take effect
         from dotenv import load_dotenv
         try:
             load_dotenv(str(_vulti_home / ".env"), override=True, encoding="utf-8")
@@ -261,116 +257,30 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             if delivery_target.get("thread_id") is not None:
                 os.environ["VULTI_CRON_AUTO_DELIVER_THREAD_ID"] = str(delivery_target["thread_id"])
 
-        model = job.get("model") or os.getenv("VULTI_MODEL") or "anthropic/claude-opus-4.6"
+        # Resolve agent identity for this cron job
+        cron_agent_id = job.get("agent") or _get_default_agent_id()
 
-        # Load config.yaml for model, reasoning, prefill, toolsets, provider routing
-        _cfg = {}
-        try:
-            import yaml
-            _cfg_path = str(_vulti_home / "config.yaml")
-            if os.path.exists(_cfg_path):
-                with open(_cfg_path) as _f:
-                    _cfg = yaml.safe_load(_f) or {}
-                _model_cfg = _cfg.get("model", {})
-                if not job.get("model"):
-                    if isinstance(_model_cfg, str):
-                        model = _model_cfg
-                    elif isinstance(_model_cfg, dict):
-                        model = _model_cfg.get("default", model)
-        except Exception as e:
-            logger.warning("Job '%s': failed to load config.yaml, using defaults: %s", job_id, e)
+        # Use AgentFactory + AgentContext for proper scoping.
+        # The factory handles config loading, model resolution, provider
+        # credentials, reasoning config, and toolset setup.
+        factory = AgentFactory()
 
-        # Reasoning config from env or config.yaml
-        reasoning_config = None
-        effort = os.getenv("VULTI_REASONING_EFFORT", "")
-        if not effort:
-            effort = str(_cfg.get("agent", {}).get("reasoning_effort", "")).strip()
-        if effort and effort.lower() != "none":
-            valid = ("xhigh", "high", "medium", "low", "minimal")
-            if effort.lower() in valid:
-                reasoning_config = {"enabled": True, "effort": effort.lower()}
-        elif effort.lower() == "none":
-            reasoning_config = {"enabled": False}
+        # Per-job overrides that AgentFactory doesn't handle automatically
+        overrides = {
+            "disabled_toolsets": ["cronjob"],
+            "platform": "cron",
+            "session_id": f"cron_{job_id}_{_vulti_now().strftime('%Y%m%d_%H%M%S')}",
+        }
+        if job.get("model"):
+            overrides["model"] = job["model"]
+        if job.get("provider"):
+            overrides["provider_requested"] = job["provider"]
+        if job.get("base_url"):
+            overrides["explicit_base_url"] = job["base_url"]
 
-        # Prefill messages from env or config.yaml
-        prefill_messages = None
-        prefill_file = os.getenv("VULTI_PREFILL_MESSAGES_FILE", "") or _cfg.get("prefill_messages_file", "")
-        if prefill_file:
-            import json as _json
-            pfpath = Path(prefill_file).expanduser()
-            if not pfpath.is_absolute():
-                pfpath = _vulti_home / pfpath
-            if pfpath.exists():
-                try:
-                    with open(pfpath, "r", encoding="utf-8") as _pf:
-                        prefill_messages = _json.load(_pf)
-                    if not isinstance(prefill_messages, list):
-                        prefill_messages = None
-                except Exception as e:
-                    logger.warning("Job '%s': failed to parse prefill messages file '%s': %s", job_id, pfpath, e)
-                    prefill_messages = None
-
-        # Max iterations
-        max_iterations = _cfg.get("agent", {}).get("max_turns") or _cfg.get("max_turns") or 90
-
-        # Provider routing
-        pr = _cfg.get("provider_routing", {})
-        smart_routing = _cfg.get("smart_model_routing", {}) or {}
-
-        from vulti_cli.runtime_provider import (
-            resolve_runtime_provider,
-            format_runtime_provider_error,
-        )
-        try:
-            runtime_kwargs = {
-                "requested": job.get("provider") or os.getenv("VULTI_INFERENCE_PROVIDER"),
-            }
-            if job.get("base_url"):
-                runtime_kwargs["explicit_base_url"] = job.get("base_url")
-            runtime = resolve_runtime_provider(**runtime_kwargs)
-        except Exception as exc:
-            message = format_runtime_provider_error(exc)
-            raise RuntimeError(message) from exc
-
-        from agent.smart_model_routing import resolve_turn_route
-        turn_route = resolve_turn_route(
-            prompt,
-            smart_routing,
-            {
-                "model": model,
-                "api_key": runtime.get("api_key"),
-                "base_url": runtime.get("base_url"),
-                "provider": runtime.get("provider"),
-                "api_mode": runtime.get("api_mode"),
-            },
-        )
-
-        # Set agent identity env var for inter-agent messaging from cron jobs
-        cron_agent_id = job.get("agent", "default")
-        os.environ["VULTI_AGENT_ID"] = cron_agent_id
-        os.environ["VULTI_AGENT_HOP_COUNT"] = "0"
-
-        agent = AIAgent(
-            model=turn_route["model"],
-            api_key=turn_route["runtime"].get("api_key"),
-            base_url=turn_route["runtime"].get("base_url"),
-            provider=turn_route["runtime"].get("provider"),
-            api_mode=turn_route["runtime"].get("api_mode"),
-            max_iterations=max_iterations,
-            reasoning_config=reasoning_config,
-            prefill_messages=prefill_messages,
-            providers_allowed=pr.get("only"),
-            providers_ignored=pr.get("ignore"),
-            providers_order=pr.get("order"),
-            provider_sort=pr.get("sort"),
-            disabled_toolsets=["cronjob"],
-            quiet_mode=True,
-            platform="cron",
-            session_id=f"cron_{job_id}_{_vulti_now().strftime('%Y%m%d_%H%M%S')}",
-            session_db=_session_db,
-        )
-        
-        result = agent.run_conversation(prompt)
+        with AgentContext.scope(cron_agent_id, hop_count=0):
+            agent = factory.create_agent(cron_agent_id, **overrides)
+            result = agent.run_conversation(prompt)
         
         final_response = result.get("final_response", "")
         if not final_response:

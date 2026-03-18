@@ -16,6 +16,16 @@ from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
 
+
+def _get_default_agent_id() -> str:
+    """Lazy import to avoid circular dependencies."""
+    try:
+        from orchestrator.agent_registry import get_default_agent_id
+        return get_default_agent_id()
+    except Exception:
+        return "default"
+
+
 from vulti_time import now as _vulti_now
 
 # =============================================================================
@@ -129,7 +139,7 @@ def create_rule(
         "max_triggers": max_triggers,
         "cooldown_minutes": cooldown_minutes,
         "tags": tags or [],
-        "agent": agent or os.getenv("VULTI_AGENT_ID", "default"),
+        "agent": agent or os.getenv("VULTI_AGENT_ID") or _get_default_agent_id(),
     }
 
     rules = load_rules()
@@ -224,7 +234,7 @@ def get_active_rules(agent_id: Optional[str] = None) -> List[Dict[str, Any]]:
     Returns rules sorted by priority (lowest first).
     """
     now = _vulti_now()
-    effective_agent = agent_id or os.getenv("VULTI_AGENT_ID", "default")
+    effective_agent = agent_id or os.getenv("VULTI_AGENT_ID") or _get_default_agent_id()
     rules = load_rules()
     active = []
 

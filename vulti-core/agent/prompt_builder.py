@@ -156,6 +156,14 @@ PLATFORM_HINTS = {
         "is preserved for threading. Do not include greetings or sign-offs unless "
         "contextually appropriate."
     ),
+    "matrix": (
+        "You are communicating via Matrix, a federated messaging protocol. "
+        "Markdown is fully supported. You can send media files natively: "
+        "include MEDIA:/absolute/path/to/file in your response. The file "
+        "will be uploaded and sent as a native Matrix attachment. You can "
+        "also include image URLs in markdown format ![alt](url) and they "
+        "will be sent as image attachments."
+    ),
     "cron": (
         "You are running as a scheduled cron job. Your final response is automatically "
         "delivered to the job's configured destination, so do not use send_message to "

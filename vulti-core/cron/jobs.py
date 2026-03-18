@@ -17,6 +17,16 @@ from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
 
+
+def _get_default_agent_id() -> str:
+    """Lazy import to avoid circular dependencies."""
+    try:
+        from orchestrator.agent_registry import get_default_agent_id
+        return get_default_agent_id()
+    except Exception:
+        return "default"
+
+
 from vulti_time import now as _vulti_now
 
 try:
@@ -369,7 +379,7 @@ def create_job(
         "deliver": deliver,
         "origin": origin,  # Tracks where job was created for "origin" delivery
         # Agent scope -- which agent owns this cron job
-        "agent": agent or os.getenv("VULTI_AGENT_ID", "default"),
+        "agent": agent or os.getenv("VULTI_AGENT_ID") or _get_default_agent_id(),
     }
 
     jobs = load_jobs()

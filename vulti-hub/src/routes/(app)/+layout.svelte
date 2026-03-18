@@ -110,6 +110,7 @@
 						title={item.label}
 						class="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors"
 						class:bg-primary={store.currentView === item.id}
+						class:animate-rainbow={store.currentView === item.id}
 						class:text-white={store.currentView === item.id}
 						class:text-slate-400={store.currentView !== item.id}
 						class:hover:bg-surface-hover={store.currentView !== item.id}

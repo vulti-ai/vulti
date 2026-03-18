@@ -3,6 +3,16 @@ use std::sync::Mutex;
 use tauri::{Manager, menu::{Menu, MenuItem}, tray::TrayIconBuilder};
 use serde::Serialize;
 
+mod types;
+mod vulti_home;
+mod agents;
+mod memories;
+mod rules;
+mod cron;
+mod secrets;
+mod sessions;
+mod status;
+
 // Hold the gateway child process so we can kill it on exit
 struct GatewayProcess(Mutex<Option<std::process::Child>>);
 
@@ -186,12 +196,48 @@ fn open_tailscale() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn get_continuwuity_path(app_handle: tauri::AppHandle) -> Result<String, String> {
+    // Resolve the bundled sidecar binary path.
+    // Tauri places sidecars next to the app binary with the original name.
+    let resource_dir = app_handle.path().resource_dir()
+        .map_err(|e| format!("Cannot resolve resource dir: {}", e))?;
+
+    // Check for the sidecar binary (Tauri strips the target triple at runtime)
+    let sidecar_path = resource_dir.join("continuwuity");
+    if sidecar_path.exists() {
+        let path_str = sidecar_path.to_string_lossy().to_string();
+        // Write to a well-known location so the Python gateway can find it
+        let home = std::env::var("HOME").unwrap_or_default();
+        let marker_dir = format!("{}/.vulti/continuwuity", home);
+        let _ = std::fs::create_dir_all(&marker_dir);
+        let _ = std::fs::write(format!("{}/sidecar_path", marker_dir), &path_str);
+        return Ok(path_str);
+    }
+
+    Err("Bundled continuwuity binary not found".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(GatewayProcess(Mutex::new(None)))
         .setup(|app| {
+            // Write the bundled continuwuity sidecar path so the Python gateway can find it
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let sidecar = resource_dir.join("continuwuity");
+                if sidecar.exists() {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let marker_dir = format!("{}/.vulti/continuwuity", home);
+                    let _ = std::fs::create_dir_all(&marker_dir);
+                    let _ = std::fs::write(
+                        format!("{}/sidecar_path", marker_dir),
+                        sidecar.to_string_lossy().as_ref(),
+                    );
+                }
+            }
+
             let quit = MenuItem::with_id(app, "quit", "Quit Vulti", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -215,7 +261,27 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![start_gateway, check_gateway, stop_gateway, get_gateway_token, tailscale_status, install_tailscale, open_tailscale])
+        .invoke_handler(tauri::generate_handler![
+            // Existing gateway management
+            start_gateway, check_gateway, stop_gateway, get_gateway_token,
+            tailscale_status, install_tailscale, open_tailscale, get_continuwuity_path,
+            // Agents
+            agents::list_agents, agents::get_agent, agents::create_agent, agents::update_agent,
+            // Memories & Soul
+            memories::get_memories, memories::update_memory, memories::get_soul, memories::update_soul,
+            // Rules
+            rules::list_rules, rules::create_rule, rules::update_rule, rules::delete_rule,
+            // Cron
+            cron::list_cron, cron::create_cron, cron::update_cron, cron::delete_cron,
+            // Secrets & Providers
+            secrets::list_secrets, secrets::add_secret, secrets::delete_secret,
+            secrets::list_providers, secrets::get_oauth_status,
+            // Sessions
+            sessions::list_sessions, sessions::create_session, sessions::delete_session,
+            sessions::get_history,
+            // Status
+            status::get_system_status, status::get_channel_directory, status::get_integrations,
+        ])
         .build(tauri::generate_context!())
         .expect("error while building Vulti Gateway")
         .run(|app, event| {
