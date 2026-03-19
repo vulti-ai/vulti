@@ -342,24 +342,43 @@
 					</div>
 				</div>
 
-			{:else if wallet.crypto}
+			{:else if vaultLoading}
+				<div class="flex items-center justify-center py-12">
+					<svg class="animate-spin h-6 w-6 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+						<path d="M21 12a9 9 0 1 1-6.219-8.56" />
+					</svg>
+				</div>
+
+			{:else if vaultInfo}
 				<div class="flex items-center justify-between mb-4">
 					<h3 class="text-sm font-medium uppercase text-ink-muted">Vultisig Fast Vault</h3>
 				</div>
 				<div class="rounded-xl border border-border bg-surface p-5 space-y-3">
 					<div class="flex justify-between">
 						<span class="text-xs text-ink-muted">Vault</span>
-						<span class="text-sm text-ink font-medium">{wallet.crypto.name}</span>
+						<span class="text-sm text-ink font-medium">{vaultInfo.name}</span>
 					</div>
-					<div class="flex justify-between">
-						<span class="text-xs text-ink-muted">Email</span>
-						<span class="text-sm text-ink">{wallet.crypto.email}</span>
-					</div>
-					<div class="flex justify-between">
-						<span class="text-xs text-ink-muted">Vault ID</span>
-						<span class="text-sm text-ink font-mono">{truncateKey(wallet.crypto.vaultId)}</span>
-					</div>
+					{#if vaultInfo.vault_id}
+						<div class="flex justify-between">
+							<span class="text-xs text-ink-muted">Vault ID</span>
+							<span class="text-sm text-ink font-mono">{truncateKey(vaultInfo.vault_id)}</span>
+						</div>
+					{/if}
 				</div>
+
+				{#if Object.keys(vaultAddresses).length > 0}
+					<div class="mt-4">
+						<h3 class="text-sm font-medium uppercase text-ink-muted mb-3">Addresses</h3>
+						<div class="rounded-xl border border-border bg-surface p-5 space-y-3">
+							{#each Object.entries(vaultAddresses) as [chain, address]}
+								<div class="flex justify-between gap-4">
+									<span class="text-xs text-ink-muted uppercase shrink-0">{chain}</span>
+									<span class="text-xs text-ink font-mono truncate">{address}</span>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
 
 			{:else}
 				<div class="flex flex-col items-center justify-center py-12 text-center">

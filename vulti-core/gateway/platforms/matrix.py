@@ -83,6 +83,10 @@ class MatrixAdapter(BasePlatformAdapter):
         self._health_task: Optional[asyncio.Task] = None
         self._last_sync_activity: float = 0.0
         self._connect_timestamp: int = 0  # milliseconds, set on connect
+        # Track which agent sent which event (for thread targeting)
+        self._sent_event_to_agent: Dict[str, str] = {}
+        # Dedup: track event_ids already processed for group fan-out
+        self._processed_group_events: Dict[str, float] = {}
 
         self._load_agent_credentials()
 
@@ -156,14 +160,17 @@ class MatrixAdapter(BasePlatformAdapter):
                                 await cli.join(room.room_id)
                             except Exception as e:
                                 logger.warning("Matrix: %s failed to join %s: %s", aid, room.room_id, e)
-                    return on_msg, on_img, on_audio, on_file, on_invite
+                    async def on_member(room, event):
+                        await self._on_member_change(room, event, aid, cli)
+                    return on_msg, on_img, on_audio, on_file, on_invite, on_member
 
-                on_msg, on_img, on_audio, on_file, on_invite = make_callbacks(agent_id, client)
+                on_msg, on_img, on_audio, on_file, on_invite, on_member = make_callbacks(agent_id, client)
                 client.add_event_callback(on_msg, nio.RoomMessageText)
                 client.add_event_callback(on_img, nio.RoomMessageImage)
                 client.add_event_callback(on_audio, nio.RoomMessageAudio)
                 client.add_event_callback(on_file, nio.RoomMessageFile)
                 client.add_event_callback(on_invite, nio.InviteMemberEvent)
+                client.add_event_callback(on_member, nio.RoomMemberEvent)
 
             # Use the primary agent's client as self._client (for compatibility)
             primary_agent_id = None
@@ -352,45 +359,123 @@ class MatrixAdapter(BasePlatformAdapter):
             text,
         )
 
-    def _detect_target_agent(self, room, sender: str, text: str, receiving_agent_id: str) -> Tuple[str, str]:
-        """Detect which agent should handle this message.
+    # ------------------------------------------------------------------
+    # Message routing helpers
+    # ------------------------------------------------------------------
 
-        Returns (agent_id_hint, cleaned_text).
-        For DMs, returns the agent that owns the DM room.
-        For group rooms, parses @mentions.
+    def _detect_mentioned_agents(self, text: str) -> List[str]:
+        """Detect agents mentioned in message text.
+
+        Matches both @agent_id syntax and plain-text agent names (case-insensitive).
         """
-        chat_type = self._determine_chat_type(room)
-
-        if chat_type == "dm":
-            # In a DM, the target is the agent who is in this room
-            return receiving_agent_id, text
-
-        # Group room: translate Matrix mentions to gateway format
+        mentioned = []
+        # 1. @agent_id mentions (Matrix-style translated)
         translated = self._translate_mentions(text)
-        return "", translated  # Let the gateway resolve from the translated @mention
+        for match in re.finditer(r"@([a-z][a-z0-9\-]*)", translated):
+            candidate = match.group(1)
+            if candidate in self._agent_clients and candidate not in mentioned:
+                mentioned.append(candidate)
 
-    async def _on_room_message(self, room, event, agent_id: str, client) -> None:
-        """Handle incoming text messages for a specific agent."""
-        # Skip messages from any Vulti agent
-        if event.sender in self._agent_user_ids:
-            return
+        # 2. Plain-text agent name mentions (e.g., "Hector" or "hector")
+        if not mentioned:
+            text_lower = text.lower()
+            for agent_id in self._agent_clients:
+                # Match agent_id as a word boundary
+                if re.search(r'\b' + re.escape(agent_id) + r'\b', text_lower):
+                    if agent_id not in mentioned:
+                        mentioned.append(agent_id)
+            # Also check display names from agent registry
+            if not mentioned:
+                try:
+                    from vulti_cli.agent_registry import AgentRegistry
+                    reg = AgentRegistry()
+                    for agent_id in self._agent_clients:
+                        agent = reg.get_agent(agent_id)
+                        if agent and agent.name:
+                            if re.search(r'\b' + re.escape(agent.name.lower()) + r'\b', text_lower):
+                                if agent_id not in mentioned:
+                                    mentioned.append(agent_id)
+                except Exception:
+                    pass
+        return mentioned
 
-        # Skip old messages (before adapter started) using timestamp
-        if event.server_timestamp and event.server_timestamp < self._connect_timestamp:
-            return
+    def _get_room_agent_ids(self, room) -> List[str]:
+        """Return agent IDs that are members of this room."""
+        agents = []
+        if hasattr(room, "users"):
+            for uid in room.users:
+                agent_id = self._matrix_to_agent.get(uid)
+                if agent_id and agent_id in self._agent_clients:
+                    agents.append(agent_id)
+        return agents
 
-        # In group rooms, only the primary agent processes (to avoid duplicates)
-        chat_type = self._determine_chat_type(room)
-        if chat_type == "group":
-            primary_id = next(iter(self._agent_clients), None)
-            if agent_id != primary_id:
-                return  # Only primary agent processes group messages
+    def _get_owner_user_id(self) -> Optional[str]:
+        """Get the owner's Matrix user_id."""
+        if not hasattr(self, "_owner_user_id_cached"):
+            self._owner_user_id_cached = None
+            try:
+                from gateway.matrix_agents import _tokens_dir
+                owner_path = _tokens_dir() / "_owner.json"
+                if owner_path.exists():
+                    self._owner_user_id_cached = _json.loads(owner_path.read_text()).get("user_id")
+            except Exception:
+                pass
+        return self._owner_user_id_cached
 
-        logger.info("Matrix: message from %s in %s (%s) → agent %s: %s",
-                    event.sender, room.display_name or room.room_id, chat_type,
-                    agent_id, (event.body or "")[:80])
+    def _detect_thread_target(self, event) -> Optional[str]:
+        """If this message is a thread reply to an agent's message, return that agent_id."""
+        content = getattr(event, "source", {}).get("content", {}) if hasattr(event, "source") else {}
+        relates_to = content.get("m.relates_to", {})
+        thread_root = relates_to.get("event_id") if relates_to.get("rel_type") == "m.thread" else None
+        if not thread_root:
+            return None
+        return self._sent_event_to_agent.get(thread_root)
 
-        target_agent, cleaned_text = self._detect_target_agent(room, event.sender, event.body or "", agent_id)
+    def _track_sent_event(self, event_id: str, agent_id: str) -> None:
+        """Record which agent sent an event (for thread targeting)."""
+        self._sent_event_to_agent[event_id] = agent_id
+        # Cap at 10k entries
+        if len(self._sent_event_to_agent) > 10000:
+            oldest = next(iter(self._sent_event_to_agent))
+            del self._sent_event_to_agent[oldest]
+
+    def _determine_chat_type(self, room) -> str:
+        """Determine if a room is a DM or group chat.
+
+        DM = exactly 1 human + 1 agent. Everything else is group.
+        """
+        if not hasattr(room, "users"):
+            if hasattr(room, "member_count"):
+                return "dm" if room.member_count <= 2 else "group"
+            return "group"
+
+        humans = 0
+        agents = 0
+        for uid in room.users:
+            if uid in self._agent_user_ids:
+                agents += 1
+            else:
+                humans += 1
+        return "dm" if humans <= 1 and agents == 1 else "group"
+
+    # ------------------------------------------------------------------
+    # Message dispatch
+    # ------------------------------------------------------------------
+
+    async def _dispatch_to_agent(
+        self, room, event, agent_id: str, chat_type: str,
+        response_required: bool, msg_type: MessageType = MessageType.TEXT,
+        media_urls: List[str] = None, media_types: List[str] = None,
+    ) -> None:
+        """Build a MessageEvent and dispatch to the gateway for a specific agent."""
+        text = self._translate_mentions(event.body or "")
+
+        # Thread detection
+        thread_id = None
+        content = getattr(event, "source", {}).get("content", {}) if hasattr(event, "source") else {}
+        relates_to = content.get("m.relates_to", {})
+        if relates_to.get("rel_type") == "m.thread":
+            thread_id = relates_to.get("event_id")
 
         source = self.build_source(
             chat_id=room.room_id,
@@ -398,13 +483,8 @@ class MatrixAdapter(BasePlatformAdapter):
             chat_type=chat_type,
             user_id=event.sender,
             user_name=room.user_name(event.sender) or event.sender,
+            thread_id=thread_id,
         )
-
-        # If we detected a specific agent for a DM, prefix the text with @agent_id
-        # so the gateway routes it correctly
-        final_text = cleaned_text
-        if target_agent and chat_type == "dm":
-            final_text = f"@{target_agent} {cleaned_text}"
 
         timestamp = datetime.fromtimestamp(
             event.server_timestamp / 1000, tz=timezone.utc
@@ -412,32 +492,70 @@ class MatrixAdapter(BasePlatformAdapter):
 
         msg_event = MessageEvent(
             source=source,
-            text=final_text,
-            message_type=MessageType.TEXT,
+            text=text,
+            message_type=msg_type,
             message_id=event.event_id,
             timestamp=timestamp,
+            target_agent_id=agent_id,
+            response_required=response_required,
+            media_urls=media_urls or [],
+            media_types=media_types or [],
         )
 
-        logger.info("Matrix: dispatching to gateway: text='%s' chat_id=%s chat_type=%s",
-                     final_text[:100], room.room_id, chat_type)
+        logger.info("Matrix: dispatch → %s (required=%s) chat=%s text='%s'",
+                     agent_id, response_required, chat_type, text[:80])
         await self.handle_message(msg_event)
 
-    async def _on_room_media(self, room, event, agent_id: str, client, msg_type: MessageType) -> None:
-        """Handle incoming media messages for a specific agent."""
+    async def _on_room_message(self, room, event, agent_id: str, client) -> None:
+        """Handle incoming text messages.
+
+        DMs: only the DM agent handles, must respond.
+        Groups: fan out to all agents in the room. @mentioned agents and
+        thread-reply targets must respond; others observe and may stay silent.
+        """
         if event.sender in self._agent_user_ids:
             return
         if event.server_timestamp and event.server_timestamp < self._connect_timestamp:
             return
 
         chat_type = self._determine_chat_type(room)
-        if chat_type == "group":
-            primary_id = next(iter(self._agent_clients), None)
-            if agent_id != primary_id:
-                return
 
+        if chat_type == "dm":
+            await self._dispatch_to_agent(room, event, agent_id, chat_type, response_required=True)
+            return
+
+        # Group: dedup — only the first callback to see this event does the fan-out
+        if event.event_id in self._processed_group_events:
+            return
+        self._processed_group_events[event.event_id] = time.time()
+        # Cap dedup cache
+        if len(self._processed_group_events) > 5000:
+            oldest = next(iter(self._processed_group_events))
+            del self._processed_group_events[oldest]
+
+        # Fan out to all agents in the room
+        room_agents = self._get_room_agent_ids(room)
+        if not room_agents:
+            # Fallback: use all connected agents
+            room_agents = [aid for aid, info in self._agent_clients.items() if info.get("client")]
+
+        mentioned = self._detect_mentioned_agents(event.body or "")
+        thread_target = self._detect_thread_target(event)
+
+        for aid in room_agents:
+            must_respond = (aid in mentioned) or (aid == thread_target)
+            await self._dispatch_to_agent(room, event, aid, chat_type, response_required=must_respond)
+
+    async def _on_room_media(self, room, event, agent_id: str, client, msg_type: MessageType) -> None:
+        """Handle incoming media messages."""
+        if event.sender in self._agent_user_ids:
+            return
+        if event.server_timestamp and event.server_timestamp < self._connect_timestamp:
+            return
+
+        # Download media
         media_urls = []
         media_types = []
-
         try:
             import nio
             resp = await client.download(event.url)
@@ -455,63 +573,72 @@ class MatrixAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.warning("Matrix: failed to download media: %s", e)
 
-        target_agent, _ = self._detect_target_agent(room, event.sender, "", agent_id)
+        chat_type = self._determine_chat_type(room)
 
-        source = self.build_source(
-            chat_id=room.room_id,
-            chat_name=room.display_name or room.room_id,
-            chat_type=chat_type,
-            user_id=event.sender,
-            user_name=room.user_name(event.sender) or event.sender,
-        )
+        if chat_type == "dm":
+            await self._dispatch_to_agent(
+                room, event, agent_id, chat_type, response_required=True,
+                msg_type=msg_type, media_urls=media_urls, media_types=media_types,
+            )
+            return
 
-        text = event.body or ""
-        if target_agent and chat_type == "dm":
-            text = f"@{target_agent} {text}"
+        # Group: dedup fan-out
+        if event.event_id in self._processed_group_events:
+            return
+        self._processed_group_events[event.event_id] = time.time()
 
-        msg_event = MessageEvent(
-            source=source,
-            text=text,
-            message_type=msg_type,
-            message_id=event.event_id,
-            media_urls=media_urls,
-            media_types=media_types,
-        )
+        room_agents = self._get_room_agent_ids(room)
+        if not room_agents:
+            room_agents = [aid for aid, info in self._agent_clients.items() if info.get("client")]
+        for aid in room_agents:
+            await self._dispatch_to_agent(
+                room, event, aid, chat_type, response_required=False,
+                msg_type=msg_type, media_urls=media_urls, media_types=media_types,
+            )
 
-        await self.handle_message(msg_event)
+    async def _on_member_change(self, room, event, agent_id: str, client) -> None:
+        """Handle room membership changes.
 
-    def _determine_chat_type(self, room) -> str:
-        """Determine if a room is a DM or group chat."""
-        if hasattr(room, "member_count"):
-            return "dm" if room.member_count <= 2 else "group"
-        if hasattr(room, "users"):
-            return "dm" if len(room.users) <= 2 else "group"
-        return "group"
+        If the owner leaves a DM, the agent leaves too.
+        """
+        owner_uid = self._get_owner_user_id()
+        if not owner_uid:
+            return
+        if event.state_key != owner_uid:
+            return
+        if getattr(event, "membership", "") != "leave":
+            return
+
+        chat_type = self._determine_chat_type(room)
+        if chat_type != "dm":
+            return
+
+        try:
+            await client.room_leave(room.room_id)
+            logger.info("Matrix: %s left room %s (owner left DM)", agent_id, room.room_id)
+        except Exception as e:
+            logger.warning("Matrix: %s failed to leave %s: %s", agent_id, room.room_id, e)
 
     def _get_agent_client_for_room(self, room_id: str):
         """Find the correct agent client to use for sending to a room.
 
-        For DM rooms, find which agent is in the room and use their client.
-        For group rooms, use the active agent's client (from VULTI_AGENT_ID)
-        so each agent sends as themselves.
+        Always prefer the current agent (VULTI_AGENT_ID) so each agent
+        sends as themselves. Falls back to any agent in the room.
         """
-        # Check each agent's client to see if they're in this room
-        for agent_id, info in self._agent_clients.items():
-            cli = info.get("client")
-            if cli and room_id in cli.rooms:
-                room = cli.rooms[room_id]
-                chat_type = self._determine_chat_type(room)
-                if chat_type == "dm":
-                    return cli
-
-        # For group rooms, use the current agent's client if available
+        # Use the current agent's client (set by the gateway for each agent run)
         current_agent = os.environ.get("VULTI_AGENT_ID", "")
         if current_agent and current_agent in self._agent_clients:
             cli = self._agent_clients[current_agent].get("client")
             if cli:
                 return cli
 
-        # Fallback to primary
+        # Fallback: find any agent that's in this room
+        for agent_id, info in self._agent_clients.items():
+            cli = info.get("client")
+            if cli and room_id in cli.rooms:
+                return cli
+
+        # Last resort: primary client
         return self._client
 
     async def send(
@@ -555,6 +682,10 @@ class MatrixAdapter(BasePlatformAdapter):
             )
 
             if isinstance(resp, nio.RoomSendResponse):
+                # Track for thread targeting
+                current_agent = os.environ.get("VULTI_AGENT_ID", "")
+                if current_agent:
+                    self._track_sent_event(resp.event_id, current_agent)
                 return SendResult(success=True, message_id=resp.event_id)
             else:
                 error_msg = str(resp) if resp else "Unknown error"

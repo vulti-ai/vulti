@@ -1478,8 +1478,8 @@ class GatewayRunner:
             return None
         
         # Resolve which agent should handle this message
-        # If the event already has an agent_id (e.g., from web hub session), use that
-        _pre_resolved = getattr(event, '_agent_id', "")
+        # Priority: target_agent_id (from adapter) > _agent_id (web hub) > _resolve_agent_for_source
+        _pre_resolved = getattr(event, 'target_agent_id', "") or getattr(event, '_agent_id', "")
         if _pre_resolved:
             _resolved_agent_id = _pre_resolved
             _resolved_text = event.text or ""
@@ -2354,6 +2354,16 @@ class GatewayRunner:
             }
             await self.hooks.emit("agent:start", hook_ctx)
             
+            # Group observe mode: agent reads but may stay silent
+            _response_required = getattr(event, 'response_required', True)
+            if not _response_required:
+                context_prompt += (
+                    "\n\n[System: You are observing a group conversation. "
+                    "Only respond if you have something genuinely relevant to contribute "
+                    "based on your role and expertise. It is perfectly fine to stay silent. "
+                    "If you have nothing to add, respond with exactly: [SILENT]]"
+                )
+
             # Run the agent
             agent_result = await self._run_agent(
                 message=message_text,
@@ -2364,8 +2374,16 @@ class GatewayRunner:
                 session_key=session_key,
                 agent_id=_resolved_agent_id,
             )
-            
+
             response = agent_result.get("final_response") or ""
+
+            # Suppress silent responses from group observers
+            if not _response_required and (
+                not response.strip()
+                or "[SILENT]" in response
+                or response.strip().lower() in ("", "[silent]")
+            ):
+                return None
             agent_messages = agent_result.get("messages", [])
 
             # Surface error details when the agent failed silently (final_response=None)
@@ -4956,7 +4974,7 @@ class GatewayRunner:
                     "message_preview": message[:200],
                 })
                 _final = result.get("final_response", "")
-                if _final:
+                if _final and "[SILENT]" not in _final:
                     _audit_emit("message_response", agent_id=_audit_agent, details={
                         "platform": _audit_platform,
                         "response_preview": _final[:200],

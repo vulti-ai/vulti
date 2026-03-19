@@ -298,7 +298,11 @@ class MessageEvent:
     
     # Timestamps
     timestamp: datetime = field(default_factory=datetime.now)
-    
+
+    # Agent routing (set by platform adapters)
+    target_agent_id: Optional[str] = None      # Pre-resolved agent that should handle this
+    response_required: bool = True              # False = agent may stay silent (group observe)
+
     def is_command(self) -> bool:
         """Check if this is a command message (e.g., /new, /reset)."""
         return self.text.startswith("/")
