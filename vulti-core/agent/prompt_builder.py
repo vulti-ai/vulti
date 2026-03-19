@@ -604,10 +604,12 @@ def build_wallet_prompt(agent_id: Optional[str] = None) -> str:
 
     crypto = data.get("crypto")
     if crypto and crypto.get("vault_id"):
+        vultisig_bin = str(_vulti_home / "vultisig-cli" / "node_modules" / ".bin" / "vultisig")
         sections.append(
             f"- Vultisig vault: \"{crypto.get('name', 'Vault')}\" "
             f"(ID: {crypto['vault_id'][:16]}..., email: {crypto.get('email', '?')})\n"
-            f"  Use `npx vultisig` CLI with `--vault {crypto['vault_id']}` for crypto operations. "
+            f"  CLI binary: `{vultisig_bin}`\n"
+            f"  Use with `--vault {crypto['vault_id']}` for crypto operations. "
             f"Load the 'vultisig-cli' skill for command reference."
         )
 

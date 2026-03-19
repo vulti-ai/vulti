@@ -34,6 +34,14 @@
 </script>
 
 <div>
+		<div class="flex justify-end px-6 py-2">
+			<button
+				onclick={() => (showCreate = !showCreate)}
+				class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
+			>
+				{showCreate ? 'Cancel' : '+ New Job'}
+			</button>
+		</div>
 		<!-- Create form -->
 		{#if showCreate}
 			<div class="border-b border-border p-4">

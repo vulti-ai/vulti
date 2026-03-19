@@ -37,17 +37,15 @@
 	}
 </script>
 
-<div class="flex h-full flex-col">
-	<div class="flex shrink-0 items-center justify-end border-b border-border px-6 py-2">
-		<button
-			onclick={() => (showCreate = !showCreate)}
-			class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
-		>
-			{showCreate ? 'Cancel' : '+ New Rule'}
-		</button>
-	</div>
-
-	<div class="flex-1 overflow-y-auto">
+<div>
+		<div class="flex justify-end px-6 py-2">
+			<button
+				onclick={() => (showCreate = !showCreate)}
+				class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
+			>
+				{showCreate ? 'Cancel' : '+ New Rule'}
+			</button>
+		</div>
 		<!-- Create form -->
 		{#if showCreate}
 			<div class="border-b border-border p-4">
@@ -154,5 +152,4 @@
 				{/each}
 			</div>
 		{/if}
-	</div>
 </div>

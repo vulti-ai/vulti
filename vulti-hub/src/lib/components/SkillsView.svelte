@@ -149,12 +149,6 @@
 					</div>
 					<p class="text-sm font-medium text-ink-dim">No skills installed</p>
 					<p class="mt-1 text-xs text-ink-muted">Add skills to give this agent specialized abilities</p>
-					<button
-						class="mt-4 rounded-lg bg-primary animate-rainbow px-6 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:shadow-md"
-						onclick={() => showBrowser = true}
-					>
-						Browse Skills
-					</button>
 				</div>
 			{:else}
 				<div class="px-6 py-2">

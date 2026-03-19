@@ -122,6 +122,27 @@ export const api = {
 	resendVaultVerification(vaultId: string, email: string, password: string) {
 		return invoke<boolean>('resend_vault_verification', { vaultId, email, password });
 	},
+	ensureVultisig() {
+		return invoke<string>('ensure_vultisig');
+	},
+	vaultAddresses(vaultId: string) {
+		return invoke<Record<string, unknown>>('vault_addresses', { vaultId });
+	},
+	vaultBalance(vaultId: string, chain?: string, includeTokens?: boolean) {
+		return invoke<Record<string, unknown>>('vault_balance', { vaultId, chain: chain || null, includeTokens: includeTokens || null });
+	},
+	vaultSend(vaultId: string, chain: string, to: string, password: string, opts?: { amount?: string; token?: string; max?: boolean; memo?: string }) {
+		return invoke<Record<string, unknown>>('vault_send', { vaultId, chain, to, password, amount: opts?.amount || null, token: opts?.token || null, max: opts?.max || null, memo: opts?.memo || null });
+	},
+	vaultSwap(vaultId: string, fromChain: string, toChain: string, password: string, opts?: { amount?: string; max?: boolean }) {
+		return invoke<Record<string, unknown>>('vault_swap', { vaultId, fromChain, toChain, password, amount: opts?.amount || null, max: opts?.max || null });
+	},
+	vaultSwapQuote(vaultId: string, fromChain: string, toChain: string, amount?: string) {
+		return invoke<Record<string, unknown>>('vault_swap_quote', { vaultId, fromChain, toChain, amount: amount || null });
+	},
+	vaultPortfolio(vaultId: string) {
+		return invoke<Record<string, unknown>>('vault_portfolio', { vaultId });
+	},
 
 	// Sessions
 	listSessions(agentId?: string) {

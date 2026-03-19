@@ -139,6 +139,16 @@
 		store.activeAgentId;
 		loadWallet();
 	});
+
+	// Reload when agent sends a message (vault may have been modified via chat)
+	let lastMsgCount = $state(0);
+	$effect(() => {
+		const count = store.messages.length;
+		if (count > lastMsgCount && lastMsgCount > 0) {
+			loadWallet();
+		}
+		lastMsgCount = count;
+	});
 </script>
 
 <div class="flex h-full flex-col">
@@ -154,8 +164,7 @@
 			>Crypto</button>
 		</div>
 	</div>
-	<div class="flex-1 overflow-y-auto">
-	<div class="mx-auto max-w-4xl p-6">
+	<div class="flex-1 overflow-y-auto p-6">
 
 		{#if loading}
 			<p class="text-sm text-ink-muted">Loading...</p>
@@ -326,6 +335,5 @@
 			{/if}
 		{/if}
 
-	</div>
 	</div>
 </div>

@@ -619,17 +619,56 @@ pub fn get_wallet(agent_id: String) -> Result<WalletResponse, String> {
     Ok(wallet_to_response(&wallet))
 }
 
-/// Find the npx binary path via login shell.
-fn find_npx() -> Result<String, String> {
-    let output = std::process::Command::new("/bin/zsh")
-        .args(["-lc", "which npx"])
-        .output()
-        .map_err(|e| format!("Failed to find npx: {}", e))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        Err("npx not found. Install Node.js first.".to_string())
+/// Return the path to the vultisig CLI binary.
+/// Installs it into ~/.vulti/vultisig-cli/ if not already present.
+fn ensure_vultisig_cli() -> Result<String, String> {
+    let cli_dir = vulti_home().join("vultisig-cli");
+    let bin_path = cli_dir.join("node_modules").join(".bin").join("vultisig");
+
+    if bin_path.exists() {
+        return Ok(bin_path.to_string_lossy().to_string());
     }
+
+    // Install @vultisig/cli locally
+    ensure_dir(&cli_dir)?;
+
+    // Find npm
+    let npm_output = std::process::Command::new("/bin/zsh")
+        .args(["-lc", "which npm"])
+        .output()
+        .map_err(|e| format!("Failed to find npm: {}", e))?;
+    if !npm_output.status.success() {
+        return Err("npm not found. Install Node.js first.".to_string());
+    }
+    let npm = String::from_utf8_lossy(&npm_output.stdout).trim().to_string();
+
+    let install = std::process::Command::new("/bin/zsh")
+        .args([
+            "-lc",
+            &format!("cd {} && {} install --save @vultisig/cli@latest 2>&1",
+                shell_escape::escape(cli_dir.to_string_lossy().into()),
+                npm,
+            ),
+        ])
+        .output()
+        .map_err(|e| format!("Failed to install vultisig CLI: {}", e))?;
+
+    if !install.status.success() {
+        let stderr = String::from_utf8_lossy(&install.stderr);
+        return Err(format!("Failed to install vultisig CLI: {}", stderr.trim()));
+    }
+
+    if bin_path.exists() {
+        Ok(bin_path.to_string_lossy().to_string())
+    } else {
+        Err("vultisig CLI installed but binary not found".to_string())
+    }
+}
+
+/// Ensure the vultisig CLI is installed. Called at app startup.
+#[tauri::command]
+pub fn ensure_vultisig() -> Result<String, String> {
+    ensure_vultisig_cli()
 }
 
 /// Create a Vultisig fast vault via the CLI. Returns the vault ID (ECDSA public key).
@@ -641,7 +680,7 @@ pub async fn create_fast_vault(
     email: String,
     password: String,
 ) -> Result<String, String> {
-    let npx = find_npx()?;
+    let vultisig_bin = ensure_vultisig_cli()?;
 
     // Snapshot existing vault files before creation
     let vultisig_home = dirs::home_dir()
@@ -665,8 +704,8 @@ pub async fn create_fast_vault(
         .args([
             "-lc",
             &format!(
-                "{} vultisig create fast --name {} --email {} --password {}",
-                npx,
+                "{} create fast --name {} --email {} --password {}",
+                vultisig_bin,
                 shell_escape::escape(name.into()),
                 shell_escape::escape(email.into()),
                 shell_escape::escape(password.into()),
@@ -740,13 +779,13 @@ pub async fn create_fast_vault(
 /// Verify a Vultisig fast vault with the emailed code.
 #[tauri::command]
 pub async fn verify_fast_vault(vault_id: String, code: String) -> Result<bool, String> {
-    let npx = find_npx()?;
+    let vultisig_bin = ensure_vultisig_cli()?;
     let output = tokio::process::Command::new("/bin/zsh")
         .args([
             "-lc",
             &format!(
-                "{} vultisig verify {} --code {} --silent",
-                npx,
+                "{} verify {} --code {} --silent",
+                vultisig_bin,
                 shell_escape::escape(vault_id.into()),
                 shell_escape::escape(code.into()),
             ),
@@ -770,13 +809,13 @@ pub async fn resend_vault_verification(
     email: String,
     password: String,
 ) -> Result<bool, String> {
-    let npx = find_npx()?;
+    let vultisig_bin = ensure_vultisig_cli()?;
     let output = tokio::process::Command::new("/bin/zsh")
         .args([
             "-lc",
             &format!(
-                "{} vultisig verify {} --resend --email {} --password {} --silent",
-                npx,
+                "{} verify {} --resend --email {} --password {} --silent",
+                vultisig_bin,
                 shell_escape::escape(vault_id.into()),
                 shell_escape::escape(email.into()),
                 shell_escape::escape(password.into()),
@@ -792,6 +831,141 @@ pub async fn resend_vault_verification(
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("Resend failed: {}", stderr.trim()))
     }
+}
+
+/// Run an arbitrary vultisig CLI command. Returns JSON stdout.
+async fn run_vultisig(args: &str, vault_id: Option<&str>) -> Result<serde_json::Value, String> {
+    let bin = ensure_vultisig_cli()?;
+    let vault_flag = vault_id
+        .map(|v| format!("--vault {}", shell_escape::escape(v.into())))
+        .unwrap_or_default();
+    let cmd = format!("{} {} {} -o json --silent", bin, vault_flag, args);
+
+    let output = tokio::process::Command::new("/bin/zsh")
+        .args(["-lc", &cmd])
+        .output()
+        .await
+        .map_err(|e| format!("CLI error: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        // Try to parse JSON error
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+            if let Some(msg) = json.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+                return Err(msg.to_string());
+            }
+        }
+        return Err(format!("{}{}", stderr.trim(), if stdout.trim().is_empty() { String::new() } else { format!(" {}", stdout.trim()) }));
+    }
+
+    serde_json::from_str(stdout.trim())
+        .map_err(|_| format!("Unexpected output: {}", stdout.trim()))
+}
+
+/// Get all addresses for a vault.
+#[tauri::command]
+pub async fn vault_addresses(vault_id: String) -> Result<serde_json::Value, String> {
+    run_vultisig("addresses", Some(&vault_id)).await
+}
+
+/// Get balance for a vault, optionally for a specific chain.
+#[tauri::command]
+pub async fn vault_balance(vault_id: String, chain: Option<String>, include_tokens: Option<bool>) -> Result<serde_json::Value, String> {
+    let mut args = "balance".to_string();
+    if let Some(c) = chain {
+        args.push(' ');
+        args.push_str(&c);
+    }
+    if include_tokens.unwrap_or(false) {
+        args.push_str(" -t");
+    }
+    run_vultisig(&args, Some(&vault_id)).await
+}
+
+/// Send tokens from the vault.
+#[tauri::command]
+pub async fn vault_send(
+    vault_id: String,
+    chain: String,
+    to: String,
+    amount: Option<String>,
+    token: Option<String>,
+    max: Option<bool>,
+    memo: Option<String>,
+    password: String,
+) -> Result<serde_json::Value, String> {
+    let mut args = format!(
+        "send {} {}",
+        shell_escape::escape(chain.into()),
+        shell_escape::escape(to.into()),
+    );
+    if max.unwrap_or(false) {
+        args.push_str(" --max");
+    } else if let Some(amt) = amount {
+        args.push(' ');
+        args.push_str(&amt);
+    }
+    if let Some(t) = token {
+        args.push_str(&format!(" --token {}", shell_escape::escape(t.into())));
+    }
+    if let Some(m) = memo {
+        args.push_str(&format!(" --memo {}", shell_escape::escape(m.into())));
+    }
+    args.push_str(&format!(" -y --password {}", shell_escape::escape(password.into())));
+    run_vultisig(&args, Some(&vault_id)).await
+}
+
+/// Swap tokens between chains.
+#[tauri::command]
+pub async fn vault_swap(
+    vault_id: String,
+    from_chain: String,
+    to_chain: String,
+    amount: Option<String>,
+    max: Option<bool>,
+    password: String,
+) -> Result<serde_json::Value, String> {
+    let mut args = format!(
+        "swap {} {}",
+        shell_escape::escape(from_chain.into()),
+        shell_escape::escape(to_chain.into()),
+    );
+    if max.unwrap_or(false) {
+        args.push_str(" --max");
+    } else if let Some(amt) = amount {
+        args.push(' ');
+        args.push_str(&amt);
+    }
+    args.push_str(&format!(" -y --password {}", shell_escape::escape(password.into())));
+    run_vultisig(&args, Some(&vault_id)).await
+}
+
+/// Get a swap quote without executing.
+#[tauri::command]
+pub async fn vault_swap_quote(
+    vault_id: String,
+    from_chain: String,
+    to_chain: String,
+    amount: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut args = format!(
+        "swap-quote {} {}",
+        shell_escape::escape(from_chain.into()),
+        shell_escape::escape(to_chain.into()),
+    );
+    if let Some(amt) = amount {
+        args.push(' ');
+        args.push_str(&amt);
+    }
+    run_vultisig(&args, Some(&vault_id)).await
+}
+
+/// Get portfolio value.
+#[tauri::command]
+pub async fn vault_portfolio(vault_id: String) -> Result<serde_json::Value, String> {
+    run_vultisig("portfolio", Some(&vault_id)).await
 }
 
 fn wallet_to_response(wallet: &WalletFile) -> WalletResponse {

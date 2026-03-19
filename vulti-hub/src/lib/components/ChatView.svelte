@@ -91,16 +91,6 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex h-full flex-col">
-	<!-- Header -->
-	<header class="flex h-10 shrink-0 items-center border-b border-border px-4">
-		<div class="flex items-center gap-2">
-			<svg class="h-3.5 w-3.5 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-			</svg>
-			<span class="text-xs font-medium text-ink-muted">{contextLabel || agentName}</span>
-		</div>
-	</header>
-
 	<!-- Messages -->
 	{#if store.messages.length === 0 && initialMessage}
 		<div class="flex-1 overflow-y-auto p-3">
@@ -120,9 +110,12 @@
 	{:else if store.messages.length === 0}
 		<div class="flex-1 overflow-y-auto p-3">
 			<div class="flex h-full flex-col items-center justify-center text-center px-4">
-				<p class="max-w-xs text-sm text-ink-muted">
-					{contextHint || `Ask ${agentName} anything`}
-				</p>
+				{#if contextHint}
+					<p class="max-w-xs text-sm font-medium text-ink-dim">Ask {agentName} anything</p>
+					<p class="mt-1 max-w-xs text-xs text-ink-muted">{contextHint}</p>
+				{:else}
+					<p class="max-w-xs text-sm text-ink-muted">Ask {agentName} anything</p>
+				{/if}
 			</div>
 		</div>
 	{:else}

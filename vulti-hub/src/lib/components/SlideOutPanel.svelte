@@ -27,6 +27,16 @@
 	let actionsSubTab = $state<'cron' | 'rules'>('cron');
 	let activeAgent = $derived(store.activeAgent);
 
+	const tabHints: Record<string, string> = {
+		profile: 'Ask about editing name, role, personality, or description',
+		connections: 'Ask about connecting services or managing API access',
+		skills: 'Ask about installing skills or creating custom ones',
+		actions: 'Ask about scheduling cron jobs or setting up rules',
+		wallet: 'Ask about payment setup or crypto vaults',
+		analytics: 'Ask about usage stats, costs, or activity trends',
+	};
+	let chatHint = $derived(tabHints[activeTab] || '');
+
 	const tabs = [
 		{ id: 'profile' as const, label: 'Profile' },
 		{ id: 'connections' as const, label: 'Connections' },
@@ -38,6 +48,21 @@
 
 	function handleAgentCreated(_agent: Agent) {
 		onmodechange?.('onboard');
+	}
+
+	let showDeleteConfirm = $state(false);
+	let deleting = $state(false);
+
+	async function deleteAgent() {
+		if (!activeAgent) return;
+		deleting = true;
+		try {
+			await store.deleteAgent(activeAgent.id);
+			onclose();
+		} finally {
+			deleting = false;
+			showDeleteConfirm = false;
+		}
 	}
 
 	// Title
@@ -64,6 +89,22 @@
 				<span class="rounded-full bg-ink/5 px-2.5 py-0.5 text-xs text-ink-dim">{activeAgent.role}</span>
 			{/if}
 		</div>
+		<div class="flex items-center gap-2">
+			{#if mode === 'agent' && activeAgent}
+				{#if !showDeleteConfirm}
+					<button onclick={() => showDeleteConfirm = true} class="text-xs text-red-400 hover:text-red-300">Delete</button>
+				{:else}
+					<div class="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-2.5 py-1">
+						<span class="text-xs text-ink-muted">Delete?</span>
+						<button
+							onclick={deleteAgent}
+							disabled={deleting}
+							class="rounded bg-red-500 px-2 py-0.5 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50"
+						>{deleting ? '...' : 'Yes'}</button>
+						<button onclick={() => showDeleteConfirm = false} class="text-xs text-ink-muted hover:text-ink">No</button>
+					</div>
+				{/if}
+			{/if}
 		<button class="close-btn" onclick={onclose} title="Back to canvas">
 			{#if store.isBusy}
 				<svg class="animate-spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -75,6 +116,7 @@
 				</svg>
 			{/if}
 		</button>
+		</div>
 	</header>
 
 	{#if mode === 'owner'}
@@ -150,6 +192,7 @@
 			<div class="panel-chat">
 				<ChatView
 					contextLabel={activeTab}
+					contextHint={chatHint}
 					channel={activeTab}
 				/>
 			</div>
@@ -157,7 +200,7 @@
 			<!-- Right: tab content (agent-modifiable) -->
 			<div class="panel-content-main">
 				{#if activeTab === 'profile'}
-					<ProfileView ondelete={onclose} />
+					<ProfileView />
 				{:else if activeTab === 'connections'}
 					<AgentConnectionsView />
 				{:else if activeTab === 'skills'}

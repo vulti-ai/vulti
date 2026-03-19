@@ -18,6 +18,7 @@ mod status;
 mod analytics;
 mod connections;
 mod skills;
+mod watcher;
 
 // Hold the gateway child process so we can kill it on exit
 struct GatewayProcess(Mutex<Option<std::process::Child>>);
@@ -229,6 +230,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(GatewayProcess(Mutex::new(None)))
+        .manage(watcher::WatcherState(Mutex::new(None)))
         .setup(|app| {
             // Write the bundled continuwuity sidecar path so the Python gateway can find it
             if let Ok(resource_dir) = app.path().resource_dir() {
@@ -243,6 +245,9 @@ pub fn run() {
                     );
                 }
             }
+
+            // Start file watcher for auto-refresh
+            watcher::start_watcher(app.handle().clone());
 
             let quit = MenuItem::with_id(app, "quit", "Quit Vulti", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
@@ -275,6 +280,9 @@ pub fn run() {
             agents::list_agents, agents::get_agent, agents::create_agent, agents::update_agent, agents::finalize_onboarding,
             agents::save_wallet, agents::get_wallet, agents::get_agent_avatar,
             agents::create_fast_vault, agents::verify_fast_vault, agents::resend_vault_verification,
+            agents::ensure_vultisig,
+            agents::vault_addresses, agents::vault_balance, agents::vault_send,
+            agents::vault_swap, agents::vault_swap_quote, agents::vault_portfolio,
             // Memories & Soul
             memories::get_memories, memories::update_memory, memories::get_soul, memories::update_soul,
             // Rules

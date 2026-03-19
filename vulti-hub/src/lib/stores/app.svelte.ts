@@ -1,5 +1,6 @@
 import { api, setToken, getToken, type Session, type Message, type Agent, type AgentRole, type AgentService, type CronJob, type Rule, type InboxItem, type Contact, type Memories, type Secret, type OAuthToken, type SystemStatus, type ChannelDirectory, type Analytics, type Integration, type GlobalSettings, type Provider, type AgentRelationship, type OwnerProfile, type Connection } from '$lib/api';
 import { createWsStore, type WsMessage } from '$lib/ws';
+import { listen } from '@tauri-apps/api/event';
 import { marked } from 'marked';
 
 // Configure marked for safe HTML rendering
@@ -132,6 +133,9 @@ ws.onMessage((msg: WsMessage) => {
 				});
 			}
 			isTyping = false;
+			// Refresh agent resources that may have been modified by the agent
+			store.loadSoul();
+			store.loadMemories();
 			break;
 		case 'typing':
 			isTyping = msg.active ?? false;
