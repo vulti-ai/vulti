@@ -451,8 +451,7 @@ async def ensure_room_topology(
 
     Creates:
     - #chatter:{server_name} — Agent Chatter: casual, agents talk freely
-    - #daily:{server_name} — VultiSquad Daily: formal daily updates from all agents
-    - #coordination:{server_name} — Agent Coordination: human talking to all agents
+    - #updates:{server_name} — Updates: agent reports, cron output, status updates
 
     Returns dict mapping room alias -> room_id.
     """
@@ -464,8 +463,7 @@ async def ensure_room_topology(
     async with httpx.AsyncClient(timeout=15.0) as client:
         for alias_local, room_name, topic in [
             ("chatter", "Agent Chatter", "Casual chat — agents talk freely, no restrictions"),
-            ("daily", "VultiSquad Daily", "Formal daily updates from all agents"),
-            ("coordination", "Agent Coordination", "Human talking to all agents at once"),
+            ("updates", "Updates", "Agent reports, cron output, and status updates"),
         ]:
             full_alias = f"#{alias_local}:{server_name}"
 
@@ -579,6 +577,9 @@ async def ensure_room_topology(
                         headers=headers,
                         json={"user_id": owner_creds["user_id"]},
                     )
+                except Exception:
+                    pass
+                try:
                     owner_headers = {"Authorization": f"Bearer {owner_creds['access_token']}"}
                     await client.post(
                         f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
@@ -598,7 +599,7 @@ async def reset_all_rooms(
     """Delete all rooms and recreate from scratch.
 
     1. Every agent + owner leaves and forgets all rooms
-    2. Recreate the 3 global rooms (chatter, daily, coordination)
+    2. Recreate the global rooms (chatter, updates)
     3. All agents join global rooms
     4. Recreate owner DMs for agents with owner relationships
     5. Recreate team rooms for manages relationships
@@ -688,20 +689,51 @@ async def reset_all_rooms(
                     pass
 
     # Step 3: Recreate relationship-based rooms from registry
+    rel_result = await ensure_relationship_rooms(
+        homeserver_url=homeserver_url,
+        server_name=server_name,
+    )
+    result["rooms_created"].update(rel_result)
+
+    logger.info("Matrix reset complete: %s", result)
+    return result
+
+
+async def ensure_relationship_rooms(
+    homeserver_url: str,
+    server_name: str,
+) -> Dict[str, Any]:
+    """Ensure all relationship-based rooms exist.
+
+    Reads relationships from the agent registry and creates any missing rooms:
+    - Owner DMs for owner ↔ agent relationships
+    - Team rooms for manages hierarchies
+    - Peer channels for collaborates relationships
+
+    Skips relationships that already have a matrix_room_id set.
+    Returns summary dict.
+    """
+    result: Dict[str, Any] = {"owner_dms": 0, "team_rooms": 0, "peer_channels": 0}
+
     try:
         from vulti_cli.agent_registry import AgentRegistry
         registry = AgentRegistry()
-
         reg_data = registry._load()
         relationships = reg_data.get("relationships", [])
         agents_data = reg_data.get("agents", {})
 
-        # Track managers and their teams
+        if not relationships:
+            return result
+
         manager_teams: Dict[str, List[str]] = {}
         owner_dm_agents: List[str] = []
         collab_pairs: List[tuple] = []
 
         for rel in relationships:
+            # Skip if room already exists
+            if rel.get("matrix_room_id"):
+                continue
+
             from_id = rel.get("from_agent_id", "")
             to_id = rel.get("to_agent_id", "")
             rel_type = rel.get("rel_type", "")
@@ -717,7 +749,6 @@ async def reset_all_rooms(
                 collab_pairs.append((from_id, to_id))
 
         # Create owner DMs
-        dm_rooms = []
         for agent_id in owner_dm_agents:
             agent_name = agents_data.get(agent_id, {}).get("name", agent_id.capitalize())
             dm_room_id = await create_owner_relationship(
@@ -727,11 +758,9 @@ async def reset_all_rooms(
                 agent_name=agent_name,
             )
             if dm_room_id:
-                dm_rooms.append(dm_room_id)
-        result["rooms_created"]["owner_dms"] = len(dm_rooms)
+                result["owner_dms"] += 1
 
         # Create team rooms for manages hierarchies
-        team_rooms = []
         for manager_id, members in manager_teams.items():
             if len(members) >= 2:
                 manager_name = agents_data.get(manager_id, {}).get("name", manager_id.capitalize())
@@ -742,11 +771,9 @@ async def reset_all_rooms(
                     squad_name=f"{manager_name}'s Team",
                 )
                 if room_id:
-                    team_rooms.append(room_id)
-        result["rooms_created"]["team_rooms"] = len(team_rooms)
+                    result["team_rooms"] += 1
 
         # Create peer channels for collaborates
-        peer_rooms = []
         for from_id, to_id in collab_pairs:
             from_name = agents_data.get(from_id, {}).get("name", from_id.capitalize())
             to_name = agents_data.get(to_id, {}).get("name", to_id.capitalize())
@@ -760,13 +787,14 @@ async def reset_all_rooms(
                 purpose="collaborates",
             )
             if room_id:
-                peer_rooms.append(room_id)
-        result["rooms_created"]["peer_channels"] = len(peer_rooms)
+                result["peer_channels"] += 1
 
     except Exception as e:
-        logger.warning("Matrix reset: error recreating relationship rooms: %s", e)
+        logger.warning("Matrix: error ensuring relationship rooms: %s", e)
 
-    logger.info("Matrix reset complete: %s", result)
+    if any(v > 0 for v in result.values()):
+        logger.info("Matrix: ensured relationship rooms: %s", result)
+
     return result
 
 
@@ -1095,7 +1123,7 @@ async def onboard_agent_to_matrix(
     """Full Matrix onboarding for a newly created agent.
 
     1. Register as Matrix user
-    2. Join the 3 global rooms (chatter, daily, coordination)
+    2. Join the global rooms (chatter, updates)
     3. Say hi in Agent Chatter
 
     DMs with the owner are only created when the user explicitly creates
@@ -1119,7 +1147,7 @@ async def onboard_agent_to_matrix(
 
     import httpx
 
-    # Step 2: Join all 3 global rooms (chatter, daily, coordination)
+    # Step 2: Join global rooms (chatter, updates)
     chatter_room_id = None
     creds = get_agent_matrix_credentials(agent_id)
     if creds:
@@ -1138,7 +1166,7 @@ async def onboard_agent_to_matrix(
             inviter_headers = {"Authorization": f"Bearer {inviter_creds['access_token']}"}
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    for room_alias in ["chatter", "daily", "coordination"]:
+                    for room_alias in ["chatter", "updates"]:
                         try:
                             resp = await client.get(
                                 f"{homeserver_url}/_matrix/client/v3/directory/room/%23{room_alias}:{server_name}",
@@ -1172,17 +1200,17 @@ async def onboard_agent_to_matrix(
             body=f"Hey everyone, {agent_name} here. Just joined the squad!",
         )
 
-    # Step 4: Create daily update cron job if the daily room exists
+    # Step 4: Create daily update cron job if the updates room exists
     if creds:
         try:
-            daily_room_id = None
+            updates_room_id = None
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
-                    f"{homeserver_url}/_matrix/client/v3/directory/room/%23daily:{server_name}",
+                    f"{homeserver_url}/_matrix/client/v3/directory/room/%23updates:{server_name}",
                 )
                 if resp.status_code == 200:
-                    daily_room_id = resp.json().get("room_id")
-            if daily_room_id:
+                    updates_room_id = resp.json().get("room_id")
+            if updates_room_id:
                 from cron.jobs import create_job, list_jobs
                 existing = list_jobs(include_disabled=True)
                 already = any(
@@ -1194,7 +1222,7 @@ async def onboard_agent_to_matrix(
                         prompt="Post a short status update: what you worked on recently, what's next, and any blockers. Keep it to 2-3 sentences.",
                         schedule="0 9 * * *",
                         name="Daily update",
-                        deliver=f"matrix:{daily_room_id}",
+                        deliver=f"matrix:{updates_room_id}",
                         agent=agent_id,
                     )
                     logger.info("Matrix: created daily update cron for agent %s", agent_id)

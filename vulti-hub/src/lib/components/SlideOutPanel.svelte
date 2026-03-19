@@ -14,7 +14,8 @@
 	import AuditView from './AuditView.svelte';
 	import SkillsView from './SkillsView.svelte';
 	import WalletView from './WalletView.svelte';
-	import type { Agent } from '$lib/api';
+	import DynamicPane from './DynamicPane.svelte';
+	import type { Agent, Widget } from '$lib/api';
 
 	let { mode, onclose, onmodechange }: {
 		mode: 'agent' | 'owner' | 'settings' | 'create' | 'onboard' | 'audit';
@@ -36,6 +37,27 @@
 		analytics: 'Ask about usage stats, costs, or activity trends',
 	};
 	let chatHint = $derived(tabHints[activeTab] || '');
+
+	// Dynamic pane widgets — if the agent has set custom widgets for the active tab, show DynamicPane instead of the static view
+	let customWidgets = $derived.by((): Widget[] | null => {
+		const agentId = activeAgent?.id;
+		if (!agentId) return null;
+		const agentPanes = store.paneWidgets[agentId];
+		if (!agentPanes) return null;
+		const tabWidgets = agentPanes[activeTab];
+		if (!tabWidgets || tabWidgets.length === 0) return null;
+		return tabWidgets as Widget[];
+	});
+
+	// Reload pane widgets after each message (agent may have called modify_pane)
+	let lastMsgCount = $state(0);
+	$effect(() => {
+		const count = store.messages.length;
+		if (count > lastMsgCount && lastMsgCount > 0) {
+			store.loadPaneWidgets();
+		}
+		lastMsgCount = count;
+	});
 
 	const tabs = [
 		{ id: 'profile' as const, label: 'Profile' },
@@ -202,7 +224,9 @@
 
 			<!-- Right: tab content (agent-modifiable) -->
 			<div class="panel-content-main">
-				{#if activeTab === 'profile'}
+				{#if customWidgets}
+					<DynamicPane widgets={customWidgets} tab={activeTab} />
+				{:else if activeTab === 'profile'}
 					<ProfileView />
 				{:else if activeTab === 'connections'}
 					<AgentConnectionsView />

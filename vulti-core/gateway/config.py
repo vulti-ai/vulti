@@ -241,8 +241,29 @@ class GatewayConfig:
                 connected.append(platform)
         return connected
     
-    def get_home_channel(self, platform: Platform) -> Optional[HomeChannel]:
-        """Get the home channel for a platform."""
+    def get_home_channel(self, platform: Platform, agent_id: Optional[str] = None) -> Optional[HomeChannel]:
+        """Get the home channel for a platform, with optional per-agent override.
+
+        Resolution order:
+        1. Per-agent home channel (from agent registry)
+        2. Platform-wide home channel (from gateway config / env var)
+        """
+        if agent_id:
+            try:
+                from vulti_cli.agent_registry import AgentRegistry
+                reg = AgentRegistry()
+                agent = reg.get_agent(agent_id)
+                if agent:
+                    home_channels = getattr(agent, 'home_channels', None) or {}
+                    platform_home = home_channels.get(platform.value)
+                    if platform_home:
+                        return HomeChannel(
+                            platform=platform,
+                            chat_id=platform_home.get("chat_id", ""),
+                            name=platform_home.get("name", "Home"),
+                        )
+            except Exception:
+                pass
         config = self.platforms.get(platform)
         if config:
             return config.home_channel

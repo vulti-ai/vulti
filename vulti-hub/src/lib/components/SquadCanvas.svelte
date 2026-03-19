@@ -111,6 +111,9 @@
 	}
 
 	function closePanel() { panelMode = 'none'; }
+
+	// Force SvelteFlow to re-mount (and re-fitView) when node count changes
+	let flowKey = $derived(`flow-${flowNodes.length}`);
 </script>
 
 <div class="relative h-full w-full">
@@ -146,6 +149,7 @@
 		</div>
 
 		<div class="h-full w-full flow-container">
+			{#key flowKey}
 			<SvelteFlow
 				nodes={flowNodes}
 				edges={flowEdges}
@@ -154,11 +158,13 @@
 				onbeforeconnect={onBeforeConnect}
 				onnodeclick={onNodeClick}
 				fitView
+				fitViewOptions={{ padding: 0.2 }}
 				connectionRadius={40}
 				proOptions={{ hideAttribution: true }}
 			>
 				<Background variant={BackgroundVariant.Dots} gap={24} size={1} />
 			</SvelteFlow>
+			{/key}
 		</div>
 	{/if}
 

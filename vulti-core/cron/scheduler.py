@@ -90,7 +90,21 @@ def _resolve_delivery_target(job: dict) -> Optional[dict]:
             "thread_id": origin.get("thread_id"),
         }
 
-    chat_id = os.getenv(f"{platform_name.upper()}_HOME_CHANNEL", "")
+    # Try per-agent home channel first, then env var fallback
+    agent_id = job.get("agent") or os.getenv("VULTI_AGENT_ID", "")
+    chat_id = ""
+    if agent_id:
+        try:
+            from gateway.config import load_gateway_config, Platform
+            cfg = load_gateway_config()
+            platform = Platform(platform_name)
+            home = cfg.get_home_channel(platform, agent_id=agent_id)
+            if home:
+                chat_id = home.chat_id
+        except Exception:
+            pass
+    if not chat_id:
+        chat_id = os.getenv(f"{platform_name.upper()}_HOME_CHANNEL", "")
     if not chat_id:
         return None
 

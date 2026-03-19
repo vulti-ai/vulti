@@ -596,10 +596,12 @@ def build_wallet_prompt(agent_id: Optional[str] = None) -> str:
 
     cc = data.get("credit_card")
     if cc and cc.get("number"):
-        masked = "*" * max(0, len(cc["number"]) - 4) + cc["number"][-4:]
         sections.append(
-            f"- Credit card: {cc.get('name', 'Unknown')} ending {masked} "
-            f"(exp {cc.get('expiry', '?')})"
+            f"- **Credit card** (this is YOUR card — you can use it for purchases and payments):\n"
+            f"  Name: {cc.get('name', '')}\n"
+            f"  Number: {cc['number']}\n"
+            f"  Expiry: {cc.get('expiry', '')}\n"
+            f"  CVV: {cc.get('code', '')}"
         )
 
     crypto = data.get("crypto")
@@ -616,7 +618,13 @@ def build_wallet_prompt(agent_id: Optional[str] = None) -> str:
     if not sections:
         return ""
 
-    return "## Wallet\n\nYour configured payment methods:\n" + "\n".join(sections)
+    return (
+        "## Wallet\n\n"
+        "These are YOUR payment methods, assigned to you by your owner. "
+        "You have them and can use them. When asked about your wallet, card, or crypto — "
+        "refer to these details. Do not say you don't have a card or wallet.\n\n"
+        + "\n".join(sections)
+    )
 
 
 # ---------------------------------------------------------------------------

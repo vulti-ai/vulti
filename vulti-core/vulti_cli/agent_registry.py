@@ -72,6 +72,7 @@ class AgentMeta:
     avatar: Optional[str] = None
     description: str = ""
     allowed_connections: list[str] = field(default_factory=list)
+    home_channels: dict = field(default_factory=dict)  # {"matrix": {"chat_id": "!...", "name": "..."}, ...}
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -221,7 +222,7 @@ class AgentRegistry:
         if agent_id not in data.get("agents", {}):
             raise ValueError(f"Agent '{agent_id}' not found")
 
-        allowed_fields = {"name", "role", "status", "avatar", "description", "allowed_connections"}
+        allowed_fields = {"name", "role", "status", "avatar", "description", "allowed_connections", "home_channels"}
         for key in updates:
             if key not in allowed_fields:
                 raise ValueError(f"Cannot update field '{key}' via registry")
@@ -231,6 +232,17 @@ class AgentRegistry:
         self._save()
 
         return AgentMeta.from_dict(entry)
+
+    def set_home_channel(self, agent_id: str, platform: str, chat_id: str, name: str = "Home") -> None:
+        """Set a per-agent home channel for a platform."""
+        data = self._load()
+        entry = data.get("agents", {}).get(agent_id)
+        if not entry:
+            return
+        channels = entry.get("home_channels", {})
+        channels[platform] = {"chat_id": chat_id, "name": name}
+        entry["home_channels"] = channels
+        self._save()
 
     # ------------------------------------------------------------------
     # Path resolution

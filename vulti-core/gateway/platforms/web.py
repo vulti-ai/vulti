@@ -517,7 +517,7 @@ class WebAdapter(BasePlatformAdapter):
                     owner_headers = {"Authorization": f"Bearer {result['access_token']}"}
                     agent_headers = {"Authorization": f"Bearer {agent_token}"}
                     async with httpx.AsyncClient(timeout=10.0) as hc:
-                        for room_alias in ["chatter", "daily", "coordination"]:
+                        for room_alias in ["chatter", "updates"]:
                             try:
                                 resp = await hc.get(
                                     f"{homeserver_url}/_matrix/client/v3/directory/room/%23{room_alias}:{server_name}",

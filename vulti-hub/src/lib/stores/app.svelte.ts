@@ -376,6 +376,7 @@ export const store = {
 			this.loadMemories(),
 			this.loadSoul(),
 			this.loadCron(),
+			this.loadPaneWidgets(),
 		]));
 	},
 
@@ -644,7 +645,14 @@ export const store = {
 			const managerId = fromId;
 			const teamMembers = this._getTeamMembers(managerId);
 			const managerName = agents.find(a => a.id === managerId)?.name || managerId;
-			api.createSquadRoom(teamMembers, `${managerName}'s Team`).catch(() => {});
+			api.createSquadRoom(teamMembers, `${managerName}'s Team`).then(({ room_id }) => {
+				if (room_id) {
+					api.updateRelationship(rel.id, { matrixRoomId: room_id } as Partial<AgentRelationship>).catch(() => {});
+					relationships = relationships.map(r =>
+						r.id === rel.id ? { ...r, matrixRoomId: room_id } : r
+					);
+				}
+			}).catch(() => {});
 		}
 		return rel;
 	},

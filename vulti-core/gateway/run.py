@@ -994,7 +994,7 @@ class GatewayRunner:
                     logger.info("✓ Continuwuity homeserver started on port %d", port)
                     # Register agents as Matrix users
                     try:
-                        from gateway.matrix_agents import sync_agents_to_matrix, ensure_room_topology, get_agent_matrix_credentials
+                        from gateway.matrix_agents import sync_agents_to_matrix, ensure_room_topology, ensure_relationship_rooms, get_agent_matrix_credentials
                         agent_matrix_ids = await sync_agents_to_matrix(
                             homeserver_url=self._continuwuity.homeserver_url,
                             server_name=server_name,
@@ -1021,14 +1021,22 @@ class GatewayRunner:
                                 )
                                 logger.info("Matrix: ensure_room_topology returned %d rooms: %s", len(rooms), rooms)
                                 # Set home channel to Agent Coordination if not configured
-                                coordination_alias = f"#coordination:{server_name}"
-                                if coordination_alias in rooms and not matrix_config.home_channel:
+                                updates_alias = f"#updates:{server_name}"
+                                if updates_alias in rooms and not matrix_config.home_channel:
                                     from gateway.config import HomeChannel
                                     matrix_config.home_channel = HomeChannel(
                                         platform=Platform.MATRIX,
-                                        chat_id=rooms[coordination_alias],
-                                        name="Agent Coordination",
+                                        chat_id=rooms[updates_alias],
+                                        name="Updates",
                                     )
+                                # Ensure relationship-based rooms (team rooms, DMs, peer channels)
+                                try:
+                                    await ensure_relationship_rooms(
+                                        homeserver_url=creds["homeserver_url"],
+                                        server_name=server_name,
+                                    )
+                                except Exception as e:
+                                    logger.warning("Matrix relationship rooms: %s", e)
                             except Exception as e:
                                 logger.warning("Matrix room topology setup: %s", e, exc_info=True)
                         else:

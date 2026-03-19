@@ -81,6 +81,24 @@
 		input = '';
 	}
 
+	async function newSession() {
+		const agentId = store.activeAgentId;
+		const sessionName = channel && agentId ? `hub:${agentId}:${channel}` : undefined;
+
+		// Delete the old channel session if it exists
+		if (sessionName) {
+			const existing = store.sessions.find(s => s.name === sessionName);
+			if (existing) {
+				await store.deleteSession(existing.id);
+			}
+		}
+
+		// Create fresh session
+		await store.createSession(sessionName);
+		loadedKey = '';  // force re-evaluation
+		input = '';
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
@@ -91,6 +109,17 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex h-full flex-col">
+	<!-- Chat header with new session button -->
+	{#if store.messages.length > 0}
+		<div class="flex shrink-0 items-center justify-between border-b border-border px-3 py-1.5">
+			<span class="text-xs text-ink-muted">{contextLabel || channel}</span>
+			<button onclick={newSession} title="New session" class="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-muted hover:bg-surface hover:text-ink transition-colors">
+				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+				New
+			</button>
+		</div>
+	{/if}
+
 	<!-- Messages -->
 	{#if store.messages.length === 0 && initialMessage}
 		<div class="flex-1 overflow-y-auto p-3">

@@ -215,7 +215,8 @@ def _handle_send(args):
 
     used_home_channel = False
     if not chat_id:
-        home = config.get_home_channel(platform)
+        sender_agent_id = os.getenv("VULTI_AGENT_ID", "")
+        home = config.get_home_channel(platform, agent_id=sender_agent_id or None)
         if home:
             chat_id = home.chat_id
             used_home_channel = True

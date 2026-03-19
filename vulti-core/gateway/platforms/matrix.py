@@ -184,6 +184,10 @@ class MatrixAdapter(BasePlatformAdapter):
                 await self._notify_fatal_error()
                 return False
 
+            # Auto-set home channels: platform-wide #updates + per-agent channels
+            if self._client:
+                await self._auto_set_home_channels()
+
             # Start sync loops for ALL agents
             self._mark_connected()
             self._last_sync_activity = time.time()
@@ -206,6 +210,82 @@ class MatrixAdapter(BasePlatformAdapter):
             self._set_fatal_error("MATRIX_CONNECT_FAILED", str(e), retryable=True)
             await self._notify_fatal_error()
             return False
+
+    async def _auto_set_home_channels(self) -> None:
+        """Auto-set Matrix home channels: platform default + per-agent.
+
+        Platform default: #updates room
+        Per-agent: team room if managed by another agent, owner DM if solo
+        Fallback: #updates
+        """
+        import nio
+
+        # 1. Resolve #updates as platform-wide default
+        updates_room_id = None
+        try:
+            alias = f"#updates:{self.server_name}"
+            resp = await self._client.room_resolve_alias(alias)
+            if isinstance(resp, nio.RoomResolveAliasResponse):
+                updates_room_id = resp.room_id
+                if not self.config.home_channel:
+                    from gateway.config import HomeChannel
+                    self.config.home_channel = HomeChannel(
+                        platform=Platform.MATRIX,
+                        chat_id=resp.room_id,
+                        name="Updates",
+                    )
+                    os.environ["MATRIX_HOME_CHANNEL"] = resp.room_id
+                    logger.info("Matrix: platform home channel → %s (%s)", alias, resp.room_id)
+        except Exception as e:
+            logger.debug("Matrix: could not resolve #updates: %s", e)
+
+        # 2. Set per-agent home channels
+        try:
+            from vulti_cli.agent_registry import AgentRegistry
+            reg = AgentRegistry()
+            reg.ensure_initialized()
+            # Read relationships directly from registry data
+            reg_data = reg._load()
+            relationships = reg_data.get("relationships", [])
+
+            for agent_id in self._agent_clients:
+                agent = reg.get_agent(agent_id)
+                if not agent:
+                    continue
+                existing = (agent.home_channels or {}).get("matrix")
+                if existing and existing.get("chat_id"):
+                    continue  # Already configured
+
+                # Check if managed by another agent (team member)
+                team_room = None
+                for rel in relationships:
+                    if rel.get("to_agent_id") == agent_id and rel.get("from_agent_id") not in ("owner", ""):
+                        team_room = rel.get("matrix_room_id")
+                        if team_room:
+                            break
+
+                if team_room:
+                    reg.set_home_channel(agent_id, "matrix", team_room, name="Team")
+                    logger.info("Matrix: %s home channel → team room %s", agent_id, team_room)
+                    continue
+
+                # Solo agent: find DM with owner
+                owner_dm = None
+                for rel in relationships:
+                    if rel.get("from_agent_id") == "owner" and rel.get("to_agent_id") == agent_id:
+                        owner_dm = rel.get("matrix_room_id")
+                        if owner_dm:
+                            break
+
+                if owner_dm:
+                    reg.set_home_channel(agent_id, "matrix", owner_dm, name="Owner DM")
+                    logger.info("Matrix: %s home channel → owner DM %s", agent_id, owner_dm)
+                elif updates_room_id:
+                    reg.set_home_channel(agent_id, "matrix", updates_room_id, name="Updates")
+                    logger.info("Matrix: %s home channel → #updates (fallback)", agent_id)
+
+        except Exception as e:
+            logger.debug("Matrix: per-agent home channel setup failed: %s", e)
 
     async def _sync_loop(self, agent_id: str, client) -> None:
         """Sync loop for a single agent's client."""
