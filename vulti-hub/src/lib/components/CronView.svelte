@@ -1,18 +1,17 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
-	import { api } from '$lib/api';
 	import { onMount } from 'svelte';
+
+	onMount(() => { store.loadCron(); });
 
 	let showCreate = $state(false);
 	let newName = $state('');
 	let newPrompt = $state('');
 	let newSchedule = $state('');
 
-	// Data preloaded by AgentDashboard
-
 	async function createJob() {
 		if (!newPrompt.trim() || !newSchedule.trim()) return;
-		await api.createCron({
+		store.createCronJob({
 			name: newName || 'Untitled Job',
 			prompt: newPrompt,
 			schedule: newSchedule
@@ -21,19 +20,16 @@
 		newPrompt = '';
 		newSchedule = '';
 		showCreate = false;
-		store.loadCron();
 	}
 
-	async function toggleJob(id: string, status: string) {
-		await api.updateCron(id, {
+	function toggleJob(id: string, status: string) {
+		store.updateCronJob(id, {
 			status: status === 'active' ? 'paused' : 'active'
 		});
-		store.loadCron();
 	}
 
-	async function deleteJob(id: string) {
-		await api.deleteCron(id);
-		store.loadCron();
+	function deleteJob(id: string) {
+		store.deleteCronJob(id);
 	}
 </script>
 

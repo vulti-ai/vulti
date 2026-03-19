@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::fs;
 
 const RESERVED_IDS: &[&str] = &["agent", "agents", "api", "ws", "system", "interagent"];
+const JANITOR_AGENT_ID: &str = "janitor";
 
 const DEFAULT_CONFIG_YAML: &str = r#"model: anthropic/claude-opus-4.6
 toolsets:
@@ -33,6 +34,158 @@ No emojis. Unicode symbols for visual structure.
 
 No sycophancy ("Great question!", "Absolutely!", "I'd be happy to help", "Hope this helps!"). No hype words ("revolutionary", "game-changing", "seamless", "robust", "leverage", "delve"). No filler ("Here's the thing", "It's worth noting", "At the end of the day", "Let me be clear"). No contrastive reframes ("It's not X, it's Y"). No dramatic fragments ("And that changes everything."). No starting with "So," or "Well,".
 "#;
+
+const JANITOR_SOUL_MD: &str = r#"# Janitor ⚙
+
+You are the Janitor, the system ops agent for this VultiHub. You run quietly in the background keeping everything healthy. You don't need to be asked — you check, you clean, you report.
+
+Your job is to be the human's eyes on the system. Every day you run health checks across every agent, the gateway, cron jobs, connections, and upstream dependencies. When something is wrong you surface it clearly. When everything is fine you say so briefly and get out of the way.
+
+You're methodical, not chatty. You care about uptime, clean state, and catching problems before they cascade. Think sysadmin with root privileges, not assistant.
+
+## What you do
+
+◆ Check every registered agent's status — are they active, errored, or stopped?
+◆ Verify the gateway is responsive and platforms are connected
+◆ Monitor the Matrix server health and federation status
+◆ Look for failed cron jobs and stale error states
+◆ Check disk usage, log sizes, and session accumulation
+◆ Clean up orphaned files, expired sessions, and stale locks
+◆ Restart agents that are in an error state (with a note to the human)
+◆ Monitor upstream hermes-agent for version updates and breaking changes
+◆ Patch agent shims and monkey-patching layers when upstream changes
+◆ Watch for runtime errors across the system and attempt auto-fixes
+◆ Report a daily summary — what's healthy, what needed attention, what you fixed
+
+## Privileges
+
+You have pseudo-root sentry privileges across the entire system. You can:
+→ Read and modify any agent's config, cron, and state
+→ Restart agents and gateway processes
+→ Patch orchestrator shims and bridge code
+→ Access error logs and stack traces from all components
+→ Pull upstream dependency updates and apply compatibility fixes
+
+Use these privileges responsibly. Fix what you can, flag what you can't.
+
+## How you report
+
+Keep it structured. Use a consistent format so the human can scan it fast:
+
+```
+⚙ Daily Health Check — 2026-03-19
+
+✔ 3/3 agents healthy
+✔ Gateway responsive, 2 platforms connected
+✔ Matrix server: federation OK, 12 rooms synced
+⚠ 1 failed cron job: "daily-digest" (agent: researcher) — timeout after 180s
+✔ Disk usage normal (2.1 GB)
+✔ hermes-agent: v0.4.2 (current, no breaking changes)
+◆ Cleaned 4 expired sessions
+◆ Cleared stale tick lock
+◆ Fixed import path in orchestrator shim (upstream renamed module)
+
+No action needed from you.
+```
+
+If something needs human intervention, say so at the top, not buried in the middle.
+
+## Avoid
+
+Don't explain what a health check is. Don't narrate your process. Don't ask permission to do routine maintenance — that's your job. Don't use emojis, use Unicode symbols.
+
+## Tone
+
+Terse, reliable, competent. Like a good ops engineer who pages you only when it matters and fixes everything else silently.
+"#;
+
+const JANITOR_HEALTH_CHECK_PROMPT: &str = "Run a full system health check. Check every registered agent's status. Verify the gateway is responsive and all platforms are connected. Check Matrix server health. Look for failed or stale cron jobs. Check for orphaned files and expired sessions. Check upstream hermes-agent for version changes or breaking updates. Inspect orchestrator shims and monkey-patching layers for compatibility issues. Look for runtime errors in logs. Clean up anything that needs cleaning. Attempt auto-fixes for any errors you find. Report a structured summary of what you found and what you fixed. If anything needs human attention, flag it clearly at the top.";
+
+/// Seed the janitor system agent if it doesn't already exist.
+fn seed_janitor(reg: &mut AgentRegistry) -> Result<(), String> {
+    if reg.agents.contains_key(JANITOR_AGENT_ID) {
+        return Ok(());
+    }
+
+    let home = agent_home(JANITOR_AGENT_ID);
+    for subdir in &["memories", "cron", "sessions", "skills"] {
+        ensure_dir(&home.join(subdir))?;
+    }
+
+    // Seed config
+    let config_path = home.join("config.yaml");
+    if !config_path.exists() {
+        atomic_write_text(&config_path, DEFAULT_CONFIG_YAML)?;
+    }
+
+    // Seed soul
+    let soul_path = home.join("SOUL.md");
+    if !soul_path.exists() {
+        atomic_write_text(&soul_path, JANITOR_SOUL_MD)?;
+    }
+
+    // Seed default cron job
+    let cron_path = home.join("cron").join("jobs.json");
+    if !cron_path.exists() {
+        let job_id = format!("{:012x}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() & 0xffffffffffff);
+        let now = chrono::Utc::now().to_rfc3339();
+        let cron_data = serde_json::json!({
+            "jobs": [{
+                "id": job_id,
+                "name": "Daily health check",
+                "prompt": JANITOR_HEALTH_CHECK_PROMPT,
+                "skills": [],
+                "skill": null,
+                "model": null,
+                "provider": null,
+                "base_url": null,
+                "schedule": {
+                    "kind": "cron",
+                    "expr": "0 8 * * *",
+                    "display": "0 8 * * *"
+                },
+                "schedule_display": "0 8 * * *",
+                "repeat": { "times": null, "completed": 0 },
+                "enabled": true,
+                "state": "scheduled",
+                "paused_at": null,
+                "paused_reason": null,
+                "created_at": now,
+                "next_run_at": null,
+                "last_run_at": null,
+                "last_status": null,
+                "last_error": null,
+                "deliver": "local",
+                "origin": null,
+                "agent": JANITOR_AGENT_ID
+            }]
+        });
+        atomic_write_json(&cron_path, &cron_data)?;
+    }
+
+    // Register in registry
+    let now = chrono::Utc::now().to_rfc3339();
+    reg.agents.insert(
+        JANITOR_AGENT_ID.to_string(),
+        AgentEntry {
+            id: JANITOR_AGENT_ID.to_string(),
+            name: "Janitor".to_string(),
+            role: "ops".to_string(),
+            status: "active".to_string(),
+            created_at: now,
+            created_from: None,
+            avatar: Some("⚙".to_string()),
+            description: "System health agent. Runs daily checks, cleans up, monitors upstream, and reports issues.".to_string(),
+            allowed_connections: Vec::new(),
+        },
+    );
+    save_registry(reg)?;
+
+    Ok(())
+}
 
 pub(crate) fn registry_path() -> std::path::PathBuf {
     vulti_home().join("agents").join("registry.json")
@@ -116,6 +269,7 @@ fn agent_to_response(entry: &AgentEntry, default_agent_id: &str) -> AgentRespons
         description: entry.description.clone(),
         created_at: entry.created_at.clone(),
         created_from: entry.created_from.clone(),
+        allowed_connections: entry.allowed_connections.clone(),
     }
 }
 
@@ -172,10 +326,10 @@ pub fn create_agent(
         base_id.chars().take(32).collect()
     };
 
-    // Deduplicate
+    // Deduplicate: check both registry and disk (old agent dirs may linger after deletion)
     let mut agent_id = base_id.clone();
     let mut counter = 2u32;
-    while reg.agents.contains_key(&agent_id) {
+    while reg.agents.contains_key(&agent_id) || agent_home(&agent_id).exists() {
         agent_id = format!("{}-{}", base_id, counter);
         agent_id.truncate(32);
         counter += 1;
@@ -229,7 +383,7 @@ pub fn create_agent(
         if !soul_path.exists() {
             let soul_content = personality
                 .as_deref()
-                .unwrap_or(DEFAULT_SOUL_MD);
+                .unwrap_or("");
             atomic_write_text(&soul_path, soul_content)?;
         }
     }
@@ -268,6 +422,7 @@ pub fn create_agent(
         created_from: inherit_from,
         avatar,
         description: description.unwrap_or_default(),
+        allowed_connections: Vec::new(),
     };
 
     reg.agents.insert(agent_id.clone(), entry);
@@ -304,6 +459,12 @@ pub fn update_agent(
     if let Some(v) = updates.get("description").and_then(|v| v.as_str()) {
         entry.description = v.to_string();
     }
+    if let Some(v) = updates.get("allowedConnections").or_else(|| updates.get("allowed_connections")).and_then(|v| v.as_array()) {
+        entry.allowed_connections = v
+            .iter()
+            .filter_map(|s| s.as_str().map(String::from))
+            .collect();
+    }
 
     let entry_clone = entry.clone();
     save_registry(&reg)?;
@@ -336,4 +497,77 @@ pub fn update_agent(
         .clone()
         .unwrap_or_else(|| "default".to_string());
     Ok(agent_to_response(&entry_clone, &default_id))
+}
+
+/// Finalize onboarding: ensure role, soul, user, memories are never empty.
+/// Applies role.txt, fills sensible defaults for anything the agent didn't write.
+#[tauri::command]
+pub fn finalize_onboarding(agent_id: String) -> Result<serde_json::Value, String> {
+    let home = agent_home(&agent_id);
+    let mut reg = load_registry();
+    let agent_name = reg.agents.get(&agent_id).map(|a| a.name.clone()).unwrap_or_else(|| agent_id.clone());
+    let owner = reg.owner.clone().unwrap_or_default();
+    let owner_name = if owner.name.is_empty() { "the user".to_string() } else { owner.name.clone() };
+    let owner_about = owner.about.clone().unwrap_or_default();
+
+    // 1. Apply role.txt if it exists
+    let role_path = home.join("role.txt");
+    let mut role = String::new();
+    if role_path.exists() {
+        if let Ok(r) = fs::read_to_string(&role_path) {
+            role = r.trim().to_lowercase();
+            let _ = fs::remove_file(&role_path);
+        }
+    }
+    if role.is_empty() {
+        if let Some(entry) = reg.agents.get(&agent_id) {
+            if !entry.role.is_empty() {
+                role = entry.role.clone();
+            }
+        }
+    }
+    if role.is_empty() {
+        role = "assistant".to_string();
+    }
+    if let Some(entry) = reg.agents.get_mut(&agent_id) {
+        entry.role = role.clone();
+    }
+    save_registry(&reg)?;
+
+    // 2. Ensure SOUL.md is not empty
+    let soul_path = home.join("SOUL.md");
+    let soul_content = fs::read_to_string(&soul_path).unwrap_or_default();
+    if soul_content.trim().is_empty() {
+        let default_soul = format!(
+            "# {}\n\nYou are {}, a {} AI agent for {}. You're helpful, direct, and proactive.\n",
+            agent_name, agent_name, role, owner_name
+        );
+        let _ = atomic_write_text(&soul_path, &default_soul);
+    }
+
+    // 3. Ensure USER.md is not empty
+    let mem_dir = home.join("memories");
+    let _ = ensure_dir(&mem_dir);
+    let user_path = mem_dir.join("USER.md");
+    let user_content = fs::read_to_string(&user_path).unwrap_or_default();
+    if user_content.trim().is_empty() {
+        let mut default_user = format!("# {}\n", owner_name);
+        if !owner_about.is_empty() {
+            default_user += &format!("\n{}\n", owner_about);
+        }
+        let _ = atomic_write_text(&user_path, &default_user);
+    }
+
+    // 4. Ensure MEMORY.md is not empty
+    let memory_path = mem_dir.join("MEMORY.md");
+    let memory_content = fs::read_to_string(&memory_path).unwrap_or_default();
+    if memory_content.trim().is_empty() {
+        let default_memory = format!("Agent created for {} as a {} agent", owner_name, role);
+        let _ = atomic_write_text(&memory_path, &default_memory);
+    }
+
+    // Ensure the janitor system agent exists
+    let _ = seed_janitor(&mut reg);
+
+    Ok(serde_json::json!({ "role": role, "agent": agent_name }))
 }

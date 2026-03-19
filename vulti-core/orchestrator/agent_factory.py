@@ -69,15 +69,19 @@ class AgentFactory:
             elif effort.lower() == "none":
                 reasoning_config = {"enabled": False}
 
-        # Toolsets
+        # Toolsets — handle both dict format {"enabled": [...]} and plain list format
         enabled_toolsets = overrides.pop("enabled_toolsets", None)
         disabled_toolsets = overrides.pop("disabled_toolsets", None)
         if enabled_toolsets is None:
             ts_cfg = config.get("toolsets", {})
-            enabled_toolsets = ts_cfg.get("enabled")
+            if isinstance(ts_cfg, list):
+                enabled_toolsets = ts_cfg
+            elif isinstance(ts_cfg, dict):
+                enabled_toolsets = ts_cfg.get("enabled")
         if disabled_toolsets is None:
             ts_cfg = config.get("toolsets", {})
-            disabled_toolsets = ts_cfg.get("disabled")
+            if isinstance(ts_cfg, dict):
+                disabled_toolsets = ts_cfg.get("disabled")
 
         # Session DB
         session_db = overrides.pop("session_db", None)
@@ -124,9 +128,27 @@ class AgentFactory:
         Returns:
             The result dict from AIAgent.run_conversation().
         """
+        # Check budget before running
+        from orchestrator.budget import check_budget, record_usage
+        budget_error = check_budget(agent_id)
+        if budget_error:
+            return {"final_response": f"[Budget exceeded] {budget_error}", "error": budget_error}
+
         with AgentContext.scope(agent_id, hop_count=hop_count):
             agent = self.create_agent(agent_id, **kwargs)
-            return agent.run_conversation(message)
+            result = agent.run_conversation(message)
+
+            # Record usage from the result
+            usage = result.get("usage", {})
+            if usage:
+                record_usage(
+                    agent_id,
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    model=result.get("model", ""),
+                )
+
+            return result
 
     def _resolve_runtime(
         self, config: Dict[str, Any], overrides: Dict[str, Any]

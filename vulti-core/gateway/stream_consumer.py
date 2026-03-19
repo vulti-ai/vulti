@@ -26,6 +26,8 @@ logger = logging.getLogger("gateway.stream_consumer")
 
 # Sentinel to signal the stream is complete
 _DONE = object()
+# Sentinel to reset accumulated text (new streaming turn)
+_RESET = object()
 
 
 @dataclass
@@ -33,7 +35,7 @@ class StreamConsumerConfig:
     """Runtime config for a single stream consumer instance."""
     edit_interval: float = 0.3
     buffer_threshold: int = 40
-    cursor: str = " ▉"
+    cursor: str = ""
 
 
 class GatewayStreamConsumer:
@@ -57,6 +59,7 @@ class GatewayStreamConsumer:
         chat_id: str,
         config: Optional[StreamConsumerConfig] = None,
         metadata: Optional[dict] = None,
+        pre_message_id: Optional[str] = None,
     ):
         self.adapter = adapter
         self.chat_id = chat_id
@@ -64,7 +67,10 @@ class GatewayStreamConsumer:
         self.metadata = metadata
         self._queue: queue.Queue = queue.Queue()
         self._accumulated = ""
-        self._message_id: Optional[str] = None
+        # Pre-generated message_id skips the initial send() and goes straight
+        # to edit_message() — used by WebAdapter where send() would commit a
+        # "message" type instead of a streaming "chunk".
+        self._message_id: Optional[str] = pre_message_id
         self._already_sent = False
         self._edit_supported = True  # Disabled on first edit failure (Signal/Email/HA)
         self._last_edit_time = 0.0
@@ -79,6 +85,10 @@ class GatewayStreamConsumer:
         """Thread-safe callback — called from the agent's worker thread."""
         if text:
             self._queue.put(text)
+
+    def reset(self) -> None:
+        """Signal a new streaming turn — clears accumulated text."""
+        self._queue.put(_RESET)
 
     def finish(self) -> None:
         """Signal that the stream is complete."""
@@ -96,6 +106,9 @@ class GatewayStreamConsumer:
                         if item is _DONE:
                             got_done = True
                             break
+                        if item is _RESET:
+                            self._accumulated = ""
+                            continue
                         self._accumulated += item
                     except queue.Empty:
                         break

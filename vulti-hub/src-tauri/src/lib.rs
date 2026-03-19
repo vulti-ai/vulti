@@ -6,13 +6,16 @@ use serde::Serialize;
 mod types;
 mod vulti_home;
 mod agents;
+mod audit;
 mod memories;
+mod permissions;
 mod rules;
 mod cron;
 mod secrets;
 mod sessions;
 mod relationships;
 mod status;
+mod connections;
 
 // Hold the gateway child process so we can kill it on exit
 struct GatewayProcess(Mutex<Option<std::process::Child>>);
@@ -267,7 +270,7 @@ pub fn run() {
             start_gateway, check_gateway, stop_gateway, get_gateway_token,
             tailscale_status, install_tailscale, open_tailscale, get_continuwuity_path,
             // Agents
-            agents::list_agents, agents::get_agent, agents::create_agent, agents::update_agent,
+            agents::list_agents, agents::get_agent, agents::create_agent, agents::update_agent, agents::finalize_onboarding,
             // Memories & Soul
             memories::get_memories, memories::update_memory, memories::get_soul, memories::update_soul,
             // Rules
@@ -284,8 +287,15 @@ pub fn run() {
             relationships::list_relationships, relationships::create_relationship,
             relationships::delete_relationship, relationships::update_relationship,
             relationships::get_owner, relationships::update_owner,
+            // Connections
+            connections::list_connections, connections::add_connection,
+            connections::update_connection, connections::delete_connection,
             // Status
             status::get_system_status, status::get_channel_directory, status::get_integrations,
+            // Audit
+            audit::list_audit_events,
+            // Permissions
+            permissions::list_permission_requests, permissions::resolve_permission,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Vulti Gateway")

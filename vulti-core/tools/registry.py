@@ -84,49 +84,59 @@ class ToolRegistry:
     # Schema retrieval
     # ------------------------------------------------------------------
 
-    def get_definitions(self, tool_names: Set[str], quiet: bool = False) -> List[dict]:
+    def get_definitions(self, tool_names: Set[str], quiet: bool = False,
+                         agent_id: str = None) -> List[dict]:
         """Return OpenAI-format tool schemas for the requested tool names.
 
         Only tools whose ``check_fn()`` returns True (or have no check_fn)
-        are included.
+        are included.  When *agent_id* is given, credentials from the agent's
+        allowed connections are injected before running availability checks.
         """
+        from vulti_cli.connection_registry import inject_credentials
+
         result = []
-        for name in sorted(tool_names):
-            entry = self._tools.get(name)
-            if not entry:
-                continue
-            if entry.check_fn:
-                try:
-                    if not entry.check_fn():
-                        if not quiet:
-                            logger.debug("Tool %s unavailable (check failed)", name)
-                        continue
-                except Exception:
-                    if not quiet:
-                        logger.debug("Tool %s check raised; skipping", name)
+        with inject_credentials(agent_id):
+            for name in sorted(tool_names):
+                entry = self._tools.get(name)
+                if not entry:
                     continue
-            result.append({"type": "function", "function": entry.schema})
+                if entry.check_fn:
+                    try:
+                        if not entry.check_fn():
+                            if not quiet:
+                                logger.debug("Tool %s unavailable (check failed)", name)
+                            continue
+                    except Exception:
+                        if not quiet:
+                            logger.debug("Tool %s check raised; skipping", name)
+                        continue
+                result.append({"type": "function", "function": entry.schema})
         return result
 
     # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------
 
-    def dispatch(self, name: str, args: dict, **kwargs) -> str:
+    def dispatch(self, name: str, args: dict, agent_id: str = None, **kwargs) -> str:
         """Execute a tool handler by name.
 
+        * When *agent_id* is given, credentials from the agent's allowed
+          connections are injected for the duration of the handler call.
         * Async handlers are bridged automatically via ``_run_async()``.
         * All exceptions are caught and returned as ``{"error": "..."}``
           for consistent error format.
         """
+        from vulti_cli.connection_registry import inject_credentials
+
         entry = self._tools.get(name)
         if not entry:
             return json.dumps({"error": f"Unknown tool: {name}"})
         try:
-            if entry.is_async:
-                from model_tools import _run_async
-                return _run_async(entry.handler(args, **kwargs))
-            return entry.handler(args, **kwargs)
+            with inject_credentials(agent_id):
+                if entry.is_async:
+                    from model_tools import _run_async
+                    return _run_async(entry.handler(args, **kwargs))
+                return entry.handler(args, **kwargs)
         except Exception as e:
             logger.exception("Tool %s dispatch error: %s", name, e)
             return json.dumps({"error": f"Tool execution failed: {type(e).__name__}: {e}"})

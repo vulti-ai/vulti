@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
-	import { api } from '$lib/api';
 	import { onMount } from 'svelte';
+
+	onMount(() => { store.loadRules(); });
 
 	let showCreate = $state(false);
 	let newName = $state('');
@@ -10,34 +11,29 @@
 	let newPriority = $state(0);
 	let newCooldown = $state('');
 
-	// Data preloaded by AgentDashboard
-
 	async function createRule() {
 		if (!newCondition.trim() || !newAction.trim()) return;
-		await api.createRule({
+		store.createRule({
 			name: newName || undefined,
 			condition: newCondition,
 			action: newAction,
 			priority: newPriority,
 			cooldown_minutes: newCooldown ? parseInt(newCooldown) : undefined,
-		}, store.activeAgentId ?? undefined);
+		});
 		newName = '';
 		newCondition = '';
 		newAction = '';
 		newPriority = 0;
 		newCooldown = '';
 		showCreate = false;
-		store.loadRules();
 	}
 
-	async function toggleRule(id: string, enabled: boolean) {
-		await api.updateRule(id, { enabled: !enabled });
-		store.loadRules();
+	function toggleRule(id: string, enabled: boolean) {
+		store.updateRule(id, { enabled: !enabled });
 	}
 
-	async function deleteRule(id: string) {
-		await api.deleteRule(id);
-		store.loadRules();
+	function deleteRule(id: string) {
+		store.deleteRule(id);
 	}
 </script>
 

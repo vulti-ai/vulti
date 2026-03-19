@@ -138,6 +138,18 @@ TOOLSETS = {
         "includes": []
     },
 
+    "messaging": {
+        "description": "Cross-platform and inter-agent messaging - send messages to platforms or other agents",
+        "tools": ["send_message"],
+        "includes": []
+    },
+
+    "connections": {
+        "description": "Connection access management - request permission to use external service connections",
+        "tools": ["request_connection"],
+        "includes": []
+    },
+
     "rl": {
         "description": "RL training tools for running reinforcement learning on Tinker-Atropos",
         "tools": [

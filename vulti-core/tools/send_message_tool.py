@@ -68,10 +68,11 @@ def _handle_agent_send(target_agent_id: str, message: str) -> str:
     hop_count = int(os.getenv("VULTI_AGENT_HOP_COUNT", "0"))
     sender_agent_id = os.getenv("VULTI_AGENT_ID", "default")
 
-    if hop_count >= 3:
+    if hop_count >= 1:
         return json.dumps({
-            "error": f"Max inter-agent hop count reached (3). "
-            "Cannot send further inter-agent messages to prevent loops."
+            "error": "Inter-agent nesting not allowed. "
+            "You cannot send messages to other agents from within an inter-agent call. "
+            "If you need another agent's help, note it in your response and handle it in your own conversation."
         })
 
     try:
@@ -684,9 +685,16 @@ async def _send_matrix(extra, chat_id, message):
 
 
 def _check_send_message():
-    """Gate send_message on gateway running (always available on messaging platforms)."""
+    """Gate send_message on gateway running or being inside the gateway process."""
+    # Always available when running inside the gateway process
+    if os.getenv("VULTI_GATEWAY_PID"):
+        return True
     platform = os.getenv("VULTI_SESSION_PLATFORM", "")
     if platform and platform != "local":
+        return True
+    # Also check if any agent context is set (we're in the orchestrator)
+    agent_id = os.getenv("VULTI_AGENT_ID", "")
+    if agent_id and agent_id != "default":
         return True
     try:
         from gateway.status import is_gateway_running

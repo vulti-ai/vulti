@@ -74,11 +74,14 @@ export function computeLayout(
 		return { nodes, edges };
 	}
 
-	// Build adjacency: who manages whom
+	// Build adjacency: who manages whom (skip owner — it's not an agent node)
 	const managedBy = new Map<string, string>();
+	const agentIds = new Set(agents.map(a => a.id));
 	const managesRelationships = relationships.filter(r => r.type === 'manages');
 	for (const rel of managesRelationships) {
-		managedBy.set(rel.toAgentId, rel.fromAgentId);
+		if (agentIds.has(rel.fromAgentId)) {
+			managedBy.set(rel.toAgentId, rel.fromAgentId);
+		}
 	}
 
 	// Compute depth for each agent
@@ -157,12 +160,21 @@ export function computeLayout(
 	}
 
 	// Explicit edges from relationships
+	const nodeIds = new Set(nodes.map(n => n.id));
 	for (const rel of relationships) {
-		if (rel.fromAgentId === '__owner__') continue;
+		// Map "owner" to "__owner__"
+		const fromId = rel.fromAgentId === 'owner' ? '__owner__' : rel.fromAgentId;
+		const toId = rel.toAgentId === 'owner' ? '__owner__' : rel.toAgentId;
+
+		// Skip if either node doesn't exist
+		if (!nodeIds.has(fromId) || !nodeIds.has(toId)) continue;
+		// Skip if this duplicates an implicit owner edge
+		if (fromId === '__owner__' && agentDepth.get(rel.toAgentId) === 1) continue;
+
 		edges.push({
 			id: rel.id,
-			fromId: rel.fromAgentId,
-			toId: rel.toAgentId,
+			fromId,
+			toId,
 			type: rel.type,
 		});
 	}

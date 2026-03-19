@@ -3560,6 +3560,11 @@ class VultiCLI:
             self.show_help()
         elif canonical == "tools":
             self._handle_tools_command(cmd_original)
+        elif canonical == "connections":
+            from vulti_cli.connections_cli import handle_connections_command
+            # Pass everything after the command name
+            args = cmd_original.split(maxsplit=1)
+            handle_connections_command(args[1] if len(args) > 1 else "")
         elif canonical == "toolsets":
             self.show_toolsets()
         elif canonical == "config":
@@ -3805,6 +3810,12 @@ class VultiCLI:
             self._show_usage()
         elif canonical == "insights":
             self._show_insights(cmd_original)
+        elif canonical == "audit":
+            self._show_audit(cmd_original)
+        elif canonical == "budget":
+            self._show_budget(cmd_original)
+        elif canonical == "permissions":
+            self._handle_permissions(cmd_original)
         elif canonical == "paste":
             self._handle_paste_command()
         elif canonical == "reload-mcp":
@@ -4545,6 +4556,155 @@ class VultiCLI:
             db.close()
         except Exception as e:
             print(f"  Error generating insights: {e}")
+
+    def _show_audit(self, command: str = "/audit"):
+        """Show recent audit events."""
+        parts = command.split()
+        n = 30
+        agent_id = None
+        trace_id = None
+        event_type = None
+
+        i = 1
+        while i < len(parts):
+            if parts[i] == "--agent" and i + 1 < len(parts):
+                agent_id = parts[i + 1]
+                i += 2
+            elif parts[i] == "--trace" and i + 1 < len(parts):
+                trace_id = parts[i + 1]
+                i += 2
+            elif parts[i] == "--type" and i + 1 < len(parts):
+                event_type = parts[i + 1]
+                i += 2
+            elif parts[i].isdigit():
+                n = int(parts[i])
+                i += 1
+            else:
+                i += 1
+
+        try:
+            from orchestrator.audit import tail
+            events = tail(n=n, agent_id=agent_id, trace_id=trace_id, event_type=event_type)
+            if not events:
+                print("  No audit events found.")
+                return
+            print()
+            for ev in events:
+                ts = ev.get("ts", "")[:19].replace("T", " ")
+                agent = ev.get("agent_id", "?")
+                etype = ev.get("event", "?")
+                trace = ev.get("trace_id", "")
+                details = ev.get("details", {})
+                detail_str = "  ".join(f"{k}={v}" for k, v in details.items() if k != "message_preview" and k != "response_preview" and k != "prompt_preview")
+                preview = details.get("message_preview") or details.get("response_preview") or details.get("prompt_preview") or ""
+                if preview:
+                    preview = preview[:80].replace("\n", " ")
+
+                line = f"  {ts}  [{etype}]  agent={agent}"
+                if trace:
+                    line += f"  trace={trace}"
+                if detail_str:
+                    line += f"  {detail_str}"
+                if preview:
+                    line += f"\n    \033[2m{preview}\033[0m"
+                print(line)
+            print()
+        except Exception as e:
+            print(f"  Error reading audit log: {e}")
+
+    def _show_budget(self, command: str = "/budget"):
+        """Show per-agent budget status."""
+        parts = command.split()
+        agent_filter = parts[1] if len(parts) > 1 else None
+
+        try:
+            from orchestrator.budget import get_budget_status
+            from orchestrator.agent_registry import AgentRegistry
+
+            registry = AgentRegistry()
+            agents = registry.list_agents()
+
+            if agent_filter:
+                agents = [a for a in agents if a.id == agent_filter]
+                if not agents:
+                    print(f"  Agent '{agent_filter}' not found.")
+                    return
+
+            print()
+            for agent in agents:
+                status = get_budget_status(agent.id)
+                name = agent.name or agent.id
+                tokens = status.get("tokens_used", 0)
+                cost = status.get("cost_usd", 0)
+
+                line = f"  {name} ({agent.id})  —  {tokens:,} tokens  ${cost:.4f}"
+
+                max_cost = status.get("max_cost_per_day")
+                max_tokens = status.get("max_tokens_per_day")
+                if max_cost is not None:
+                    remaining = status.get("cost_remaining", 0)
+                    line += f"  (limit: ${max_cost:.2f}, remaining: ${remaining:.2f})"
+                elif max_tokens is not None:
+                    remaining = status.get("tokens_remaining", 0)
+                    line += f"  (limit: {max_tokens:,}, remaining: {remaining:,})"
+                else:
+                    line += "  (no budget set)"
+
+                print(line)
+            print()
+        except Exception as e:
+            print(f"  Error loading budget: {e}")
+
+    def _handle_permissions(self, command: str = "/permissions"):
+        """Handle permission request management."""
+        parts = command.split()
+        action = parts[1] if len(parts) > 1 else "list"
+        request_id = parts[2] if len(parts) > 2 else None
+
+        try:
+            from orchestrator.permissions import list_pending, approve, deny
+
+            if action == "list":
+                pending = list_pending()
+                if not pending:
+                    print("  No pending permission requests.")
+                    return
+                print()
+                for req in pending:
+                    ts = req.get("created_at", "")[:19].replace("T", " ")
+                    print(f"  [{req['id']}]  agent={req['agent_id']}  "
+                          f"connection={req['connection_name']}  "
+                          f"requested={ts}")
+                    if req.get("reason"):
+                        print(f"    Reason: {req['reason']}")
+                print(f"\n  Use /permissions approve <id> or /permissions deny <id>")
+                print()
+
+            elif action == "approve":
+                if not request_id:
+                    print("  Usage: /permissions approve <request_id>")
+                    return
+                result = approve(request_id)
+                if result:
+                    print(f"  Approved: {result['agent_id']} now has access to '{result['connection_name']}'")
+                else:
+                    print(f"  Request '{request_id}' not found or already resolved.")
+
+            elif action == "deny":
+                if not request_id:
+                    print("  Usage: /permissions deny <request_id>")
+                    return
+                result = deny(request_id)
+                if result:
+                    print(f"  Denied: {result['agent_id']}'s request for '{result['connection_name']}'")
+                else:
+                    print(f"  Request '{request_id}' not found or already resolved.")
+
+            else:
+                print(f"  Unknown action '{action}'. Use: list, approve, deny")
+
+        except Exception as e:
+            print(f"  Error: {e}")
 
     def _check_config_mcp_changes(self) -> None:
         """Detect mcp_servers changes in config.yaml and auto-reload MCP connections.

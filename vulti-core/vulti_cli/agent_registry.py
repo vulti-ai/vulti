@@ -39,6 +39,7 @@ _AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9\-]{0,31}$")
 _RESERVED_IDS = frozenset({"agent", "agents", "api", "ws", "system", "interagent"})
 
 DEFAULT_AGENT_ID = "default"
+JANITOR_AGENT_ID = "janitor"
 
 
 def get_default_agent_id() -> str:
@@ -70,6 +71,7 @@ class AgentMeta:
     created_from: Optional[str] = None
     avatar: Optional[str] = None
     description: str = ""
+    allowed_connections: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -198,6 +200,9 @@ class AgentRegistry:
         if agent_id == data.get("default_agent", DEFAULT_AGENT_ID):
             raise ValueError(f"Cannot delete the default agent '{agent_id}'")
 
+        if agent_id == JANITOR_AGENT_ID:
+            raise ValueError("Cannot delete the janitor system agent")
+
         # Remove directory
         agent_home = self.agent_home(agent_id)
         if agent_home.exists():
@@ -216,7 +221,7 @@ class AgentRegistry:
         if agent_id not in data.get("agents", {}):
             raise ValueError(f"Agent '{agent_id}' not found")
 
-        allowed_fields = {"name", "role", "status", "avatar", "description"}
+        allowed_fields = {"name", "role", "status", "avatar", "description", "allowed_connections"}
         for key in updates:
             if key not in allowed_fields:
                 raise ValueError(f"Cannot update field '{key}' via registry")
@@ -372,6 +377,9 @@ class AgentRegistry:
             # Fresh install -- create default agent
             self._seed_fresh_install()
 
+        # Ensure janitor exists (covers migrations and upgrades)
+        self._seed_janitor()
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -396,7 +404,7 @@ class AgentRegistry:
             if src_file.exists():
                 shutil.copy2(str(src_file), str(dst / filename))
 
-    def _seed_defaults(self, agent_id: str) -> None:
+    def _seed_defaults(self, agent_id: str, soul_md: str = None) -> None:
         """Create default config and soul for a brand new agent."""
         from vulti_cli.config import DEFAULT_CONFIG
         from vulti_cli.default_soul import DEFAULT_SOUL_MD
@@ -416,10 +424,10 @@ class AgentRegistry:
         # Default soul
         soul_path = agent_home / "SOUL.md"
         if not soul_path.exists():
-            soul_path.write_text(DEFAULT_SOUL_MD, encoding="utf-8")
+            soul_path.write_text(soul_md or DEFAULT_SOUL_MD, encoding="utf-8")
 
     def _seed_fresh_install(self) -> None:
-        """Create registry with a default agent for fresh installations."""
+        """Create registry with a default agent and janitor for fresh installations."""
         agent_id = DEFAULT_AGENT_ID
         agent_home = self.agent_home(agent_id)
 
@@ -446,3 +454,92 @@ class AgentRegistry:
         }
         self._save()
         logger.info("Fresh install: created default agent '%s'", agent_id)
+
+        # Seed the janitor system agent
+        self._seed_janitor()
+
+    def _seed_janitor(self) -> None:
+        """Create the janitor system agent if it doesn't already exist."""
+        janitor_id = JANITOR_AGENT_ID
+        data = self._load()
+
+        if janitor_id in data.get("agents", {}):
+            return  # Already exists
+
+        from vulti_cli.default_soul import JANITOR_CRON_JOBS, JANITOR_SOUL_MD
+
+        # Create directory structure
+        agent_home = self.agent_home(janitor_id)
+        for subdir in ("memories", "cron", "sessions", "skills"):
+            (agent_home / subdir).mkdir(parents=True, exist_ok=True)
+
+        self._seed_defaults(janitor_id, soul_md=JANITOR_SOUL_MD)
+
+        # Seed default cron jobs
+        self._seed_janitor_cron(janitor_id)
+
+        # Register
+        now = datetime.now(timezone.utc).isoformat()
+        if "agents" not in data:
+            data["agents"] = {}
+        data["agents"][janitor_id] = {
+            "id": janitor_id,
+            "name": "Janitor",
+            "role": "ops",
+            "status": "active",
+            "created_at": now,
+            "created_from": None,
+            "avatar": "⚙",
+            "description": "System health agent. Runs daily checks, cleans up, and reports issues.",
+        }
+        self._save()
+        logger.info("Seeded janitor agent '%s'", janitor_id)
+
+    def _seed_janitor_cron(self, agent_id: str) -> None:
+        """Seed default cron jobs for the janitor agent."""
+        import uuid
+
+        from vulti_cli.default_soul import JANITOR_CRON_JOBS
+
+        jobs_path = self.agent_cron_dir(agent_id) / "jobs.json"
+        if jobs_path.exists():
+            return  # Don't overwrite existing jobs
+
+        now = datetime.now(timezone.utc).isoformat()
+        jobs = []
+        for template in JANITOR_CRON_JOBS:
+            job = {
+                "id": uuid.uuid4().hex[:12],
+                "name": template["name"],
+                "prompt": template["prompt"],
+                "skills": [],
+                "skill": None,
+                "model": None,
+                "provider": None,
+                "base_url": None,
+                "schedule": {
+                    "kind": "cron",
+                    "expr": template["schedule"],
+                    "display": template["schedule"],
+                },
+                "schedule_display": template["schedule"],
+                "repeat": {"times": None, "completed": 0},
+                "enabled": True,
+                "state": "scheduled",
+                "paused_at": None,
+                "paused_reason": None,
+                "created_at": now,
+                "next_run_at": None,
+                "last_run_at": None,
+                "last_status": None,
+                "last_error": None,
+                "deliver": "local",
+                "origin": None,
+                "agent": agent_id,
+            }
+            jobs.append(job)
+
+        jobs_path.write_text(
+            json.dumps({"jobs": jobs}, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )

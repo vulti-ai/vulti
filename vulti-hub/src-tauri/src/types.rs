@@ -36,6 +36,58 @@ pub struct AgentEntry {
     pub avatar: Option<String>,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub allowed_connections: Vec<String>,
+}
+
+// =============================================================================
+// Connections (connections.yaml)
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConnectionsFile {
+    #[serde(default = "default_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub connections: HashMap<String, ConnectionEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConnectionEntry {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub conn_type: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub credentials: HashMap<String, String>,
+    #[serde(default)]
+    pub mcp: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub provides_toolsets: Vec<String>,
+    #[serde(default)]
+    pub tools: HashMap<String, serde_json::Value>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectionResponse {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub conn_type: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub credentials: HashMap<String, String>,
+    pub mcp: HashMap<String, serde_json::Value>,
+    pub provides_toolsets: Vec<String>,
+    pub enabled: bool,
 }
 
 fn default_active() -> String {
@@ -61,6 +113,8 @@ pub struct OwnerEntry {
     #[serde(default = "default_owner_name")]
     pub name: String,
     pub avatar: Option<String>,
+    #[serde(default)]
+    pub about: Option<String>,
 }
 
 fn default_owner_name() -> String {
@@ -83,6 +137,7 @@ pub struct RelationshipResponse {
 pub struct OwnerResponse {
     pub name: String,
     pub avatar: Option<String>,
+    pub about: Option<String>,
 }
 
 /// Response format for the frontend (matches what web.py returns).
@@ -99,6 +154,7 @@ pub struct AgentResponse {
     pub description: String,
     pub created_at: String,
     pub created_from: Option<String>,
+    pub allowed_connections: Vec<String>,
 }
 
 // =============================================================================

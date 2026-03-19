@@ -389,24 +389,34 @@ async def ensure_room_topology(
         ]:
             full_alias = f"#{alias_local}:{server_name}"
 
-            # Check if room already exists
+            # Check if alias exists and we can still use the room
+            alias_taken = False
             try:
                 resp = await client.get(
                     f"{homeserver_url}/_matrix/client/v3/directory/room/{full_alias}",
                     headers=headers,
                 )
                 if resp.status_code == 200:
-                    room_id = resp.json().get("room_id")
-                    rooms_created[full_alias] = room_id
-                    logger.debug("Matrix: room %s already exists (%s)", full_alias, room_id)
-                    continue
+                    existing_room_id = resp.json().get("room_id")
+                    # Verify we can actually join this room (not orphaned)
+                    join_resp = await client.post(
+                        f"{homeserver_url}/_matrix/client/v3/join/{existing_room_id}",
+                        headers=headers, json={},
+                    )
+                    if join_resp.status_code == 200:
+                        rooms_created[full_alias] = existing_room_id
+                        logger.debug("Matrix: room %s already exists and accessible (%s)", full_alias, existing_room_id)
+                        continue
+                    else:
+                        # Alias exists but room is orphaned — create without alias
+                        alias_taken = True
+                        logger.info("Matrix: alias %s exists but room is orphaned, creating without alias", full_alias)
             except Exception:
                 pass
 
-            # Create room
+            # Create room (without alias if it's taken by an orphaned room)
             try:
-                create_data = {
-                    "room_alias_name": alias_local,
+                create_data: Dict[str, Any] = {
                     "name": room_name,
                     "topic": topic,
                     "visibility": "private",
@@ -418,6 +428,8 @@ async def ensure_room_topology(
                         }
                     ],
                 }
+                if not alias_taken:
+                    create_data["room_alias_name"] = alias_local
 
                 resp = await client.post(
                     f"{homeserver_url}/_matrix/client/v3/createRoom",
@@ -428,14 +440,29 @@ async def ensure_room_topology(
                 if resp.status_code == 200:
                     room_id = resp.json()["room_id"]
                     rooms_created[full_alias] = room_id
-                    logger.info("Matrix: created room %s (%s)", full_alias, room_id)
+                    logger.info("Matrix: created room %s (%s)%s", room_name, room_id, " (no alias)" if alias_taken else "")
+                elif not alias_taken and "M_ROOM_IN_USE" in resp.text:
+                    # Alias is orphaned internally — retry without alias
+                    logger.info("Matrix: alias %s is orphaned, retrying without alias", full_alias)
+                    create_data.pop("room_alias_name", None)
+                    resp2 = await client.post(
+                        f"{homeserver_url}/_matrix/client/v3/createRoom",
+                        headers=headers,
+                        json=create_data,
+                    )
+                    if resp2.status_code == 200:
+                        room_id = resp2.json()["room_id"]
+                        rooms_created[full_alias] = room_id
+                        logger.info("Matrix: created room %s (%s) (no alias, orphaned)", room_name, room_id)
+                    else:
+                        logger.warning("Matrix: failed to create room %s even without alias: %s", room_name, resp2.text[:200])
                 else:
                     logger.warning(
                         "Matrix: failed to create room %s: %s",
-                        full_alias, resp.text[:200],
+                        room_name, resp.text[:200],
                     )
             except Exception as e:
-                logger.warning("Matrix: error creating room %s: %s", full_alias, e)
+                logger.warning("Matrix: error creating room %s: %s", room_name, e)
 
         # Invite all agents and have them join immediately
         for room_alias, room_id in rooms_created.items():
@@ -462,6 +489,185 @@ async def ensure_room_topology(
                     pass
 
     return rooms_created
+
+
+async def reset_all_rooms(
+    homeserver_url: str,
+    server_name: str,
+) -> Dict[str, Any]:
+    """Delete all rooms and recreate from scratch.
+
+    1. Every agent + owner leaves and forgets all rooms
+    2. Recreate the 3 global rooms (chatter, daily, coordination)
+    3. All agents join global rooms
+    4. Recreate owner DMs for agents with owner relationships
+    5. Recreate team rooms for manages relationships
+    6. Recreate peer channels for collaborates relationships
+
+    Returns summary dict.
+    """
+    import httpx
+
+    result: Dict[str, Any] = {"rooms_deleted": 0, "rooms_created": {}}
+
+    # Gather all credentials
+    all_creds: Dict[str, Dict[str, Any]] = {}
+    for f in _tokens_dir().iterdir():
+        if f.suffix == ".json":
+            try:
+                all_creds[f.stem] = json.loads(f.read_text())
+            except Exception:
+                pass
+
+    owner_creds = _get_owner_matrix_credentials()
+
+    # Step 1: Leave and forget ALL rooms for every agent + owner
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        all_tokens = list(all_creds.values())
+        if owner_creds:
+            all_tokens.append(owner_creds)
+
+        for creds in all_tokens:
+            headers = {"Authorization": f"Bearer {creds['access_token']}"}
+            try:
+                resp = await client.get(
+                    f"{homeserver_url}/_matrix/client/v3/joined_rooms",
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    for room_id in resp.json().get("joined_rooms", []):
+                        try:
+                            await client.post(
+                                f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/leave",
+                                headers=headers, json={},
+                            )
+                            await client.post(
+                                f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/forget",
+                                headers=headers, json={},
+                            )
+                            result["rooms_deleted"] += 1
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    logger.info("Matrix reset: left %d room memberships", result["rooms_deleted"])
+
+    # Step 2: Recreate the 3 global rooms
+    if not all_creds:
+        return result
+
+    first_agent_id = next(iter(all_creds))
+    first_creds = all_creds[first_agent_id]
+
+    rooms = await ensure_room_topology(
+        homeserver_url=homeserver_url,
+        access_token=first_creds["access_token"],
+        server_name=server_name,
+        agent_matrix_ids={aid: c["user_id"] for aid, c in all_creds.items()},
+    )
+    result["rooms_created"]["global"] = list(rooms.keys())
+
+    # Also invite + join owner to global rooms
+    if owner_creds:
+        owner_headers = {"Authorization": f"Bearer {owner_creds['access_token']}"}
+        inviter_headers = {"Authorization": f"Bearer {first_creds['access_token']}"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for room_id in rooms.values():
+                try:
+                    await client.post(
+                        f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/invite",
+                        headers=inviter_headers,
+                        json={"user_id": owner_creds["user_id"]},
+                    )
+                    await client.post(
+                        f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                        headers=owner_headers, json={},
+                    )
+                except Exception:
+                    pass
+
+    # Step 3: Recreate relationship-based rooms from registry
+    try:
+        from vulti_cli.agent_registry import AgentRegistry
+        registry = AgentRegistry()
+
+        reg_data = registry._load()
+        relationships = reg_data.get("relationships", [])
+        agents_data = reg_data.get("agents", {})
+
+        # Track managers and their teams
+        manager_teams: Dict[str, List[str]] = {}
+        owner_dm_agents: List[str] = []
+        collab_pairs: List[tuple] = []
+
+        for rel in relationships:
+            from_id = rel.get("from_agent_id", "")
+            to_id = rel.get("to_agent_id", "")
+            rel_type = rel.get("rel_type", "")
+
+            if from_id == "owner" or to_id == "owner":
+                agent_id = to_id if from_id == "owner" else from_id
+                owner_dm_agents.append(agent_id)
+            elif rel_type == "manages":
+                manager_teams.setdefault(from_id, [from_id])
+                if to_id not in manager_teams[from_id]:
+                    manager_teams[from_id].append(to_id)
+            elif rel_type == "collaborates":
+                collab_pairs.append((from_id, to_id))
+
+        # Create owner DMs
+        dm_rooms = []
+        for agent_id in owner_dm_agents:
+            agent_name = agents_data.get(agent_id, {}).get("name", agent_id.capitalize())
+            dm_room_id = await create_owner_relationship(
+                homeserver_url=homeserver_url,
+                server_name=server_name,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            )
+            if dm_room_id:
+                dm_rooms.append(dm_room_id)
+        result["rooms_created"]["owner_dms"] = len(dm_rooms)
+
+        # Create team rooms for manages hierarchies
+        team_rooms = []
+        for manager_id, members in manager_teams.items():
+            if len(members) >= 2:
+                manager_name = agents_data.get(manager_id, {}).get("name", manager_id.capitalize())
+                room_id = await create_squad_room(
+                    homeserver_url=homeserver_url,
+                    server_name=server_name,
+                    agent_ids=members,
+                    squad_name=f"{manager_name}'s Team",
+                )
+                if room_id:
+                    team_rooms.append(room_id)
+        result["rooms_created"]["team_rooms"] = len(team_rooms)
+
+        # Create peer channels for collaborates
+        peer_rooms = []
+        for from_id, to_id in collab_pairs:
+            from_name = agents_data.get(from_id, {}).get("name", from_id.capitalize())
+            to_name = agents_data.get(to_id, {}).get("name", to_id.capitalize())
+            room_id = await create_relationship_room(
+                homeserver_url=homeserver_url,
+                server_name=server_name,
+                agent_a_id=from_id,
+                agent_b_id=to_id,
+                agent_a_name=from_name,
+                agent_b_name=to_name,
+                purpose="collaborates",
+            )
+            if room_id:
+                peer_rooms.append(room_id)
+        result["rooms_created"]["peer_channels"] = len(peer_rooms)
+
+    except Exception as e:
+        logger.warning("Matrix reset: error recreating relationship rooms: %s", e)
+
+    logger.info("Matrix reset complete: %s", result)
+    return result
 
 
 def _get_owner_matrix_credentials() -> Optional[Dict[str, Any]]:

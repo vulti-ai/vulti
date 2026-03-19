@@ -151,11 +151,11 @@ class PlatformConfig:
 @dataclass
 class StreamingConfig:
     """Configuration for real-time token streaming to messaging platforms."""
-    enabled: bool = False
+    enabled: bool = True
     transport: str = "edit"       # "edit" (progressive editMessageText) or "off"
     edit_interval: float = 0.3    # Seconds between message edits
     buffer_threshold: int = 40    # Chars before forcing an edit
-    cursor: str = " ▉"           # Cursor shown during streaming
+    cursor: str = ""              # No text cursor — frontends use their own
 
     def to_dict(self) -> Dict[str, Any]:
         return {

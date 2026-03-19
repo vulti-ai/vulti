@@ -18,7 +18,8 @@
         "height": 750,
         "center": true,
         "resizable": true,
-        "decorations": true
+        "decorations": true,
+        "theme": "Light"
       }
     ],
     "trayIcon": {

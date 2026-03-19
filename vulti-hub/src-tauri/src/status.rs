@@ -84,12 +84,75 @@ pub fn get_integrations() -> Result<Vec<serde_json::Value>, String> {
                 .and_then(|v| v.as_str())
                 .map(String::from);
 
+            let mut details = serde_json::json!({});
+
+            // For Matrix, include owner credentials and homeserver URL if they exist
+            if pid == "matrix" {
+                let continuwuity_dir = home.join("continuwuity");
+
+                // Compute homeserver URL — prefer Tailscale HTTPS, fall back to localhost
+                let port: u16 = std::env::var("MATRIX_CONTINUWUITY_PORT")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(6167);
+                let server_name = std::env::var("MATRIX_SERVER_NAME").unwrap_or_else(|_| "localhost".to_string());
+
+                // Try Tailscale DNS name for remote access
+                let homeserver_url = if server_name != "localhost" {
+                    format!("https://{}", server_name)
+                } else {
+                    // Auto-detect Tailscale
+                    std::process::Command::new("tailscale")
+                        .args(["status", "--json"])
+                        .output()
+                        .ok()
+                        .and_then(|output| {
+                            if !output.status.success() { return None; }
+                            let ts: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+                            let dns_name = ts.get("Self")?.get("DNSName")?.as_str()?;
+                            let dns_name = dns_name.trim_end_matches('.');
+                            if dns_name.is_empty() { return None; }
+                            Some(format!("https://{}:{}", dns_name, port))
+                        })
+                        .unwrap_or_else(|| format!("http://localhost:{}", port))
+                };
+                details["homeserver_url"] = serde_json::json!(homeserver_url);
+                details["server_name"] = serde_json::json!(server_name);
+                details["port"] = serde_json::json!(port);
+
+                let owner_creds_path = continuwuity_dir.join("owner_credentials.json");
+                if owner_creds_path.exists() {
+                    if let Ok(creds_str) = fs::read_to_string(&owner_creds_path) {
+                        if let Ok(creds) = serde_json::from_str::<serde_json::Value>(&creds_str) {
+                            details["owner_username"] = serde_json::json!(
+                                creds.get("username").and_then(|v| v.as_str()).unwrap_or("")
+                            );
+                            details["owner_password"] = serde_json::json!(
+                                creds.get("password").and_then(|v| v.as_str()).unwrap_or("")
+                            );
+                        }
+                    }
+                }
+
+                // Count registered agent tokens
+                let tokens_dir = continuwuity_dir.join("tokens");
+                if tokens_dir.exists() {
+                    if let Ok(entries) = fs::read_dir(&tokens_dir) {
+                        let count = entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+                            .count();
+                        details["registered_agents"] = serde_json::json!(count);
+                    }
+                }
+            }
+
             integrations.push(serde_json::json!({
                 "id": pid,
                 "name": name,
                 "category": category,
                 "status": state,
-                "details": {},
+                "details": details,
                 "updated_at": updated_at,
             }));
         }

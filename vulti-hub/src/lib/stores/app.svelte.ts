@@ -1,4 +1,4 @@
-import { api, setToken, getToken, type Session, type Message, type Agent, type AgentRole, type AgentService, type CronJob, type Rule, type InboxItem, type Contact, type Memories, type Secret, type OAuthToken, type SystemStatus, type ChannelDirectory, type Analytics, type Integration, type GlobalSettings, type Provider, type AgentRelationship, type OwnerProfile } from '$lib/api';
+import { api, setToken, getToken, type Session, type Message, type Agent, type AgentRole, type AgentService, type CronJob, type Rule, type InboxItem, type Contact, type Memories, type Secret, type OAuthToken, type SystemStatus, type ChannelDirectory, type Analytics, type Integration, type GlobalSettings, type Provider, type AgentRelationship, type OwnerProfile, type Connection } from '$lib/api';
 import { createWsStore, type WsMessage } from '$lib/ws';
 import { marked } from 'marked';
 
@@ -90,35 +90,29 @@ let integrations = $state<Integration[]>([]);
 let providers = $state<Provider[]>([]);
 let relationships = $state<AgentRelationship[]>([]);
 let owner = $state<OwnerProfile>({ name: 'Human' });
+let connections = $state<Connection[]>([]);
+let pendingOps = $state(0);
+
+/** Wrap any async operation to track in-flight state.
+ *  Uses queueMicrotask to avoid mutating $state during $effect execution. */
+async function tracked<T>(fn: () => Promise<T>): Promise<T> {
+	queueMicrotask(() => pendingOps++);
+	try { return await fn(); }
+	finally { queueMicrotask(() => pendingOps--); }
+}
 
 const ws = createWsStore();
-
-// RAF-batched streaming buffer — collapses multiple chunks per frame into one reactive update
-let streamBuffer = '';
-let streamRafId: number | null = null;
-
-function flushStreamBuffer() {
-	streamingContent += streamBuffer;
-	streamBuffer = '';
-	streamRafId = null;
-}
 
 // Subscribe to WebSocket messages
 ws.onMessage((msg: WsMessage) => {
 	switch (msg.type) {
 		case 'chunk':
-			streamBuffer += msg.content ?? '';
+			// Backend sends full accumulated text per chunk (edit semantics),
+			// so replace rather than append to avoid duplication.
+			streamingContent = msg.content ?? '';
 			isStreaming = true;
-			if (!streamRafId) {
-				streamRafId = requestAnimationFrame(flushStreamBuffer);
-			}
 			break;
 		case 'message':
-			// Flush any remaining buffer before committing
-			if (streamRafId) {
-				cancelAnimationFrame(streamRafId);
-				flushStreamBuffer();
-			}
 			if (isStreaming) {
 				messages.push({
 					id: msg.id ?? crypto.randomUUID(),
@@ -142,12 +136,6 @@ ws.onMessage((msg: WsMessage) => {
 			isTyping = msg.active ?? false;
 			break;
 		case 'error':
-			// Flush any remaining buffer
-			if (streamRafId) {
-				cancelAnimationFrame(streamRafId);
-				streamBuffer = '';
-				streamRafId = null;
-			}
 			messages.push({
 				id: msg.id ?? crypto.randomUUID(),
 				role: 'assistant',
@@ -208,12 +196,15 @@ export const store = {
 	get channels() { return channels; },
 	get analytics() { return analytics; },
 	get integrations() { return integrations; },
+	get isBusy() { return pendingOps > 0; },
 	ws,
 
 	async loadSessions() {
-		try {
-			sessions = await api.listSessions(activeAgentId ?? undefined);
-		} catch { sessions = []; }
+		await tracked(async () => {
+			try {
+				sessions = await api.listSessions(activeAgentId ?? undefined);
+			} catch { sessions = []; }
+		});
 	},
 
 	async createSession(name?: string) {
@@ -232,11 +223,13 @@ export const store = {
 			ws.disconnect();
 			return;
 		}
-		try {
-			const raw = await api.getHistory(id);
-			messages = raw.map(m => m.role === 'assistant' ? { ...m, content: renderMarkdown(m.content) } : m);
-		} catch { messages = []; }
-		ws.connect(id);
+		await tracked(async () => {
+			try {
+				const raw = await api.getHistory(id);
+				messages = raw.map(m => m.role === 'assistant' ? { ...m, content: renderMarkdown(m.content) } : m);
+			} catch { messages = []; }
+			ws.connect(id);
+		});
 	},
 
 	async deleteSession(id: string) {
@@ -261,22 +254,24 @@ export const store = {
 	},
 
 	async loadAgents() {
-		try {
-			agents = await api.listAgents();
-			if (!activeAgentId) {
-				const saved = localStorage.getItem('vulti_active_agent');
-				if (saved && agents.find(a => a.id === saved)) {
-					activeAgentId = saved;
-				} else if (agents.length > 0) {
-					activeAgentId = agents[0].id;
+		await tracked(async () => {
+			try {
+				agents = await api.listAgents();
+				if (!activeAgentId) {
+					const saved = localStorage.getItem('vulti_active_agent');
+					if (saved && agents.find(a => a.id === saved)) {
+						activeAgentId = saved;
+					} else if (agents.length > 0) {
+						activeAgentId = agents[0].id;
+					}
 				}
-			}
-		} catch { agents = []; }
+			} catch { agents = []; }
+		});
 	},
 
 	async createAgent(data: { name: string; role?: AgentRole; model?: string; avatar?: string; personality?: string; description?: string; inherit_from?: string }) {
 		const agent = await api.createAgent(data);
-		agents = [...agents, agent];
+		agents.push(agent);
 		this.activeAgentId = agent.id;
 		await this.reloadAgentResources();
 		// Fire-and-forget Matrix onboarding (register, join global rooms, DM owner, send greeting)
@@ -285,18 +280,25 @@ export const store = {
 	},
 
 	async updateAgent(agentId: string, updates: Partial<Agent>) {
-		const updated = await api.updateAgent(agentId, updates);
-		agents = agents.map(a => a.id === agentId ? { ...a, ...updated } : a);
-		return updated;
+		const agent = agents.find(a => a.id === agentId);
+		if (agent) Object.assign(agent, updates);
+		return tracked(async () => {
+			const updated = await api.updateAgent(agentId, updates);
+			if (agent) Object.assign(agent, updated);
+			return updated;
+		});
 	},
 
 	async deleteAgent(agentId: string) {
-		await api.deleteAgent(agentId);
 		agents = agents.filter(a => a.id !== agentId);
+		relationships = relationships.filter(r => r.fromAgentId !== agentId && r.toAgentId !== agentId);
 		if (activeAgentId === agentId) {
 			this.activeAgentId = agents.length > 0 ? agents[0].id : null;
-			if (activeAgentId) await this.reloadAgentResources();
 		}
+		await tracked(async () => {
+			await api.deleteAgent(agentId);
+			if (activeAgentId) await this.reloadAgentResources();
+		});
 	},
 
 	async markAgentReady(agentId: string) {
@@ -304,15 +306,23 @@ export const store = {
 	},
 
 	async addServiceToAgent(agentId: string, service: Partial<AgentService>) {
-		// Service management is stored in agent config -- update via API
-		const updated = await api.updateAgent(agentId, { services: [...(store.activeAgent?.services ?? []), service as AgentService] } as Partial<Agent>);
-		agents = agents.map(a => a.id === agentId ? { ...a, ...updated } : a);
+		const agent = agents.find(a => a.id === agentId);
+		const newServices = [...(agent?.services ?? []), service as AgentService];
+		if (agent) agent.services = newServices;
+		await tracked(async () => {
+			const updated = await api.updateAgent(agentId, { services: newServices } as Partial<Agent>);
+			if (agent) Object.assign(agent, updated);
+		});
 	},
 
 	async removeServiceFromAgent(agentId: string, serviceId: string) {
-		const currentServices = store.activeAgent?.services?.filter(s => s.id !== serviceId) ?? [];
-		const updated = await api.updateAgent(agentId, { services: currentServices } as Partial<Agent>);
-		agents = agents.map(a => a.id === agentId ? { ...a, ...updated } : a);
+		const agent = agents.find(a => a.id === agentId);
+		const filtered = agent?.services?.filter(s => s.id !== serviceId) ?? [];
+		if (agent) agent.services = filtered;
+		await tracked(async () => {
+			const updated = await api.updateAgent(agentId, { services: filtered } as Partial<Agent>);
+			if (agent) Object.assign(agent, updated);
+		});
 	},
 
 	async reloadAgentResources() {
@@ -332,20 +342,76 @@ export const store = {
 
 		if (!activeAgentId) return;
 
-		await Promise.all([
+		await tracked(() => Promise.all([
 			this.loadSessions(),
 			this.loadMemories(),
 			this.loadSoul(),
 			this.loadCron(),
-		]);
+		]));
 	},
 
 	async loadCron() {
-		try { cronJobs = await api.listCron(activeAgentId ?? undefined); } catch { cronJobs = []; }
+		await tracked(async () => {
+			try { cronJobs = await api.listCron(activeAgentId ?? undefined); } catch { cronJobs = []; }
+		});
+	},
+
+	async createCronJob(data: Partial<CronJob>) {
+		const tempId = crypto.randomUUID();
+		const optimistic = { id: tempId, status: 'active', ...data } as CronJob;
+		cronJobs.push(optimistic);
+		await tracked(async () => {
+			const created = await api.createCron(data, activeAgentId ?? undefined);
+			const idx = cronJobs.findIndex(j => j.id === tempId);
+			if (idx >= 0) cronJobs[idx] = created;
+		});
+	},
+
+	async updateCronJob(id: string, updates: Partial<CronJob>) {
+		const job = cronJobs.find(j => j.id === id);
+		if (job) Object.assign(job, updates);
+		await tracked(async () => {
+			const updated = await api.updateCron(id, updates);
+			if (job) Object.assign(job, updated);
+		});
+	},
+
+	async deleteCronJob(id: string) {
+		const idx = cronJobs.findIndex(j => j.id === id);
+		if (idx >= 0) cronJobs.splice(idx, 1);
+		await tracked(() => api.deleteCron(id));
 	},
 
 	async loadRules() {
-		try { rules = await api.listRules(activeAgentId ?? undefined); } catch { rules = []; }
+		await tracked(async () => {
+			try { rules = await api.listRules(activeAgentId ?? undefined); } catch { rules = []; }
+		});
+	},
+
+	async createRule(data: Partial<Rule>) {
+		const tempId = crypto.randomUUID();
+		const optimistic = { id: tempId, enabled: true, trigger_count: 0, tags: [], ...data } as Rule;
+		rules.push(optimistic);
+		await tracked(async () => {
+			const created = await api.createRule(data, activeAgentId ?? undefined);
+			const idx = rules.findIndex(r => r.id === tempId);
+			if (idx >= 0) rules[idx] = created;
+		});
+	},
+
+	async updateRule(id: string, updates: Partial<Rule>) {
+		const rule = rules.find(r => r.id === id);
+		if (rule) Object.assign(rule, updates);
+		await tracked(async () => {
+			const updated = await api.updateRule(id, updates);
+			if (rule) Object.assign(rule, updated);
+		});
+	},
+
+	async deleteRule(id: string) {
+		const idx = rules.findIndex(r => r.id === id);
+		if (idx >= 0) rules.splice(idx, 1);
+		await tracked(() => api.deleteRule(id));
 	},
 
 	async loadInbox() {
@@ -357,67 +423,121 @@ export const store = {
 	},
 
 	async loadMemories() {
-		try { memories = await api.getMemories(activeAgentId ?? undefined); } catch { memories = { memory: '', user: '' }; }
+		await tracked(async () => {
+			try { memories = await api.getMemories(activeAgentId ?? undefined); } catch { memories = { memory: '', user: '' }; }
+		});
 	},
 
 	async saveMemory(file: 'memory' | 'user', content: string) {
-		await api.updateMemory(file, content, activeAgentId ?? undefined);
 		if (file === 'memory') memories = { ...memories, memory: content };
 		else memories = { ...memories, user: content };
+		await tracked(() => api.updateMemory(file, content, activeAgentId ?? undefined));
 	},
 
 	async loadSoul() {
-		try {
-			const res = await api.getSoul(activeAgentId ?? undefined);
-			soul = res.content;
-		} catch { soul = ''; }
+		await tracked(async () => {
+			try {
+				const res = await api.getSoul(activeAgentId ?? undefined);
+				soul = res.content;
+			} catch { soul = ''; }
+		});
 	},
 
 	async saveSoul(content: string) {
-		await api.updateSoul(content, activeAgentId ?? undefined);
 		soul = content;
+		await tracked(() => api.updateSoul(content, activeAgentId ?? undefined));
 	},
 
 	async loadSecrets() {
-		try { secrets = await api.getSecrets(); } catch { secrets = []; }
+		await tracked(async () => {
+			try { secrets = await api.getSecrets(); } catch { secrets = []; }
+		});
 	},
 
 	async loadOAuth() {
-		try { oauthTokens = await api.getOAuth(); } catch { oauthTokens = []; }
+		await tracked(async () => {
+			try { oauthTokens = await api.getOAuth(); } catch { oauthTokens = []; }
+		});
 	},
 
 	async loadStatus() {
-		try { systemStatus = await api.getStatus(); } catch { systemStatus = { gateway_state: 'unknown', platforms: {} }; }
+		await tracked(async () => {
+			try { systemStatus = await api.getStatus(); } catch { systemStatus = { gateway_state: 'unknown', platforms: {} }; }
+		});
 	},
 
 	async loadChannels() {
-		try { channels = await api.getChannels(); } catch { channels = { platforms: {} }; }
+		await tracked(async () => {
+			try { channels = await api.getChannels(); } catch { channels = { platforms: {} }; }
+		});
 	},
 
 	async loadAnalytics(days: number = 30) {
 		const agentId = store.activeAgentId || undefined;
-		try { analytics = await api.getAnalytics(days, agentId); } catch { analytics = null; }
+		await tracked(async () => {
+			try { analytics = await api.getAnalytics(days, agentId); } catch { analytics = null; }
+		});
 	},
 
 	async loadIntegrations() {
-		try { integrations = await api.getIntegrations(); } catch { integrations = []; }
+		await tracked(async () => {
+			try { integrations = await api.getIntegrations(); } catch { integrations = []; }
+		});
 	},
 
 	// Providers (global intelligence)
 	get providers() { return providers; },
 
 	async loadProviders() {
-		try { providers = await api.getProviders(); } catch { providers = []; }
+		await tracked(async () => {
+			try { providers = await api.getProviders(); } catch { providers = []; }
+		});
+	},
+
+	// Connections
+	get connections() { return connections; },
+
+	async loadConnections() {
+		await tracked(async () => {
+			try { connections = await api.listConnections(); } catch { connections = []; }
+		});
+	},
+
+	async addConnection(data: { name: string; connType: string; description: string; tags: string[]; credentials: Record<string, string>; mcp?: Record<string, unknown>; providesToolsets?: string[] }) {
+		await tracked(async () => {
+			const conn = await api.addConnection(data);
+			connections = [...connections, conn];
+		});
+	},
+
+	async updateConnection(name: string, updates: Record<string, unknown>) {
+		await tracked(async () => {
+			const updated = await api.updateConnection(name, updates);
+			connections = connections.map(c => c.name === name ? updated : c);
+		});
+	},
+
+	async deleteConnection(name: string) {
+		connections = connections.filter(c => c.name !== name);
+		await tracked(() => api.deleteConnection(name));
+	},
+
+	async updateAgentConnections(agentId: string, allowedConnections: string[]) {
+		await this.updateAgent(agentId, { allowedConnections } as Partial<Agent>);
 	},
 
 	async addSecret(key: string, value: string) {
-		await api.addSecret(key, value);
-		await Promise.all([this.loadProviders(), this.loadSecrets()]);
+		await tracked(async () => {
+			await api.addSecret(key, value);
+			await Promise.all([this.loadProviders(), this.loadSecrets()]);
+		});
 	},
 
 	async deleteSecret(key: string) {
-		await api.deleteSecret(key);
-		await Promise.all([this.loadProviders(), this.loadSecrets()]);
+		await tracked(async () => {
+			await api.deleteSecret(key);
+			await Promise.all([this.loadProviders(), this.loadSecrets()]);
+		});
 	},
 
 	dismissNotification(index: number) {
@@ -496,7 +616,9 @@ export const store = {
 		try { owner = await api.getOwner(); } catch { owner = { name: 'Human' }; }
 	},
 
-	async updateOwner(name: string, avatar?: string) {
-		owner = await api.updateOwner(name, avatar);
+	async updateOwner(name: string, avatar?: string, about?: string) {
+		await tracked(async () => {
+			owner = await api.updateOwner(name, avatar, about);
+		});
 	}
 };

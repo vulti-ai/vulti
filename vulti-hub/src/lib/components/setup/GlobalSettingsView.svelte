@@ -14,30 +14,20 @@
 	let addingKey = $state(false);
 	let error = $state('');
 
-	// Matrix owner account setup
-	let hasOwnerAccount = $derived(!!matrixIntegration?.details?.owner_username);
-	let matrixUsername = $state('');
-	let matrixPassword = $state('');
-	let matrixDisplayName = $state('');
-	let registeringMatrix = $state(false);
-	let matrixError = $state('');
+	// Matrix room management
+	let resettingRooms = $state(false);
+	let resetResult = $state<string | null>(null);
 
-	async function handleMatrixRegister() {
-		if (!matrixUsername.trim() || !matrixPassword.trim()) return;
-		registeringMatrix = true;
-		matrixError = '';
+	async function handleResetRooms() {
+		resettingRooms = true;
+		resetResult = null;
 		try {
-			await api.registerMatrixOwner(
-				matrixUsername.trim(),
-				matrixPassword.trim(),
-				matrixDisplayName.trim() || matrixUsername.trim()
-			);
-			// Reload integrations to get the new credentials
-			await store.loadIntegrations();
+			const res = await api.resetMatrixRooms();
+			resetResult = `Done. Cleared ${res.rooms_deleted} memberships, recreated rooms.`;
 		} catch (e: any) {
-			matrixError = e.message || 'Registration failed';
+			resetResult = e.message || 'Reset failed';
 		} finally {
-			registeringMatrix = false;
+			resettingRooms = false;
 		}
 	}
 
@@ -176,73 +166,19 @@
 			{/if}
 		</div>
 
-		{#if matrixConnected && matrixIntegration?.details}
-			{#if !hasOwnerAccount}
-				<!-- Setup form: create your Matrix account -->
-				<div class="mt-4 rounded-lg border border-border bg-surface-hover p-4 space-y-3">
-					<p class="text-sm font-medium text-ink">Create your Matrix account</p>
-					<p class="text-xs text-ink-muted">Pick a username and password to chat with your agents from Element.</p>
-					<div class="space-y-2">
-						<input
-							type="text"
-							bind:value={matrixDisplayName}
-							placeholder="Display name (e.g., JP)"
-							class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-primary focus:outline-none"
-						/>
-						<div class="flex gap-2">
-							<input
-								type="text"
-								bind:value={matrixUsername}
-								placeholder="Username"
-								class="flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-primary focus:outline-none"
-							/>
-							<input
-								type="text"
-								bind:value={matrixPassword}
-								placeholder="Password"
-								class="flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-primary focus:outline-none"
-								onkeydown={(e) => { if (e.key === 'Enter') handleMatrixRegister(); }}
-							/>
-						</div>
-					</div>
-					{#if matrixError}
-						<p class="text-xs text-red-400">{matrixError}</p>
-					{/if}
-					<button
-						onclick={handleMatrixRegister}
-						disabled={registeringMatrix || !matrixUsername.trim() || !matrixPassword.trim()}
-						class="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-white hover:bg-primary-hover disabled:opacity-50"
-					>
-						{registeringMatrix ? 'Creating...' : 'Create Account'}
-					</button>
-				</div>
-			{:else}
-				<!-- Show credentials and connection instructions -->
-				<div class="mt-4 rounded-lg border border-border bg-surface-hover p-4 space-y-3">
-					<p class="text-sm font-medium text-ink">Connect from your phone</p>
-					<ol class="text-xs text-ink-muted space-y-2 list-decimal list-inside">
-						<li>Download <strong>Element X</strong> from the App Store</li>
-						<li>Tap <strong>"I already have an account"</strong></li>
-						<li>Enter your server and credentials:</li>
-					</ol>
-					<div class="space-y-2">
-						<div class="rounded-md bg-surface px-3 py-2">
-							<p class="text-xs text-ink-faint mb-0.5">Server</p>
-							<code class="text-sm text-ink font-mono select-all">{matrixIntegration.details.homeserver_url}</code>
-						</div>
-						<div class="flex gap-2">
-							<div class="flex-1 rounded-md bg-surface px-3 py-2">
-								<p class="text-xs text-ink-faint mb-0.5">Username</p>
-								<code class="text-sm text-ink font-mono select-all">{matrixIntegration.details.owner_username}</code>
-							</div>
-							<div class="flex-1 rounded-md bg-surface px-3 py-2">
-								<p class="text-xs text-ink-faint mb-0.5">Password</p>
-								<code class="text-sm text-ink font-mono select-all">{matrixIntegration.details.owner_password}</code>
-							</div>
-						</div>
-					</div>
-				</div>
-			{/if}
+		{#if matrixConnected}
+			<div class="mt-4 flex items-center gap-3">
+				<button
+					onclick={handleResetRooms}
+					disabled={resettingRooms}
+					class="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-1.5 text-sm font-medium text-red-400 hover:bg-red-500/20 disabled:opacity-50"
+				>
+					{resettingRooms ? 'Resetting...' : 'Reset All Rooms'}
+				</button>
+				{#if resetResult}
+					<span class="text-xs text-ink-muted">{resetResult}</span>
+				{/if}
+			</div>
 		{/if}
 	</section>
 

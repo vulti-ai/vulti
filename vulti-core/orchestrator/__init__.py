@@ -70,3 +70,7 @@ def _register_vulti_tools():
         import orchestrator.tools.cronjob_tools  # noqa: F401
     except ImportError:
         pass
+    try:
+        import orchestrator.tools.permission_tools  # noqa: F401
+    except ImportError:
+        pass

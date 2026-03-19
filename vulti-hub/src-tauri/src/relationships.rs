@@ -98,17 +98,19 @@ pub fn get_owner() -> Result<OwnerResponse, String> {
     Ok(OwnerResponse {
         name: owner.name,
         avatar: owner.avatar,
+        about: owner.about,
     })
 }
 
 #[tauri::command]
-pub fn update_owner(name: String, avatar: Option<String>) -> Result<OwnerResponse, String> {
+pub fn update_owner(name: String, avatar: Option<String>, about: Option<String>) -> Result<OwnerResponse, String> {
     let mut reg = load_registry();
     let owner = OwnerEntry {
         name: name.clone(),
         avatar: avatar.clone(),
+        about: about.clone(),
     };
     reg.owner = Some(owner);
     save_registry(&reg)?;
-    Ok(OwnerResponse { name, avatar })
+    Ok(OwnerResponse { name, avatar, about })
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
-	import type { Agent } from '$lib/api';
+	import type { Agent, ServiceCategory } from '$lib/api';
 	import ServiceConnector from '../ServiceConnector.svelte';
 
 	let { agent }: { agent: Agent } = $props();
@@ -9,7 +9,7 @@
 		return (agent.services ?? []).find(s => s.type === type && s.permission === 'write');
 	}
 
-	function connect(type: string, label: string, category: string) {
+	function connect(type: string, label: string, category: ServiceCategory) {
 		store.addServiceToAgent(agent.id, {
 			id: crypto.randomUUID(), category, type, label,
 			status: 'connected', config: {}, permission: 'write'

@@ -98,6 +98,9 @@ export const api = {
 	updateAgent(agentId: string, updates: Partial<Agent>) {
 		return invoke<Agent>('update_agent', { agentId, updates });
 	},
+	finalizeOnboarding(agentId: string) {
+		return invoke<{ role: string; agent: string }>('finalize_onboarding', { agentId });
+	},
 
 	// Sessions
 	listSessions(agentId?: string) {
@@ -172,6 +175,20 @@ export const api = {
 		return invoke<OAuthToken[]>('get_oauth_status');
 	},
 
+	// Connections
+	listConnections() {
+		return invoke<Connection[]>('list_connections');
+	},
+	addConnection(data: { name: string; connType: string; description: string; tags: string[]; credentials: Record<string, string>; mcp?: Record<string, unknown>; providesToolsets?: string[] }) {
+		return invoke<Connection>('add_connection', data);
+	},
+	updateConnection(name: string, updates: Record<string, unknown>) {
+		return invoke<Connection>('update_connection', { name, updates });
+	},
+	deleteConnection(name: string) {
+		return invoke<{ ok: boolean }>('delete_connection', { name });
+	},
+
 	// Status & Config
 	getStatus() {
 		return invoke<SystemStatus>('get_system_status');
@@ -197,12 +214,22 @@ export const api = {
 		return invoke<AgentRelationship>('update_relationship', { relId, updates });
 	},
 
+	// Audit
+	listAuditEvents(n?: number, agentId?: string, traceId?: string, eventType?: string) {
+		return invoke<AuditEvent[]>('list_audit_events', {
+			n: n || 50,
+			agentId: agentId || null,
+			traceId: traceId || null,
+			eventType: eventType || null,
+		});
+	},
+
 	// Owner
 	getOwner() {
 		return invoke<OwnerProfile>('get_owner');
 	},
-	updateOwner(name: string, avatar?: string | null) {
-		return invoke<OwnerProfile>('update_owner', { name, avatar: avatar || null });
+	updateOwner(name: string, avatar?: string | null, about?: string | null) {
+		return invoke<OwnerProfile>('update_owner', { name, avatar: avatar || null, about: about || null });
 	},
 
 	// Matrix operations (HTTP — needs running gateway)
@@ -210,6 +237,12 @@ export const api = {
 		return request<{ room_id: string }>('/matrix/relationship-room', {
 			method: 'POST',
 			body: JSON.stringify({ from_agent_id: fromAgentId, to_agent_id: toAgentId, rel_type: relType, from_agent_name: fromAgentName || '', to_agent_name: toAgentName || '' })
+		});
+	},
+
+	resetMatrixRooms() {
+		return request<{ rooms_deleted: number; rooms_created: Record<string, unknown> }>('/matrix/reset-rooms', {
+			method: 'POST'
 		});
 	},
 
@@ -319,6 +352,18 @@ export interface Agent {
 	platforms?: string[];
 	createdAt?: string;
 	createdFrom?: string | null;
+	allowedConnections?: string[];
+}
+
+export interface Connection {
+	name: string;
+	type: string;
+	description: string;
+	tags: string[];
+	credentials: Record<string, string>;
+	mcp: Record<string, unknown>;
+	providesToolsets: string[];
+	enabled: boolean;
 }
 
 export interface CronJob {
@@ -441,6 +486,7 @@ export interface AgentRelationship {
 export interface OwnerProfile {
 	name: string;
 	avatar?: string;
+	about?: string;
 }
 
 export interface GlobalSettings {
@@ -451,6 +497,14 @@ export interface GatewayState {
 	global: GlobalSettings;
 	agents: Agent[];
 	activeAgentId: string | null;
+}
+
+export interface AuditEvent {
+	ts: string;
+	event: string;
+	agent_id: string;
+	trace_id?: string;
+	details?: Record<string, unknown>;
 }
 
 export interface Analytics {

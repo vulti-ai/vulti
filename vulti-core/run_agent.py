@@ -85,7 +85,10 @@ from agent.model_metadata import (
 )
 from agent.context_compressor import ContextCompressor
 from agent.prompt_caching import apply_anthropic_cache_control
-from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_rules_prompt
+from agent.prompt_builder import (
+    build_skills_system_prompt, build_context_files_prompt, build_rules_prompt,
+    build_connections_discovery_prompt,
+)
 from agent.display import (
     KawaiiSpinner, build_tool_preview as _build_tool_preview,
     get_cute_tool_message as _get_cute_tool_message_impl,
@@ -297,6 +300,7 @@ class AIAgent:
         clarify_callback: callable = None,
         step_callback: callable = None,
         stream_delta_callback: callable = None,
+        stream_reset_callback: callable = None,
         max_tokens: int = None,
         reasoning_config: Dict[str, Any] = None,
         prefill_messages: List[Dict[str, Any]] = None,
@@ -401,6 +405,7 @@ class AIAgent:
         self.clarify_callback = clarify_callback
         self.step_callback = step_callback
         self.stream_delta_callback = stream_delta_callback
+        self.stream_reset_callback = stream_reset_callback
         self._last_reported_tool = None  # Track for "new tool" mode
         
         # Interrupt mechanism for breaking out of tool loops
@@ -633,8 +638,9 @@ class AIAgent:
             enabled_toolsets=enabled_toolsets,
             disabled_toolsets=disabled_toolsets,
             quiet_mode=self.quiet_mode,
+            agent_id=os.getenv("VULTI_AGENT_ID"),
         )
-        
+
         # Show tool configuration and store valid tool names for validation
         self.valid_tool_names = set()
         if self.tools:
@@ -1653,6 +1659,7 @@ class AIAgent:
             enabled_toolsets=enabled_toolsets,
             disabled_toolsets=disabled_toolsets,
             quiet_mode=True,
+            agent_id=os.getenv("VULTI_AGENT_ID"),
         )
         self.valid_tool_names = {
             tool["function"]["name"] for tool in self.tools
@@ -1934,6 +1941,11 @@ class AIAgent:
         rules_prompt = build_rules_prompt(agent_id=_agent_id_for_rules)
         if rules_prompt:
             prompt_parts.append(rules_prompt)
+
+        # Connection discovery — show unused connections the agent could request
+        connections_prompt = build_connections_discovery_prompt(agent_id=os.getenv("VULTI_AGENT_ID"))
+        if connections_prompt:
+            prompt_parts.append(connections_prompt)
 
         from vulti_time import now as _vulti_now
         now = _vulti_now()
@@ -3030,6 +3042,13 @@ class AIAgent:
             full_content = "".join(content_parts) or None
             mock_tool_calls = None
             if tool_calls_acc:
+                # Reset streaming consumer so the next turn starts fresh
+                # instead of appending to the intermediate text.
+                if deltas_were_sent["yes"] and self.stream_reset_callback:
+                    try:
+                        self.stream_reset_callback()
+                    except Exception:
+                        pass
                 mock_tool_calls = []
                 for idx in sorted(tool_calls_acc):
                     tc = tool_calls_acc[idx]
@@ -3097,6 +3116,14 @@ class AIAgent:
                                 thinking_text = getattr(delta, "thinking", "")
                                 if thinking_text:
                                     self._fire_reasoning_delta(thinking_text)
+
+                # Reset streaming consumer if tool calls detected, so the
+                # next turn starts fresh instead of appending.
+                if has_tool_use and self.stream_reset_callback:
+                    try:
+                        self.stream_reset_callback()
+                    except Exception:
+                        pass
 
                 # Return the native Anthropic Message for downstream processing
                 return stream.get_final_message()
@@ -4006,6 +4033,7 @@ class AIAgent:
                 enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                 honcho_manager=self._honcho,
                 honcho_session_key=self._honcho_session_key,
+                agent_id=os.getenv("VULTI_AGENT_ID"),
             )
 
     def _execute_tool_calls_concurrent(self, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0) -> None:
@@ -4374,6 +4402,7 @@ class AIAgent:
                         enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                         honcho_manager=self._honcho,
                         honcho_session_key=self._honcho_session_key,
+                        agent_id=os.getenv("VULTI_AGENT_ID"),
                     )
                     _spinner_result = function_result
                 except Exception as tool_error:
@@ -4390,6 +4419,7 @@ class AIAgent:
                         enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                         honcho_manager=self._honcho,
                         honcho_session_key=self._honcho_session_key,
+                        agent_id=os.getenv("VULTI_AGENT_ID"),
                     )
                 except Exception as tool_error:
                     function_result = f"Error executing tool '{function_name}': {tool_error}"

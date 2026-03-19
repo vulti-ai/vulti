@@ -107,10 +107,10 @@ def _discover_tools():
 
 _discover_tools()
 
-# MCP tool discovery (external MCP servers from config)
+# MCP tool discovery (external MCP servers from config + connection registry)
 try:
     from tools.mcp_tool import discover_mcp_tools
-    discover_mcp_tools()
+    discover_mcp_tools(agent_id=os.getenv("VULTI_AGENT_ID"))
 except Exception as e:
     logger.debug("MCP tool discovery failed: %s", e)
 
@@ -174,6 +174,7 @@ def get_tool_definitions(
     enabled_toolsets: List[str] = None,
     disabled_toolsets: List[str] = None,
     quiet_mode: bool = False,
+    agent_id: str = None,
 ) -> List[Dict[str, Any]]:
     """
     Get tool definitions for model API calls with toolset-based filtering.
@@ -242,7 +243,7 @@ def get_tool_definitions(
         pass
 
     # Ask the registry for schemas (only returns tools whose check_fn passes)
-    filtered_tools = registry.get_definitions(tools_to_include, quiet=quiet_mode)
+    filtered_tools = registry.get_definitions(tools_to_include, quiet=quiet_mode, agent_id=agent_id)
 
     # Rebuild execute_code schema to only list sandbox tools that are actually
     # enabled.  Without this, the model sees "web_search is available in
@@ -288,6 +289,7 @@ def handle_function_call(
     enabled_tools: Optional[List[str]] = None,
     honcho_manager: Optional[Any] = None,
     honcho_session_key: Optional[str] = None,
+    agent_id: Optional[str] = None,
 ) -> str:
     """
     Main function call dispatcher that routes calls to the tool registry.
@@ -331,6 +333,7 @@ def handle_function_call(
             sandbox_enabled = enabled_tools if enabled_tools is not None else _last_resolved_tool_names
             result = registry.dispatch(
                 function_name, function_args,
+                agent_id=agent_id,
                 task_id=task_id,
                 enabled_tools=sandbox_enabled,
                 honcho_manager=honcho_manager,
@@ -339,6 +342,7 @@ def handle_function_call(
         else:
             result = registry.dispatch(
                 function_name, function_args,
+                agent_id=agent_id,
                 task_id=task_id,
                 user_task=user_task,
                 honcho_manager=honcho_manager,

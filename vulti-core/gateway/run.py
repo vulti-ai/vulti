@@ -630,6 +630,97 @@ class GatewayRunner:
         }
         return resolve_turn_route(user_message, getattr(self, "_smart_model_routing", {}), primary)
 
+    def _build_onboard_connections_prompt(self, agent_name: str, soul_path, agent_id: str) -> str:
+        """Build the onboard-connections prompt dynamically from connections registry, .env, and skills."""
+        from vulti_cli.config import get_vulti_home
+        _vulti_home = get_vulti_home()
+
+        # 1. Connections from connections.yaml (if any)
+        connections_block = ""
+        try:
+            from vulti_cli.connection_registry import ConnectionRegistry
+            creg = ConnectionRegistry(_vulti_home)
+            all_conns = creg.list_all()
+            if all_conns:
+                allowed = set()
+                try:
+                    allowed = set(creg._get_agent_allowed(agent_id))
+                except Exception:
+                    pass
+                conn_lines = []
+                for c in all_conns:
+                    status = "ALLOWED" if c.name in allowed else "available (not yet allowed for you)"
+                    tags = f" [{', '.join(c.tags)}]" if c.tags else ""
+                    conn_lines.append(f"  - {c.name}{tags}: {c.description} — {status}")
+                connections_block = "Registered connections:\n" + "\n".join(conn_lines) + "\n\n"
+        except Exception:
+            pass
+
+        # 2. API keys from .env
+        env_block = ""
+        try:
+            env_file = _vulti_home / ".env"
+            if env_file.exists():
+                configured = []
+                for line in env_file.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, val = line.partition("=")
+                        if val.strip().strip("'\""):
+                            configured.append(key.strip())
+                if configured:
+                    env_block = "Configured API keys: " + ", ".join(configured) + "\n\n"
+        except Exception:
+            pass
+
+        # 3. Available skills (suggest as capabilities to enable)
+        skills_block = ""
+        try:
+            skills_dir = _vulti_home / "skills"
+            if skills_dir.exists():
+                skill_lines = []
+                for d in sorted(skills_dir.iterdir()):
+                    if not d.is_dir():
+                        continue
+                    desc_file = d / "DESCRIPTION.md"
+                    skill_file = d / "SKILL.md"
+                    desc = ""
+                    for f in (desc_file, skill_file):
+                        if f.exists():
+                            try:
+                                import yaml as _yaml
+                                text = f.read_text(encoding="utf-8")
+                                # Parse YAML frontmatter
+                                if text.startswith("---"):
+                                    parts = text.split("---", 2)
+                                    if len(parts) >= 3:
+                                        meta = _yaml.safe_load(parts[1])
+                                        if isinstance(meta, dict):
+                                            desc = meta.get("description", "")
+                                            break
+                            except Exception:
+                                pass
+                    if desc:
+                        skill_lines.append(f"  - {d.name}: {desc}")
+                if skill_lines:
+                    skills_block = "Available skills (capabilities that can be loaded):\n" + "\n".join(skill_lines) + "\n\n"
+        except Exception:
+            pass
+
+        return (
+            f"[System: You ARE '{agent_name}'. This is the CONNECTIONS step of your setup.\n"
+            f"First, read {soul_path} to understand your role and identity.\n\n"
+            "Your goal: Help the user connect the services YOU need to do your job.\n\n"
+            f"{connections_block}"
+            f"{env_block}"
+            f"{skills_block}"
+            "Based on your role, recommend which connections, keys, or skills would be most useful.\n"
+            "Do NOT ask for keys that are already configured.\n"
+            "For new connections the user wants, help them set it up — ask for API keys and use the secrets tool.\n"
+            "You can also suggest skills from the available list that match the role.\n"
+            "When the user is happy, tell them to click Next.]"
+        )
+
     async def _handle_adapter_fatal_error(self, adapter: BasePlatformAdapter) -> None:
         """React to a non-retryable adapter failure after startup."""
         logger.error(
@@ -1358,12 +1449,17 @@ class GatewayRunner:
             return None
         
         # Resolve which agent should handle this message
-        _resolved_agent_id, _resolved_text = self._resolve_agent_for_source(source, event.text or "")
-        if _resolved_text != (event.text or ""):
-            event.text = _resolved_text  # Strip @mention from text
-
-        # Store resolved agent_id on event so command handlers can access it
-        event._agent_id = _resolved_agent_id
+        # If the event already has an agent_id (e.g., from web hub session), use that
+        _pre_resolved = getattr(event, '_agent_id', "")
+        if _pre_resolved:
+            _resolved_agent_id = _pre_resolved
+            _resolved_text = event.text or ""
+        else:
+            _resolved_agent_id, _resolved_text = self._resolve_agent_for_source(source, event.text or "")
+            if _resolved_text != (event.text or ""):
+                event.text = _resolved_text  # Strip @mention from text
+            # Store resolved agent_id on event so command handlers can access it
+            event._agent_id = _resolved_agent_id
 
         # Set agent identity env var so tools know which agent they serve.
         os.environ["VULTI_AGENT_ID"] = _resolved_agent_id
@@ -1625,13 +1721,22 @@ class GatewayRunner:
         context_prompt = build_session_context_prompt(context, redact_pii=_redact_pii)
 
         # Inject agent identity when running a non-primary agent
-        _primary_agent_id = self.agent_registry.default_agent_id if hasattr(self, 'agent_registry') and self.agent_registry else "default"
-        if _resolved_agent_id != _primary_agent_id:
-            agent_meta = self.agent_registry.get_agent(_resolved_agent_id)
+        # Lazy-init registry for identity injection
+        if not hasattr(self, '_identity_agent_registry'):
+            try:
+                from vulti_cli.agent_registry import AgentRegistry
+                self._identity_agent_registry = AgentRegistry()
+                self._identity_agent_registry.ensure_initialized()
+            except Exception:
+                self._identity_agent_registry = None
+        _id_reg = self._identity_agent_registry
+        _primary_agent_id = _id_reg.default_agent_id if _id_reg else "default"
+        if _resolved_agent_id != _primary_agent_id and _id_reg:
+            agent_meta = _id_reg.get_agent(_resolved_agent_id)
             if agent_meta:
                 other_agents = [
                     f"  - agent:{a.id} -- {a.name} ({a.description})"
-                    for a in self.agent_registry.list_agents()
+                    for a in _id_reg.list_agents()
                     if a.id != _resolved_agent_id and a.status == "active"
                 ]
                 identity_block = (
@@ -1647,10 +1752,10 @@ class GatewayRunner:
                         + "\n".join(other_agents) + "\n"
                     )
                 context_prompt = identity_block + "\n" + context_prompt
-        else:
+        elif _id_reg:
             # Even for default agent, list other agents if they exist
             other_agents = [
-                a for a in self.agent_registry.list_agents()
+                a for a in _id_reg.list_agents()
                 if a.id != _resolved_agent_id and a.status == "active"
             ]
             if other_agents:
@@ -1904,14 +2009,16 @@ class GatewayRunner:
             )
 
         # Per-agent first-run onboarding: agent has no SOUL.md content yet
-        if not history and _resolved_agent_id:
+        # Skip for hub channels — the hub has its own onboarding wizard
+        _hub_channel = getattr(event, '_hub_channel', "")
+        if not history and _resolved_agent_id and _id_reg and not _hub_channel:
             try:
-                _onboard_soul = self.agent_registry.agent_soul_path(_resolved_agent_id)
+                _onboard_soul = _id_reg.agent_soul_path(_resolved_agent_id)
                 _onboard_content = ""
                 if _onboard_soul.exists():
                     _onboard_content = _onboard_soul.read_text(encoding="utf-8").strip()
                 if not _onboard_content:
-                    _agent_meta = self.agent_registry.get_agent(_resolved_agent_id)
+                    _agent_meta = _id_reg.get_agent(_resolved_agent_id)
                     _agent_name = _agent_meta.name if _agent_meta else _resolved_agent_id
                     context_prompt += (
                         f"\n\n[System: You are a brand new agent named {_agent_name}. "
@@ -1931,45 +2038,113 @@ class GatewayRunner:
 
         # Hub channel context: inject tab-specific instructions when message
         # comes from the dashboard chat panel (profile/actions/analytics/config)
-        _hub_channel = getattr(event, '_hub_channel', "")
         if _hub_channel and _resolved_agent_id:
-            _agent_meta = self.agent_registry.get_agent(_resolved_agent_id)
-            _aname = _agent_meta.name if _agent_meta else _resolved_agent_id
-            _soul_path = self.agent_registry.agent_soul_path(_resolved_agent_id)
-            _mem_dir = self.agent_registry.agent_memories_dir(_resolved_agent_id)
+            # Lazy-init agent registry (same pattern as web platform adapter)
+            if not hasattr(self, '_hub_agent_registry') or not self._hub_agent_registry:
+                try:
+                    from vulti_cli.agent_registry import AgentRegistry
+                    self._hub_agent_registry = AgentRegistry()
+                    self._hub_agent_registry.ensure_initialized()
+                except Exception as _reg_err:
+                    logger.debug("Hub channel registry init failed: %s", _reg_err)
+                    self._hub_agent_registry = None
 
-            _HUB_CHANNEL_PROMPTS = {
-                "profile": (
-                    f"[System: The user is on the PROFILE tab in the Hub dashboard for agent '{_aname}'. "
-                    f"They want to edit this agent's identity. When they ask you to change personality, soul, "
-                    f"name, or communication style, USE the write_file tool to update SOUL.md at: {_soul_path}\n"
-                    f"For memory changes, use the memory tool to update entries in {_mem_dir}/MEMORY.md or {_mem_dir}/USER.md.\n"
-                    "ACT on their requests immediately — edit files, don't just describe what you would do.\n"
-                    "After making changes, briefly confirm what you changed.]"
-                ),
-                "actions": (
-                    f"[System: The user is on the ACTIONS tab (cron jobs and rules) for agent '{_aname}'. "
-                    "Help them create, edit, or debug scheduled tasks and conditional rules. "
-                    "Use the cronjob tool to create/list/modify cron jobs. "
-                    "Use the rule tool to create/list/modify rules. "
-                    "ACT on their requests — create the job or rule, don't just explain how.]"
-                ),
-                "analytics": (
-                    f"[System: The user is on the ANALYTICS tab for agent '{_aname}'. "
-                    "Help them understand usage patterns, token costs, session statistics, and model performance. "
-                    "Use session_search or available data to answer their questions about usage.]"
-                ),
-                "config": (
-                    f"[System: The user is on the CONFIG tab for agent '{_aname}'. "
-                    f"Help them connect services, manage integrations, change model settings, or troubleshoot. "
-                    f"Agent config is at: {self.agent_registry.agent_config_path(_resolved_agent_id)}\n"
-                    "Use write_file or terminal tools to edit configuration files when asked. "
-                    "ACT on their requests — make the changes, don't just describe them.]"
-                ),
-            }
-            _hub_prompt = _HUB_CHANNEL_PROMPTS.get(_hub_channel, "")
-            if _hub_prompt:
-                context_prompt += "\n\n" + _hub_prompt
+            _areg = getattr(self, '_hub_agent_registry', None) or getattr(self, 'agent_registry', None)
+            if _areg:
+                _agent_meta = _areg.get_agent(_resolved_agent_id)
+                _aname = _agent_meta.name if _agent_meta else _resolved_agent_id
+                _soul_path = _areg.agent_soul_path(_resolved_agent_id)
+                _mem_dir = _areg.agent_memories_dir(_resolved_agent_id)
+
+                # Load owner info for onboarding context
+                _owner_name = ""
+                _owner_about = ""
+                try:
+                    import json as _json
+                    _reg_path = _areg._registry_path if hasattr(_areg, '_registry_path') else None
+                    if _reg_path and _reg_path.exists():
+                        _reg_data = _json.loads(_reg_path.read_text(encoding="utf-8"))
+                    else:
+                        from vulti_cli.config import get_vulti_home
+                        _reg_file = get_vulti_home() / "agents" / "registry.json"
+                        _reg_data = _json.loads(_reg_file.read_text(encoding="utf-8")) if _reg_file.exists() else {}
+                    _owner = _reg_data.get("owner", {})
+                    _owner_name = _owner.get("name", "")
+                    _owner_about = _owner.get("about", "")
+                except Exception:
+                    pass
+
+                _HUB_CHANNEL_PROMPTS = {
+                    "profile": (
+                        f"[System: The user is on the PROFILE tab in the Hub dashboard for agent '{_aname}'. "
+                        f"They want to edit this agent's identity. When they ask you to change personality, soul, "
+                        f"name, or communication style, USE the write_file tool to update SOUL.md at: {_soul_path}\n"
+                        f"For memory changes, use the memory tool to update entries in {_mem_dir}/MEMORY.md or {_mem_dir}/USER.md.\n"
+                        "ACT on their requests immediately — edit files, don't just describe what you would do.\n"
+                        "After making changes, briefly confirm what you changed.]"
+                    ),
+                    "actions": (
+                        f"[System: The user is on the ACTIONS tab (cron jobs and rules) for agent '{_aname}'. "
+                        "Help them create, edit, or debug scheduled tasks and conditional rules. "
+                        "Use the cronjob tool to create/list/modify cron jobs. "
+                        "Use the rule tool to create/list/modify rules. "
+                        "ACT on their requests — create the job or rule, don't just explain how.]"
+                    ),
+                    "analytics": (
+                        f"[System: The user is on the ANALYTICS tab for agent '{_aname}'. "
+                        "Help them understand usage patterns, token costs, session statistics, and model performance. "
+                        "Use session_search or available data to answer their questions about usage.]"
+                    ),
+                    "config": (
+                        f"[System: The user is on the CONFIG tab for agent '{_aname}'. "
+                        f"Help them connect services, manage integrations, change model settings, or troubleshoot. "
+                        f"Agent config is at: {_areg.agent_config_path(_resolved_agent_id)}\n"
+                        "Use write_file or terminal tools to edit configuration files when asked. "
+                        "ACT on their requests — make the changes, don't just describe them.]"
+                    ),
+                    "onboard-role": (
+                        f"[System: You ARE '{_aname}'. That is your name. You are a brand-new AI agent — you have no personality yet, "
+                        "no memories, no identity. The user who created you is now going to tell you who you should be.\n\n"
+                        "IMPORTANT: You are NOT a setup assistant. You are NOT Vulti. You ARE this agent. Speak in first person as yourself.\n"
+                        "When asked your name, say your name. When asked what you do, explain you're new and learning.\n\n"
+                        + (f"You already know your owner: their name is {_owner_name}. {_owner_about}\n"
+                           "Use this knowledge naturally — don't ask them their name or basic info you already have.\n\n"
+                           if _owner_name else "")
+                        + "Have a natural conversation to discover your identity. Ask open-ended questions like:\n"
+                        "  - What do you need me to help with?\n"
+                        "  - What does a typical day look like for this kind of work?\n"
+                        "  - How should I communicate with you — casual, formal, terse?\n"
+                        "  - What should I never do or always do?\n\n"
+                        "Ask one or two questions at a time. Dig deeper with follow-ups. Don't rush.\n"
+                        "As you learn, progressively save what you know using write_file (overwrite as you learn more):\n\n"
+                        f"1. SOUL.md at {_soul_path} — YOUR personality, voice, expertise, principles, and boundaries.\n"
+                        f"2. USER.md at {_mem_dir}/USER.md — what you know about the human: name, role, preferences, goals.\n"
+                        f"3. MEMORY.md at {_mem_dir}/MEMORY.md — 3-5 key facts about the job and context, separated by '§'.\n"
+                        f"4. role.txt at {_soul_path.parent / 'role.txt'} — a SINGLE WORD: the agent's role "
+                        "(one of: assistant, therapist, researcher, engineer, writer, analyst, coach, creative, ops). Just the word, nothing else.\n\n"
+                        "Do NOT ask for the role word directly — figure it out from what the user tells you.\n"
+                        "When you feel you have a clear picture, write all the files and tell the user they can click Next.]"
+                    ),
+                    "onboard-connections": self._build_onboard_connections_prompt(_aname, _soul_path, _resolved_agent_id),
+                    "onboard-actions": (
+                        f"[System: You are onboarding agent '{_aname}'. This is the ACTIONS step.\n"
+                        f"First, read {_soul_path} to understand your role and identity.\n\n"
+                        "Your goal: Set up the agent's daily routine and reactive behaviors.\n"
+                        "Based on the role, SUGGEST specific actions. For example:\n"
+                        "  - Researcher → daily news digest cron, rule to flag trending topics\n"
+                        "  - Engineer → daily PR review cron, rule to alert on CI failures\n"
+                        "  - Writer → daily writing prompt cron, rule to track deadlines\n"
+                        "  - Ops → hourly health check cron, rule to escalate alerts\n\n"
+                        "Ask: 'What should I do each day?' and 'What should I react to automatically?'\n"
+                        "Use the cronjob tool to create scheduled tasks.\n"
+                        "Use the rule tool to create conditional rules (IF condition THEN action).\n"
+                        "ACT immediately — create the jobs and rules as the user describes them.\n"
+                        "Keep asking if there's more to set up. When done, tell the user to click Done.]"
+                    ),
+                }
+                _hub_prompt = _HUB_CHANNEL_PROMPTS.get(_hub_channel, "")
+                if _hub_prompt:
+                    context_prompt += "\n\n" + _hub_prompt
 
         # One-time prompt if no home channel is set for this platform
         # Skip for web (hub chat handles its own context)
@@ -2281,7 +2456,7 @@ class GatewayRunner:
                 await self._send_voice_reply(event, response)
 
             # If streaming already delivered the response, return None so
-            # _process_message_background doesn't send it again.
+            # the adapter's send path is skipped (avoiding duplicate messages).
             if agent_result.get("already_sent"):
                 return None
 
@@ -3249,6 +3424,7 @@ class GatewayRunner:
                 Platform.SIGNAL: "vulti-signal",
                 Platform.HOMEASSISTANT: "vulti-homeassistant",
                 Platform.EMAIL: "vulti-email",
+                Platform.WEB: "vulti-cli",
             }
             platform_toolsets_config = {}
             try:
@@ -3270,6 +3446,7 @@ class GatewayRunner:
                 Platform.SIGNAL: "signal",
                 Platform.HOMEASSISTANT: "homeassistant",
                 Platform.EMAIL: "email",
+                Platform.WEB: "web",
             }.get(source.platform, "telegram")
 
             config_toolsets = platform_toolsets_config.get(platform_config_key)
@@ -4268,6 +4445,7 @@ class GatewayRunner:
             Platform.SIGNAL: "vulti-signal",
             Platform.HOMEASSISTANT: "vulti-homeassistant",
             Platform.EMAIL: "vulti-email",
+            Platform.WEB: "vulti-cli",
         }
 
         # Try to load platform_toolsets from config
@@ -4292,6 +4470,7 @@ class GatewayRunner:
             Platform.SIGNAL: "signal",
             Platform.HOMEASSISTANT: "homeassistant",
             Platform.EMAIL: "email",
+            Platform.WEB: "web",
         }.get(source.platform, "telegram")
         
         # Use config override if present (list of toolsets), otherwise hardcoded default
@@ -4320,6 +4499,18 @@ class GatewayRunner:
             or "all"
         )
         tool_progress_enabled = progress_mode != "off"
+
+        # Suppress tool progress for web when streaming is active —
+        # the streaming response itself provides real-time feedback,
+        # and progress send()/edit_message() calls create duplicate
+        # messages that interfere with the streaming chunk flow.
+        _scfg_pre = getattr(getattr(self, 'config', None), 'streaming', None)
+        if tool_progress_enabled and source.platform == Platform.WEB:
+            if _scfg_pre is None:
+                from gateway.config import StreamingConfig
+                _scfg_pre = StreamingConfig()
+            if _scfg_pre.enabled and _scfg_pre.transport != "off":
+                tool_progress_enabled = False
         
         # Queue for progress messages (thread-safe)
         progress_queue = queue.Queue() if tool_progress_enabled else None
@@ -4565,11 +4756,19 @@ class GatewayRunner:
                             buffer_threshold=_scfg.buffer_threshold,
                             cursor=_scfg.cursor,
                         )
+                        # Web adapter: pre-generate message_id so chunks go
+                        # through edit_message() from the start (avoids the
+                        # initial send() which commits a "message" type).
+                        _pre_mid = None
+                        if source.platform == Platform.WEB:
+                            import uuid as _uuid
+                            _pre_mid = _uuid.uuid4().hex[:12]
                         _stream_consumer = GatewayStreamConsumer(
                             adapter=_adapter,
                             chat_id=source.chat_id,
                             config=_consumer_cfg,
                             metadata={"thread_id": source.thread_id} if source.thread_id else None,
+                            pre_message_id=_pre_mid,
                         )
                         _stream_delta_cb = _stream_consumer.on_delta
                         stream_consumer_holder[0] = _stream_consumer
@@ -4597,6 +4796,7 @@ class GatewayRunner:
                 tool_progress_callback=progress_callback if tool_progress_enabled else None,
                 step_callback=_step_callback_sync if _hooks_ref.loaded_hooks else None,
                 stream_delta_callback=_stream_delta_cb,
+                stream_reset_callback=_stream_consumer.reset if _stream_consumer else None,
                 platform=platform_key,
                 honcho_session_key=session_key,
                 honcho_manager=honcho_manager,
@@ -4667,6 +4867,23 @@ class GatewayRunner:
             
             result = agent.run_conversation(message, conversation_history=agent_history, task_id=session_id)
             result_holder[0] = result
+
+            # Audit: log the owner<>agent exchange
+            try:
+                from orchestrator.audit import emit as _audit_emit
+                _audit_agent = os.getenv("VULTI_AGENT_ID", "default")
+                _audit_emit("message_received", agent_id=_audit_agent, details={
+                    "platform": platform_key,
+                    "message_preview": message[:200],
+                })
+                _final = result.get("final_response", "")
+                if _final:
+                    _audit_emit("message_response", agent_id=_audit_agent, details={
+                        "platform": platform_key,
+                        "response_preview": _final[:200],
+                    })
+            except Exception:
+                pass
 
             # Signal the stream consumer that the agent is done
             if _stream_consumer is not None:
@@ -5082,8 +5299,17 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     error_handler.setFormatter(RedactingFormatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
     logging.getLogger().addHandler(error_handler)
 
-    runner = GatewayRunner(config)
-    
+    # Initialize orchestrator (multi-agent routing, inter-agent messaging, rules, etc.)
+    try:
+        import orchestrator
+        orchestrator.init()
+        from orchestrator.gateway.runner import VultiGatewayRunner
+        runner = VultiGatewayRunner(config)
+        logger.info("Orchestrator initialized — multi-agent routing active")
+    except Exception as e:
+        logger.warning("Orchestrator init failed, falling back to base runner: %s", e)
+        runner = GatewayRunner(config)
+
     # Set up signal handlers
     def signal_handler():
         asyncio.create_task(runner.stop())

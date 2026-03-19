@@ -918,14 +918,37 @@ def _run_on_mcp_loop(coro, timeout: float = 30):
 # Config loading
 # ---------------------------------------------------------------------------
 
-def _load_mcp_config() -> Dict[str, dict]:
-    """Read ``mcp_servers`` from the Vulti config file.
+def _load_mcp_config(agent_id: str = None) -> Dict[str, dict]:
+    """Read MCP server configs, checking the connection registry first.
+
+    If an ``agent_id`` is given and the connection registry has MCP-type
+    connections allowed for that agent, those are returned.  Otherwise falls
+    back to the legacy ``mcp_servers`` section of ``config.yaml``.
 
     Returns a dict of ``{server_name: server_config}`` or empty dict.
-    Server config can contain either ``command``/``args``/``env`` for stdio
-    transport or ``url``/``headers`` for HTTP transport, plus optional
-    ``timeout`` and ``connect_timeout`` overrides.
     """
+    # Try connection registry first
+    if agent_id:
+        try:
+            from vulti_cli.config import get_vulti_home
+            from vulti_cli.connection_registry import ConnectionRegistry
+
+            conn_reg = ConnectionRegistry(get_vulti_home())
+            if conn_reg.exists():
+                mcp_configs = conn_reg.get_mcp_configs_for_agent(agent_id)
+                if mcp_configs:
+                    # Merge with legacy config (connections take precedence)
+                    legacy = _load_legacy_mcp_config()
+                    legacy.update(mcp_configs)
+                    return legacy
+        except Exception as exc:
+            logger.debug("Connection registry MCP lookup failed: %s", exc)
+
+    return _load_legacy_mcp_config()
+
+
+def _load_legacy_mcp_config() -> Dict[str, dict]:
+    """Read ``mcp_servers`` from the legacy Vulti config file."""
     try:
         from vulti_cli.config import load_config
         config = load_config()
@@ -1492,11 +1515,14 @@ async def _discover_and_register_server(name: str, config: dict) -> List[str]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def discover_mcp_tools() -> List[str]:
+def discover_mcp_tools(agent_id: str = None) -> List[str]:
     """Entry point: load config, connect to MCP servers, register tools.
 
     Called from ``model_tools._discover_tools()``. Safe to call even when
     the ``mcp`` package is not installed (returns empty list).
+
+    When *agent_id* is given, MCP connections from the connection registry
+    that are allowed for the agent are included alongside legacy config.
 
     Idempotent for already-connected servers. If some servers failed on a
     previous call, only the missing ones are retried.
@@ -1508,7 +1534,7 @@ def discover_mcp_tools() -> List[str]:
         logger.debug("MCP SDK not available -- skipping MCP tool discovery")
         return []
 
-    servers = _load_mcp_config()
+    servers = _load_mcp_config(agent_id=agent_id)
     if not servers:
         logger.debug("No MCP servers configured")
         return []

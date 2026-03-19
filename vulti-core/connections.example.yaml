@@ -1,0 +1,85 @@
+# Vulti Connection Registry
+# -------------------------
+# All connections to external services are defined here.
+# Each agent has an allow list controlling which connections it can use.
+#
+# Copy this file to ~/.vulti/connections.yaml and fill in your credentials.
+# This file should NEVER be committed (it's in .gitignore).
+#
+# Manage connections via CLI:
+#   vulti connections list          # List all connections
+#   vulti connections add <name>    # Add a connection interactively
+#   vulti connections allow <agent> <conn>   # Grant agent access
+#   vulti connections audit         # Show access matrix
+#   vulti connections import-env    # Import from existing .env
+
+version: 1
+
+connections:
+  # --- MCP Server connections ---
+
+  github:
+    type: mcp
+    description: "GitHub repository access via MCP"
+    tags: [code, vcs]
+    mcp:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+    credentials:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_your_token_here"
+
+  filesystem:
+    type: mcp
+    description: "Local filesystem access via MCP"
+    tags: [files, local]
+    mcp:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      timeout: 120
+      connect_timeout: 60
+
+  # --- API key connections ---
+
+  firecrawl:
+    type: api_key
+    description: "Firecrawl web search and scraping"
+    tags: [web, search, scraping]
+    credentials:
+      FIRECRAWL_API_KEY: "fc-your_key_here"
+    provides_toolsets: [web]
+
+  fal:
+    type: api_key
+    description: "fal.ai image generation"
+    tags: [image, generation]
+    credentials:
+      FAL_KEY: "your_fal_key_here"
+    provides_toolsets: [image]
+
+  browserbase:
+    type: api_key
+    description: "BrowserBase cloud browser automation"
+    tags: [browser, automation]
+    credentials:
+      BROWSERBASE_API_KEY: "your_key_here"
+      BROWSERBASE_PROJECT_ID: "your_project_id"
+    provides_toolsets: [browser]
+
+  openai-tts:
+    type: api_key
+    description: "OpenAI text-to-speech and Whisper STT"
+    tags: [audio, tts, stt]
+    credentials:
+      VOICE_TOOLS_OPENAI_KEY: "sk-your_key_here"
+    provides_toolsets: [tts]
+
+  # --- Custom connections ---
+
+  home-assistant:
+    type: custom
+    description: "Home Assistant smart home control"
+    tags: [iot, home]
+    credentials:
+      HASS_URL: "http://homeassistant.local:8123"
+      HASS_TOKEN: "your_long_lived_access_token"
+    provides_toolsets: [homeassistant]

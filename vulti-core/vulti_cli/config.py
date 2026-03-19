@@ -62,6 +62,10 @@ def get_env_path() -> Path:
     """Get the .env file path (for API keys)."""
     return get_vulti_home() / ".env"
 
+def get_connections_path() -> Path:
+    """Get the connections registry file path."""
+    return get_vulti_home() / "connections.yaml"
+
 def get_project_root() -> Path:
     """Get the project installation directory."""
     return Path(__file__).parent.parent.resolve()

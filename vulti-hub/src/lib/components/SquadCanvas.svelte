@@ -19,7 +19,7 @@
 	}
 
 	// Panel
-	let panelMode = $state<'none' | 'agent' | 'owner' | 'settings' | 'create'>('none');
+	let panelMode = $state<'none' | 'agent' | 'owner' | 'settings' | 'create' | 'onboard' | 'audit'>('none');
 	let panelOpen = $derived(panelMode !== 'none');
 
 	let gatewayConnected = $derived(store.gatewayGlobal.gateway?.connected);
@@ -137,6 +137,12 @@
 					<path d="M12 5v14M5 12h14" />
 				</svg>
 			</button>
+			<button class="toolbar-btn" title="Audit Log" onclick={() => { panelMode = 'audit'; }}>
+				<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+					<path d="M12 8v4l3 3" />
+					<circle cx="12" cy="12" r="9" />
+				</svg>
+			</button>
 		</div>
 
 		<div class="h-full w-full flow-container">
@@ -145,11 +151,10 @@
 				edges={flowEdges}
 				{nodeTypes}
 				{edgeTypes}
-				onconnect={onConnect}
+				onbeforeconnect={onBeforeConnect}
 				onnodeclick={onNodeClick}
 				fitView
 				connectionRadius={40}
-				defaultEdgeOptions={{ type: 'default', animated: false }}
 				proOptions={{ hideAttribution: true }}
 			>
 				<Background variant={BackgroundVariant.Dots} gap={24} size={1} />
@@ -161,7 +166,7 @@
 	{#if panelOpen && panelMode !== 'none'}
 		<div class="panel-overlay" onclick={closePanel} onkeydown={() => {}}></div>
 		<div class="panel-slide">
-			<SlideOutPanel mode={panelMode} onclose={closePanel} />
+			<SlideOutPanel mode={panelMode} onclose={closePanel} onmodechange={(m) => panelMode = m as typeof panelMode} />
 		</div>
 	{/if}
 </div>

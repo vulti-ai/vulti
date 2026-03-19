@@ -140,6 +140,15 @@ def rule(
             updated = record_trigger(rule_id)
             if not updated:
                 return json.dumps({"success": False, "error": f"Rule '{rule_id}' not found."}, indent=2)
+            try:
+                from orchestrator.audit import emit as audit_emit
+                audit_emit("rule_trigger", details={
+                    "rule_id": rule_id,
+                    "rule_name": updated.get("name"),
+                    "trigger_count": updated.get("trigger_count", 0),
+                })
+            except Exception:
+                pass
             return json.dumps(
                 {
                     "success": True,

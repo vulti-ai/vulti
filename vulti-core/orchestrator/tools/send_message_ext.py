@@ -82,10 +82,11 @@ def _handle_agent_send(target_agent_id: str, message: str) -> str:
     hop_count = AgentContext.current_hop_count()
     sender_agent_id = AgentContext.current_agent_id()
 
-    if hop_count >= 3:
+    if hop_count >= 1:
         return json.dumps({
-            "error": "Max inter-agent hop count reached (3). "
-            "Cannot send further inter-agent messages to prevent loops."
+            "error": "Inter-agent nesting not allowed. "
+            "You cannot send messages to other agents from within an inter-agent call. "
+            "If you need another agent's help, note it in your response and handle it in your own conversation."
         })
 
     try:

@@ -2,12 +2,16 @@
 	import { store } from '$lib/stores/app.svelte';
 	import VirtualMessages from './VirtualMessages.svelte';
 
-	let { contextLabel = '', contextHint = '', channel = '', initialMessage = '' }: {
+	let { contextLabel = '', contextHint = '', channel = '', initialMessage = '', autoSend = false }: {
 		contextLabel?: string;
 		contextHint?: string;
 		channel?: string;
 		initialMessage?: string;
+		autoSend?: boolean;
 	} = $props();
+
+	// Track which channels have already auto-sent to avoid repeating
+	let autoSentChannels = $state<Set<string>>(new Set());
 
 	let agentName = $derived(store.activeAgent?.name || 'agent');
 
@@ -40,6 +44,16 @@
 		if (keyChanged) {
 			loadedKey = key;
 			input = '';
+
+			// Auto-send initialMessage on first visit to this channel
+			if (autoSend && initialMessage && !existing && !autoSentChannels.has(key)) {
+				autoSentChannels.add(key);
+				// Defer to next tick so session state settles
+				queueMicrotask(() => {
+					input = initialMessage;
+					send();
+				});
+			}
 		}
 	});
 
@@ -60,7 +74,10 @@
 			}
 		}
 
-		store.sendMessage(text, channel ? { hub_channel: channel } : undefined);
+		const meta: Record<string, string> = {};
+		if (channel) meta.hub_channel = channel;
+		if (agentId) meta.agent_id = agentId;
+		store.sendMessage(text, Object.keys(meta).length ? meta : undefined);
 		input = '';
 	}
 

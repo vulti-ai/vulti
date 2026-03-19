@@ -1,34 +1,39 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
 	import ProfileView from './ProfileView.svelte';
-	import ConfigView from './ConfigView.svelte';
 	import CronView from './CronView.svelte';
 	import RulesView from './RulesView.svelte';
 	import AnalyticsView from './AnalyticsView.svelte';
 	import ChatView from './ChatView.svelte';
 	import OwnerPanel from './OwnerPanel.svelte';
 	import GlobalSettingsView from './setup/GlobalSettingsView.svelte';
+	import ConnectionsView from './ConnectionsView.svelte';
+	import AgentConnectionsView from './AgentConnectionsView.svelte';
 	import CreateAgentView from './setup/CreateAgentView.svelte';
+	import OnboardingWizard from './OnboardingWizard.svelte';
+	import AuditView from './AuditView.svelte';
 	import type { Agent } from '$lib/api';
 
-	let { mode, onclose }: {
-		mode: 'agent' | 'owner' | 'settings' | 'create';
+	let { mode, onclose, onmodechange }: {
+		mode: 'agent' | 'owner' | 'settings' | 'create' | 'onboard' | 'audit';
 		onclose: () => void;
+		onmodechange?: (newMode: string) => void;
 	} = $props();
 
-	let activeTab = $state<'profile' | 'config' | 'actions' | 'analytics'>('profile');
+	let activeTab = $state<'profile' | 'connections' | 'actions' | 'analytics'>('profile');
+	let settingsTab = $state<'general' | 'connections'>('general');
 	let actionsSubTab = $state<'cron' | 'rules'>('cron');
 	let activeAgent = $derived(store.activeAgent);
 
 	const tabs = [
 		{ id: 'profile' as const, label: 'Profile' },
-		{ id: 'config' as const, label: 'Config' },
+		{ id: 'connections' as const, label: 'Connections' },
 		{ id: 'actions' as const, label: 'Actions' },
 		{ id: 'analytics' as const, label: 'Analytics' },
 	];
 
 	function handleAgentCreated(_agent: Agent) {
-		onclose();
+		onmodechange?.('onboard');
 	}
 
 	// Title
@@ -36,6 +41,8 @@
 		if (mode === 'owner') return 'Profile';
 		if (mode === 'settings') return 'Settings';
 		if (mode === 'create') return 'New Agent';
+		if (mode === 'onboard') return 'Setup';
+		if (mode === 'audit') return 'Audit Log';
 		if (activeAgent) return activeAgent.name;
 		return '';
 	});
@@ -51,9 +58,15 @@
 			{/if}
 		</div>
 		<button class="close-btn" onclick={onclose} title="Back to canvas">
-			<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-				<path d="M18 6 6 18M6 6l12 12" />
-			</svg>
+			{#if store.isBusy}
+				<svg class="animate-spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+					<path d="M21 12a9 9 0 1 1-6.219-8.56" />
+				</svg>
+			{:else}
+				<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+					<path d="M18 6 6 18M6 6l12 12" />
+				</svg>
+			{/if}
 		</button>
 	</header>
 
@@ -65,9 +78,26 @@
 		</div>
 
 	{:else if mode === 'settings'}
+		<!-- Settings tabs -->
+		<nav class="panel-tabs">
+			<button
+				class="panel-tab"
+				class:active={settingsTab === 'general'}
+				onclick={() => settingsTab = 'general'}
+			>General</button>
+			<button
+				class="panel-tab"
+				class:active={settingsTab === 'connections'}
+				onclick={() => settingsTab = 'connections'}
+			>Connections</button>
+		</nav>
 		<div class="panel-body">
 			<div class="panel-content-narrow">
-				<GlobalSettingsView />
+				{#if settingsTab === 'general'}
+					<GlobalSettingsView />
+				{:else}
+					<ConnectionsView />
+				{/if}
 			</div>
 		</div>
 
@@ -78,6 +108,18 @@
 					onCreated={handleAgentCreated}
 					onCancel={onclose}
 				/>
+			</div>
+		</div>
+
+	{:else if mode === 'onboard'}
+		<div class="flex-1 overflow-hidden">
+			<OnboardingWizard onclose={onclose} />
+		</div>
+
+	{:else if mode === 'audit'}
+		<div class="panel-body">
+			<div class="panel-content-narrow">
+				<AuditView />
 			</div>
 		</div>
 
@@ -100,9 +142,9 @@
 			<!-- Left: tab content -->
 			<div class="panel-content-main">
 				{#if activeTab === 'profile'}
-					<ProfileView />
-				{:else if activeTab === 'config'}
-					<ConfigView />
+					<ProfileView ondelete={onclose} />
+				{:else if activeTab === 'connections'}
+					<AgentConnectionsView />
 				{:else if activeTab === 'actions'}
 					<div class="flex border-b border-ink/5">
 						<button

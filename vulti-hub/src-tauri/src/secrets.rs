@@ -202,12 +202,12 @@ pub fn list_providers() -> Result<Vec<ProviderResponse>, String> {
             "OpenRouter",
             &["OPENROUTER_API_KEY"],
             &[
-                "openrouter/anthropic/claude-opus-4",
-                "openrouter/anthropic/claude-sonnet-4",
-                "openrouter/google/gemini-2.5-pro",
-                "openrouter/openai/gpt-4o",
-                "openrouter/meta-llama/llama-4-maverick",
-                "openrouter/deepseek/deepseek-chat-v3",
+                "anthropic/claude-opus-4.6",
+                "anthropic/claude-sonnet-4.6",
+                "google/gemini-2.5-pro",
+                "openai/gpt-4o",
+                "meta-llama/llama-4-maverick",
+                "deepseek/deepseek-chat-v3",
             ],
         ),
         (

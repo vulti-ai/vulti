@@ -463,9 +463,10 @@ def build_context_files_prompt(cwd: Optional[str] = None, agent_id: Optional[str
         _agent_soul = _vulti_home / "agents" / _agent_id / "SOUL.md"
         if _agent_soul.exists():
             soul_path = _agent_soul
-    if soul_path is None:
+    if soul_path is None and not _agent_id:
+        # Only fall back to global SOUL.md when there's no specific agent
         soul_path = _vulti_home / "SOUL.md"
-    if soul_path.exists():
+    if soul_path is not None and soul_path.exists():
         try:
             content = soul_path.read_text(encoding="utf-8").strip()
             if content:
@@ -566,3 +567,47 @@ def build_rules_prompt(agent_id: Optional[str] = None) -> str:
             )
 
     return section
+
+
+# ---------------------------------------------------------------------------
+# Connection discovery prompt
+# ---------------------------------------------------------------------------
+
+def build_connections_discovery_prompt(agent_id: Optional[str] = None) -> str:
+    """Return a prompt section listing connections the agent doesn't yet have access to.
+
+    This enables the "I noticed you have X, want me to use it?" flow.
+    Returns empty string if no connections exist or all are already allowed.
+    """
+    if not agent_id:
+        return ""
+
+    try:
+        from vulti_cli.config import get_vulti_home
+        from vulti_cli.connection_registry import ConnectionRegistry
+
+        registry = ConnectionRegistry(get_vulti_home())
+        if not registry.exists():
+            return ""
+
+        visible = registry.get_visible_for_agent(agent_id)
+        if not visible:
+            return ""
+
+        unused = [c for c in visible if not c["allowed"] and c.get("enabled", True)]
+        if not unused:
+            return ""
+
+        lines = ["## Available Connections (not yet enabled for you)\n"]
+        for conn in unused:
+            tags_str = ", ".join(conn.get("tags", []))
+            tag_part = f" ({tags_str})" if tags_str else ""
+            lines.append(f"- **{conn['name']}**{tag_part}: {conn.get('description', '')}")
+        lines.append(
+            "\nIf any of these would help with the current task, suggest the user run:\n"
+            "`vulti connections allow <agent-id> <connection-name>`"
+        )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug("Connection discovery prompt failed: %s", e)
+        return ""

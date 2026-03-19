@@ -16,6 +16,7 @@ from typing import Optional
 
 from orchestrator.agent_context import AgentContext
 from orchestrator.agent_registry import get_default_agent_id
+from orchestrator.audit import emit as audit_emit
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,12 @@ def vulti_run_job(job: dict) -> tuple:
 
     # Resolve agent identity for this job
     agent_id = job.get("agent") or get_default_agent_id()
+
+    audit_emit("cron_execute", agent_id=agent_id, details={
+        "job_id": job.get("id"),
+        "job_name": job.get("name"),
+        "prompt_preview": (job.get("prompt") or "")[:200],
+    })
 
     with AgentContext.scope(agent_id, hop_count=0):
         return upstream_run_job(job)

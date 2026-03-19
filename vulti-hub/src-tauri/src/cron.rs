@@ -2,16 +2,27 @@ use crate::types::{CronFile, CronResponse};
 use crate::vulti_home::{atomic_write_json, ensure_dir, read_json_file, vulti_home};
 use std::fs;
 
-fn cron_path() -> std::path::PathBuf {
-    vulti_home().join("cron").join("jobs.json")
+fn cron_path(agent_id: Option<&str>) -> std::path::PathBuf {
+    match agent_id {
+        Some(id) => vulti_home().join("agents").join(id).join("cron").join("jobs.json"),
+        None => vulti_home().join("cron").join("jobs.json"),
+    }
 }
 
-fn load_cron_file() -> CronFile {
-    read_json_file(&cron_path())
+fn load_cron_file(agent_id: Option<&str>) -> CronFile {
+    let path = cron_path(agent_id);
+    if path.exists() {
+        read_json_file(&path)
+    } else if agent_id.is_none() {
+        // Only fall back to global dir when no specific agent requested
+        read_json_file(&vulti_home().join("cron").join("jobs.json"))
+    } else {
+        CronFile::default()
+    }
 }
 
-fn save_cron_file(file: &CronFile) -> Result<(), String> {
-    let path = cron_path();
+fn save_cron_file(file: &CronFile, agent_id: Option<&str>) -> Result<(), String> {
+    let path = cron_path(agent_id);
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;
     }
@@ -97,21 +108,10 @@ fn job_to_response(v: &serde_json::Value) -> CronResponse {
 
 #[tauri::command]
 pub fn list_cron(agent_id: Option<String>) -> Result<Vec<CronResponse>, String> {
-    let file = load_cron_file();
+    let file = load_cron_file(agent_id.as_deref());
     let jobs: Vec<CronResponse> = file
         .jobs
         .iter()
-        .filter(|j| {
-            if let Some(ref aid) = agent_id {
-                j.get("agent")
-                    .and_then(|v| v.as_str())
-                    .map(|a| a == aid)
-                    .unwrap_or(false)
-            } else {
-                true
-            }
-        })
-        .filter(|j| j.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true))
         .map(|j| job_to_response(j))
         .collect();
     Ok(jobs)
@@ -119,7 +119,7 @@ pub fn list_cron(agent_id: Option<String>) -> Result<Vec<CronResponse>, String> 
 
 #[tauri::command]
 pub fn create_cron(data: serde_json::Value, agent_id: Option<String>) -> Result<serde_json::Value, String> {
-    let mut file = load_cron_file();
+    let mut file = load_cron_file(agent_id.as_deref());
     let job_id = uuid::Uuid::new_v4().to_string().replace("-", "")[..12].to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -175,14 +175,36 @@ pub fn create_cron(data: serde_json::Value, agent_id: Option<String>) -> Result<
 
     file.jobs.push(job.clone());
     file.updated_at = Some(chrono::Utc::now().to_rfc3339());
-    save_cron_file(&file)?;
+    let effective_agent_ref = Some(effective_agent.as_str());
+    save_cron_file(&file, effective_agent_ref)?;
 
     Ok(job)
 }
 
+/// Find which agent owns a cron job by scanning all agent dirs.
+fn find_agent_for_job(job_id: &str) -> Option<String> {
+    let agents_dir = vulti_home().join("agents");
+    if let Ok(entries) = fs::read_dir(&agents_dir) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() { continue; }
+            let agent_id = entry.file_name().to_string_lossy().to_string();
+            if agent_id == "registry.json" { continue; }
+            let jobs_path = entry.path().join("cron").join("jobs.json");
+            if jobs_path.exists() {
+                let file: CronFile = read_json_file(&jobs_path);
+                if file.jobs.iter().any(|j| j.get("id").and_then(|v| v.as_str()) == Some(job_id)) {
+                    return Some(agent_id);
+                }
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 pub fn update_cron(job_id: String, updates: serde_json::Value) -> Result<CronResponse, String> {
-    let mut file = load_cron_file();
+    let owner = find_agent_for_job(&job_id);
+    let mut file = load_cron_file(owner.as_deref());
 
     for job in file.jobs.iter_mut() {
         if job.get("id").and_then(|v| v.as_str()) == Some(&job_id) {
@@ -219,7 +241,7 @@ pub fn update_cron(job_id: String, updates: serde_json::Value) -> Result<CronRes
             }
             let response = job_to_response(job);
             file.updated_at = Some(chrono::Utc::now().to_rfc3339());
-            save_cron_file(&file)?;
+            save_cron_file(&file, owner.as_deref())?;
             return Ok(response);
         }
     }
@@ -228,14 +250,15 @@ pub fn update_cron(job_id: String, updates: serde_json::Value) -> Result<CronRes
 
 #[tauri::command]
 pub fn delete_cron(job_id: String) -> Result<serde_json::Value, String> {
-    let mut file = load_cron_file();
+    let owner = find_agent_for_job(&job_id);
+    let mut file = load_cron_file(owner.as_deref());
     let original_len = file.jobs.len();
     file.jobs
         .retain(|j| j.get("id").and_then(|v| v.as_str()) != Some(&job_id));
 
     if file.jobs.len() < original_len {
         file.updated_at = Some(chrono::Utc::now().to_rfc3339());
-        save_cron_file(&file)?;
+        save_cron_file(&file, owner.as_deref())?;
         Ok(serde_json::json!({"ok": true}))
     } else {
         Err(format!("Cron job '{}' not found", job_id))

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
-	import { api, type AgentRole } from '$lib/api';
+	import type { AgentRole } from '$lib/api';
 	import { marked } from 'marked';
 
 	const roles: { value: AgentRole; label: string }[] = [
@@ -35,12 +35,11 @@
 	}
 	async function saveName() {
 		if (!nameDraft.trim() || !store.activeAgent) return;
-		try {
-			await api.updateAgent(store.activeAgent.id, { name: nameDraft.trim() });
-			await store.loadAgents();
-		} catch {}
+		await store.updateAgent(store.activeAgent.id, { name: nameDraft.trim() });
 		editingName = false;
 	}
+
+	let { ondelete }: { ondelete?: () => void } = $props();
 
 	let showDeleteConfirm = $state(false);
 	let deleting = $state(false);
@@ -50,6 +49,7 @@
 		deleting = true;
 		try {
 			await store.deleteAgent(store.activeAgent.id);
+			ondelete?.();
 		} finally {
 			deleting = false;
 			showDeleteConfirm = false;

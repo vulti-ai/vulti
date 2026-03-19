@@ -109,6 +109,9 @@ COMMAND_REGISTRY: list[CommandDef] = [
                aliases=("reload_mcp",)),
     CommandDef("plugins", "List installed plugins and their status",
                "Tools & Skills", cli_only=True),
+    CommandDef("connections", "Manage external service connections", "Tools & Skills",
+               cli_only=True, aliases=("conn",), args_hint="[subcommand]",
+               subcommands=("list", "add", "remove", "show", "allow", "revoke", "audit", "import-env", "test")),
 
     # Info
     CommandDef("help", "Show available commands", "Info"),
@@ -121,6 +124,13 @@ COMMAND_REGISTRY: list[CommandDef] = [
                cli_only=True),
     CommandDef("update", "Update Vulti to the latest version", "Info",
                gateway_only=True),
+    CommandDef("audit", "Show audit event log (recent agent actions)", "Info",
+               args_hint="[n] [--agent <id>] [--trace <id>] [--type <event_type>]"),
+    CommandDef("budget", "Show per-agent budget status (token/cost limits)", "Info",
+               args_hint="[agent_id]"),
+    CommandDef("permissions", "Manage agent permission requests", "Tools & Skills",
+               args_hint="[list|approve <id>|deny <id>]",
+               subcommands=("list", "approve", "deny")),
 
     # Exit
     CommandDef("quit", "Exit the CLI", "Exit",

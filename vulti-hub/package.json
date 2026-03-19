@@ -22,6 +22,7 @@
 		"@tailwindcss/vite": "^4.2.1",
 		"@tauri-apps/api": "^2.10.1",
 		"@tauri-apps/cli": "^2.10.1",
+		"@types/node": "^25.5.0",
 		"marked": "^17.0.4",
 		"playwright": "^1.58.2",
 		"svelte": "^5.51.0",

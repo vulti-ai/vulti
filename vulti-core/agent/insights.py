@@ -77,13 +77,15 @@ class InsightsEngine:
         self.db = db
         self._conn = db._conn
 
-    def generate(self, days: int = 30, source: str = None) -> Dict[str, Any]:
+    def generate(self, days: int = 30, source: str = None, agent_id: str = None) -> Dict[str, Any]:
         """
         Generate a complete insights report.
 
         Args:
             days: Number of days to look back (default: 30)
             source: Optional filter by source platform
+            agent_id: Optional filter by agent ID (matches session keys
+                      starting with ``agent:{agent_id}:``)
 
         Returns:
             Dict with all computed insights
@@ -91,14 +93,15 @@ class InsightsEngine:
         cutoff = time.time() - (days * 86400)
 
         # Gather raw data
-        sessions = self._get_sessions(cutoff, source)
-        tool_usage = self._get_tool_usage(cutoff, source)
-        message_stats = self._get_message_stats(cutoff, source)
+        sessions = self._get_sessions(cutoff, source, agent_id)
+        tool_usage = self._get_tool_usage(cutoff, source, agent_id)
+        message_stats = self._get_message_stats(cutoff, source, agent_id)
 
         if not sessions:
             return {
                 "days": days,
                 "source_filter": source,
+                "agent_id": agent_id,
                 "empty": True,
                 "overview": {},
                 "models": [],
@@ -119,6 +122,7 @@ class InsightsEngine:
         return {
             "days": days,
             "source_filter": source,
+            "agent_id": agent_id,
             "empty": False,
             "generated_at": time.time(),
             "overview": overview,
@@ -137,25 +141,35 @@ class InsightsEngine:
     _SESSION_COLS = ("id, source, model, started_at, ended_at, "
                      "message_count, tool_call_count, input_tokens, output_tokens")
 
-    def _get_sessions(self, cutoff: float, source: str = None) -> List[Dict]:
-        """Fetch sessions within the time window."""
+    @staticmethod
+    def _build_session_filter(cutoff: float, source: str = None, agent_id: str = None):
+        """Build WHERE clause and params for session-scoped queries.
+
+        When agent_id is provided, filters sessions whose ID starts with
+        ``agent:{agent_id}:`` (the multi-agent session key format).
+        """
+        conditions = ["s.started_at >= ?"]
+        params: list = [cutoff]
         if source:
-            cursor = self._conn.execute(
-                f"""SELECT {self._SESSION_COLS} FROM sessions
-                    WHERE started_at >= ? AND source = ?
-                    ORDER BY started_at DESC""",
-                (cutoff, source),
-            )
-        else:
-            cursor = self._conn.execute(
-                f"""SELECT {self._SESSION_COLS} FROM sessions
-                    WHERE started_at >= ?
-                    ORDER BY started_at DESC""",
-                (cutoff,),
-            )
+            conditions.append("s.source = ?")
+            params.append(source)
+        if agent_id:
+            conditions.append("s.id LIKE ?")
+            params.append(f"agent:{agent_id}:%")
+        return " AND ".join(conditions), params
+
+    def _get_sessions(self, cutoff: float, source: str = None, agent_id: str = None) -> List[Dict]:
+        """Fetch sessions within the time window, optionally filtered by agent."""
+        where, params = self._build_session_filter(cutoff, source, agent_id)
+        cursor = self._conn.execute(
+            f"""SELECT {self._SESSION_COLS} FROM sessions s
+                WHERE {where}
+                ORDER BY s.started_at DESC""",
+            params,
+        )
         return [dict(row) for row in cursor.fetchall()]
 
-    def _get_tool_usage(self, cutoff: float, source: str = None) -> List[Dict]:
+    def _get_tool_usage(self, cutoff: float, source: str = None, agent_id: str = None) -> List[Dict]:
         """Get tool call counts from messages.
 
         Uses two sources:
@@ -164,53 +178,32 @@ class InsightsEngine:
            tool_name is not populated on tool responses)
         """
         tool_counts = Counter()
+        where, params = self._build_session_filter(cutoff, source, agent_id)
 
         # Source 1: explicit tool_name on tool response messages
-        if source:
-            cursor = self._conn.execute(
-                """SELECT m.tool_name, COUNT(*) as count
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ? AND s.source = ?
-                     AND m.role = 'tool' AND m.tool_name IS NOT NULL
-                   GROUP BY m.tool_name
-                   ORDER BY count DESC""",
-                (cutoff, source),
-            )
-        else:
-            cursor = self._conn.execute(
-                """SELECT m.tool_name, COUNT(*) as count
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ?
-                     AND m.role = 'tool' AND m.tool_name IS NOT NULL
-                   GROUP BY m.tool_name
-                   ORDER BY count DESC""",
-                (cutoff,),
-            )
+        cursor = self._conn.execute(
+            f"""SELECT m.tool_name, COUNT(*) as count
+               FROM messages m
+               JOIN sessions s ON s.id = m.session_id
+               WHERE {where}
+                 AND m.role = 'tool' AND m.tool_name IS NOT NULL
+               GROUP BY m.tool_name
+               ORDER BY count DESC""",
+            params,
+        )
         for row in cursor.fetchall():
             tool_counts[row["tool_name"]] += row["count"]
 
         # Source 2: extract from tool_calls JSON on assistant messages
         # (covers CLI sessions where tool_name is NULL on tool responses)
-        if source:
-            cursor2 = self._conn.execute(
-                """SELECT m.tool_calls
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ? AND s.source = ?
-                     AND m.role = 'assistant' AND m.tool_calls IS NOT NULL""",
-                (cutoff, source),
-            )
-        else:
-            cursor2 = self._conn.execute(
-                """SELECT m.tool_calls
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ?
-                     AND m.role = 'assistant' AND m.tool_calls IS NOT NULL""",
-                (cutoff,),
-            )
+        cursor2 = self._conn.execute(
+            f"""SELECT m.tool_calls
+               FROM messages m
+               JOIN sessions s ON s.id = m.session_id
+               WHERE {where}
+                 AND m.role = 'assistant' AND m.tool_calls IS NOT NULL""",
+            params,
+        )
 
         tool_calls_counts = Counter()
         for row in cursor2.fetchall():
@@ -247,32 +240,20 @@ class InsightsEngine:
             for name, count in tool_counts.most_common()
         ]
 
-    def _get_message_stats(self, cutoff: float, source: str = None) -> Dict:
+    def _get_message_stats(self, cutoff: float, source: str = None, agent_id: str = None) -> Dict:
         """Get aggregate message statistics."""
-        if source:
-            cursor = self._conn.execute(
-                """SELECT
-                     COUNT(*) as total_messages,
-                     SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) as user_messages,
-                     SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) as assistant_messages,
-                     SUM(CASE WHEN m.role = 'tool' THEN 1 ELSE 0 END) as tool_messages
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ? AND s.source = ?""",
-                (cutoff, source),
-            )
-        else:
-            cursor = self._conn.execute(
-                """SELECT
-                     COUNT(*) as total_messages,
-                     SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) as user_messages,
-                     SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) as assistant_messages,
-                     SUM(CASE WHEN m.role = 'tool' THEN 1 ELSE 0 END) as tool_messages
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ?""",
-                (cutoff,),
-            )
+        where, params = self._build_session_filter(cutoff, source, agent_id)
+        cursor = self._conn.execute(
+            f"""SELECT
+                 COUNT(*) as total_messages,
+                 SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) as user_messages,
+                 SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) as assistant_messages,
+                 SUM(CASE WHEN m.role = 'tool' THEN 1 ELSE 0 END) as tool_messages
+               FROM messages m
+               JOIN sessions s ON s.id = m.session_id
+               WHERE {where}""",
+            params,
+        )
         row = cursor.fetchone()
         return dict(row) if row else {
             "total_messages": 0, "user_messages": 0,

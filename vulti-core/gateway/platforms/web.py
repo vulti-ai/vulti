@@ -68,6 +68,11 @@ class WebAdapter(BasePlatformAdapter):
         self._app = None
         self._server = None
         self._server_task = None
+        # Track last streamed content per session for history storage
+        self._last_streamed: Dict[str, str] = {}
+        # Sessions with active streaming — send() uses "chunk" type instead
+        # of "message" to avoid creating committed message bubbles mid-stream
+        self._streaming_sessions: set = set()
 
     def _build_app(self):
         """Build the FastAPI application with all routes."""
@@ -582,6 +587,23 @@ class WebAdapter(BasePlatformAdapter):
 
             return result
 
+        @app.post("/api/matrix/reset-rooms")
+        async def matrix_reset_rooms(authorization: str = Header("")):
+            """Delete all Matrix rooms and recreate from scratch."""
+            await get_current_user(authorization)
+
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            homeserver_url = f"http://127.0.0.1:{port}"
+            server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+
+            from gateway.matrix_agents import reset_all_rooms
+            result = await reset_all_rooms(
+                homeserver_url=homeserver_url,
+                server_name=server_name,
+            )
+
+            return result
+
         @app.post("/api/matrix/owner-dm")
         async def matrix_owner_dm(req: Request, authorization: str = Header("")):
             """Create a DM between the owner and an agent. Agent sends a greeting."""
@@ -732,9 +754,9 @@ class WebAdapter(BasePlatformAdapter):
         # --- Analytics ---
 
         @app.get("/api/analytics")
-        async def get_analytics(days: int = 30, authorization: str = Header("")):
+        async def get_analytics(days: int = 30, agent_id: str = None, authorization: str = Header("")):
             await get_current_user(authorization)
-            return adapter._get_analytics(days)
+            return adapter._get_analytics(days, agent_id=agent_id)
 
         # --- WebSocket ---
 
@@ -765,6 +787,7 @@ class WebAdapter(BasePlatformAdapter):
                             continue
 
                         hub_channel = data.get("hub_channel", "")
+                        _ws_agent_id = data.get("agent_id", "")
 
                         # Build source for gateway
                         source = SessionSource(
@@ -785,6 +808,9 @@ class WebAdapter(BasePlatformAdapter):
                         # Pass hub channel to gateway for context-aware prompting
                         if hub_channel:
                             event._hub_channel = hub_channel
+                        # Pass agent_id so gateway routes to the correct agent
+                        if _ws_agent_id:
+                            event._agent_id = _ws_agent_id
 
                         # Store message in history
                         adapter._append_history(session_id, {
@@ -824,6 +850,9 @@ class WebAdapter(BasePlatformAdapter):
 
     async def _handle_and_respond(self, session_id: str, event: MessageEvent):
         """Handle a message event through the gateway and stream response."""
+        # Mark session as streaming so any send() during processing routes
+        # as "chunk" instead of committing a "message" bubble mid-stream.
+        self._streaming_sessions.add(session_id)
         try:
             # Send typing indicator
             ws = self._connections.get(session_id)
@@ -838,6 +867,35 @@ class WebAdapter(BasePlatformAdapter):
 
             # Re-fetch WS (may have reconnected during processing)
             ws = self._connections.get(session_id)
+
+            # Clear streaming flag so the commit message goes as "message" type
+            self._streaming_sessions.discard(session_id)
+
+            # Streaming path: handler returns None when chunks already delivered
+            if response is None:
+                streamed = self._last_streamed.pop(session_id, None)
+                if ws:
+                    msg_id = uuid.uuid4().hex[:12]
+                    # Send commit message so frontend transitions from streaming to committed
+                    await ws.send_text(json.dumps({
+                        "type": "message",
+                        "content": streamed or "",
+                        "id": msg_id,
+                    }))
+                    if streamed:
+                        self._append_history(session_id, {
+                            "id": msg_id,
+                            "role": "assistant",
+                            "content": streamed,
+                            "timestamp": datetime.now().isoformat(),
+                        })
+                        meta = self._get_session_meta(session_id)
+                        if meta:
+                            meta["preview"] = streamed[:100]
+                            meta["updated_at"] = datetime.now().isoformat()
+                            self._save_session_meta(session_id, meta)
+                return
+
             if not response:
                 response = "(No response from agent)"
             if ws:
@@ -875,6 +933,9 @@ class WebAdapter(BasePlatformAdapter):
                     "content": f"Error: {e}",
                 }))
         finally:
+            # Clear streaming flag and tracked content
+            self._streaming_sessions.discard(session_id)
+            self._last_streamed.pop(session_id, None)
             # Always stop typing indicator
             ws = self._connections.get(session_id)
             if ws:
@@ -945,6 +1006,22 @@ class WebAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Client not connected")
 
         msg_id = uuid.uuid4().hex[:12]
+
+        # During active streaming, route through "chunk" instead of committing
+        # a "message" — prevents duplicate bubbles from stream consumer or
+        # progress system calling send() mid-stream.
+        if session_id in self._streaming_sessions:
+            try:
+                await ws.send_text(json.dumps({
+                    "type": "chunk",
+                    "content": content,
+                    "id": msg_id,
+                }))
+                self._last_streamed[session_id] = content
+                return SendResult(success=True, message_id=msg_id)
+            except Exception as e:
+                return SendResult(success=False, error=str(e))
+
         try:
             await ws.send_text(json.dumps({
                 "type": "message",
@@ -981,6 +1058,10 @@ class WebAdapter(BasePlatformAdapter):
                 "content": content,
                 "id": message_id,
             }))
+            # Mark session as actively streaming so send() routes as chunks
+            self._streaming_sessions.add(session_id)
+            # Track latest streamed content for history storage
+            self._last_streamed[session_id] = content
             return SendResult(success=True, message_id=message_id)
         except Exception as e:
             return SendResult(success=False, error=str(e))
@@ -1234,16 +1315,33 @@ class WebAdapter(BasePlatformAdapter):
 
     async def _delete_agent(self, agent_id: str) -> dict:
         """Delete an agent and all its data, including Matrix cleanup."""
+        from fastapi import HTTPException
         registry = self._get_agent_registry()
 
         # Clean up Matrix user before deleting agent data
         await self._cleanup_matrix_agent(agent_id)
+
+        # Clean up web sessions belonging to this agent
+        try:
+            for session in self._get_agent_sessions(agent_id=agent_id):
+                self._delete_session_meta(session.get("id", ""))
+        except Exception:
+            pass
 
         try:
             if not registry.delete_agent(agent_id):
                 raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+        # Invalidate cached registries on gateway runner so agent list refreshes
+        runner = getattr(self, '_gateway_runner', None)
+        if runner:
+            if hasattr(runner, '_identity_agent_registry'):
+                runner._identity_agent_registry = None
+            if hasattr(runner, '_hub_agent_registry'):
+                runner._hub_agent_registry = None
+
         return {"ok": True}
 
     async def _cleanup_matrix_agent(self, agent_id: str) -> None:
@@ -2026,14 +2124,14 @@ class WebAdapter(BasePlatformAdapter):
 
     # --- Analytics ---
 
-    def _get_analytics(self, days: int = 30) -> dict:
-        """Get usage analytics from InsightsEngine."""
+    def _get_analytics(self, days: int = 30, agent_id: str = None) -> dict:
+        """Get usage analytics from InsightsEngine, optionally filtered by agent."""
         try:
             from agent.insights import InsightsEngine
             from vulti_state import SessionDB
             db = SessionDB()
             engine = InsightsEngine(db)
-            return engine.generate(days=days)
+            return engine.generate(days=days, agent_id=agent_id)
         except Exception as e:
             logger.debug("[web] Could not load analytics: %s", e)
             return {"error": str(e), "empty": True}
