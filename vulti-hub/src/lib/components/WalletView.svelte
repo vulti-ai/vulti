@@ -18,7 +18,41 @@
 		cardName.trim() !== '' && cardNumber.trim() !== '' && cardExpiry.trim() !== '' && cardCode.trim() !== ''
 	);
 
-	// Vultisig fast vault state
+	// Vault info from keyshare file
+	let vaultInfo = $state<{ name: string; vault_id: string; file: string } | null>(null);
+	let vaultAddresses = $state<Record<string, string>>({});
+	let vaultLoading = $state(false);
+
+	async function loadVault() {
+		const agentId = store.activeAgentId;
+		if (!agentId) return;
+		vaultLoading = true;
+		try {
+			vaultInfo = await api.getAgentVault(agentId);
+			if (vaultInfo?.vault_id) {
+				try {
+					const addrs = await api.vaultAddresses(vaultInfo.vault_id);
+					// Flatten the addresses object to {chain: address}
+					const flat: Record<string, string> = {};
+					if (addrs && typeof addrs === 'object') {
+						for (const [chain, val] of Object.entries(addrs)) {
+							if (typeof val === 'string') flat[chain] = val;
+							else if (val && typeof val === 'object' && 'address' in val) flat[chain] = (val as { address: string }).address;
+						}
+					}
+					vaultAddresses = flat;
+				} catch {
+					vaultAddresses = {};
+				}
+			}
+		} catch {
+			vaultInfo = null;
+		} finally {
+			vaultLoading = false;
+		}
+	}
+
+	// Vultisig fast vault creation state
 	type VaultPhase = 'idle' | 'form' | 'creating' | 'verify' | 'verifying';
 	let vaultPhase = $state<VaultPhase>('idle');
 	let vaultError = $state('');
@@ -36,7 +70,11 @@
 		if (!agentId) return;
 		loading = true;
 		try {
-			wallet = await api.getWallet(agentId);
+			const [w] = await Promise.all([
+				api.getWallet(agentId),
+				loadVault(),
+			]);
+			wallet = w;
 		} catch {
 			wallet = { creditCard: undefined, crypto: undefined };
 		} finally {

@@ -649,6 +649,55 @@ pub fn get_wallet(agent_id: String) -> Result<WalletResponse, String> {
     Ok(WalletResponse { credit_card: None, crypto: None })
 }
 
+/// Get vault info by reading the .vult keyshare file from the agent directory.
+/// Returns null if no vault exists.
+#[tauri::command]
+pub fn get_agent_vault(agent_id: String) -> Result<Option<serde_json::Value>, String> {
+    let home = agent_home(&agent_id);
+    if !home.exists() {
+        return Ok(None);
+    }
+
+    // Find any .vult file in the agent directory
+    let entries = fs::read_dir(&home).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("vult") {
+            let vault_name = path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            // Try to read the keyshare to extract vault_id
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let vault_id = json.get("uid")
+                        .or(json.get("vault_id"))
+                        .or(json.get("vaultId"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    return Ok(Some(serde_json::json!({
+                        "name": vault_name,
+                        "vault_id": vault_id,
+                        "file": path.to_string_lossy(),
+                    })));
+                }
+            }
+
+            // File exists but isn't parseable JSON — still report the vault
+            return Ok(Some(serde_json::json!({
+                "name": vault_name,
+                "vault_id": "",
+                "file": path.to_string_lossy(),
+            })));
+        }
+    }
+
+    Ok(None)
+}
+
 /// Return the path to the vultisig CLI binary.
 /// Installs it into ~/.vulti/vultisig-cli/ if not already present.
 fn ensure_vultisig_cli() -> Result<String, String> {

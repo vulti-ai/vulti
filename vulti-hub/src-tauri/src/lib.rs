@@ -281,7 +281,7 @@ pub fn run() {
             agents::list_agents, agents::get_agent, agents::create_agent, agents::update_agent, agents::finalize_onboarding,
             agents::save_wallet, agents::get_wallet, agents::get_agent_avatar,
             agents::create_fast_vault, agents::verify_fast_vault, agents::resend_vault_verification,
-            agents::ensure_vultisig,
+            agents::ensure_vultisig, agents::get_agent_vault,
             agents::vault_addresses, agents::vault_balance, agents::vault_send,
             agents::vault_swap, agents::vault_swap_quote, agents::vault_portfolio,
             // Memories & Soul

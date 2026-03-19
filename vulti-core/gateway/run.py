@@ -593,8 +593,23 @@ class GatewayRunner:
         """Resolve which agent should handle a message.
 
         Returns (agent_id, cleaned_message_text).
-        Uses the registry's default_agent rather than hardcoding "default".
+        Checks for @agent_id prefix first (set by platform adapters for DMs),
+        then falls back to the registry's default_agent.
         """
+        # Check for @agent_id prefix (e.g., "@kat hello" from a DM routed by the Matrix adapter)
+        if message_text.startswith("@"):
+            import re
+            match = re.match(r"^@([a-z][a-z0-9\-]*)\s+", message_text)
+            if match:
+                candidate = match.group(1)
+                try:
+                    from vulti_cli.agent_registry import AgentRegistry
+                    reg = AgentRegistry()
+                    if reg.get_agent(candidate):
+                        cleaned = message_text[match.end():]
+                        return candidate, cleaned
+                except Exception:
+                    pass
         try:
             from vulti_cli.agent_registry import get_default_agent_id
             return get_default_agent_id(), message_text

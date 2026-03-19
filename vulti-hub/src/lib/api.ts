@@ -125,6 +125,9 @@ export const api = {
 	ensureVultisig() {
 		return invoke<string>('ensure_vultisig');
 	},
+	getAgentVault(agentId: string) {
+		return invoke<{ name: string; vault_id: string; file: string } | null>('get_agent_vault', { agentId });
+	},
 	vaultAddresses(vaultId: string) {
 		return invoke<Record<string, unknown>>('vault_addresses', { vaultId });
 	},
