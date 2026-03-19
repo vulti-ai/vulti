@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
 	import { api, type Wallet, type WalletData } from '$lib/api';
-	import { Vultisig } from '@vultisig/sdk';
 
 	let wallet = $state<Wallet>({ creditCard: undefined, crypto: undefined });
 	let loading = $state(true);
@@ -27,21 +26,10 @@
 	let vaultEmail = $state('');
 	let vaultPassword = $state('');
 	let vaultCode = $state('');
-	let vaultProgress = $state('');
 	let pendingVaultId = $state('');
 	let vaultFormValid = $derived(
 		vaultName.trim() !== '' && vaultEmail.trim() !== '' && vaultPassword.trim().length >= 8
 	);
-
-	let sdk: Vultisig | null = null;
-
-	async function getSDK(): Promise<Vultisig> {
-		if (!sdk) {
-			sdk = new Vultisig();
-			await sdk.initialize();
-		}
-		return sdk;
-	}
 
 	async function loadWallet() {
 		const agentId = store.activeAgentId;
@@ -88,7 +76,6 @@
 		vaultPassword = '';
 		vaultCode = '';
 		vaultError = '';
-		vaultProgress = '';
 		pendingVaultId = '';
 		vaultPhase = 'form';
 	}
@@ -97,22 +84,13 @@
 		if (!vaultFormValid) return;
 		vaultPhase = 'creating';
 		vaultError = '';
-		vaultProgress = 'Initializing...';
 
 		try {
-			const vSdk = await getSDK();
-			const vaultId = await vSdk.createFastVault({
-				name: vaultName.trim(),
-				email: vaultEmail.trim(),
-				password: vaultPassword.trim(),
-				onProgress: (step: { message: string }) => {
-					vaultProgress = step.message;
-				},
-			});
+			const vaultId = await api.createFastVault(vaultName.trim(), vaultEmail.trim(), vaultPassword.trim());
 			pendingVaultId = vaultId;
 			vaultPhase = 'verify';
 		} catch (e: any) {
-			vaultError = e?.message || 'Vault creation failed';
+			vaultError = e?.message || String(e) || 'Vault creation failed';
 			vaultPhase = 'form';
 		}
 	}
@@ -125,10 +103,7 @@
 		vaultError = '';
 
 		try {
-			const vSdk = await getSDK();
-			await vSdk.verifyVault(pendingVaultId, vaultCode.trim());
-
-			// Save vault reference to agent's wallet.json
+			await api.verifyFastVault(pendingVaultId, vaultCode.trim());
 			const data: WalletData = {
 				crypto: { vault_id: pendingVaultId, name: vaultName.trim(), email: vaultEmail.trim() }
 			};
@@ -144,12 +119,7 @@
 		if (!pendingVaultId) return;
 		vaultError = '';
 		try {
-			const vSdk = await getSDK();
-			await vSdk.resendVaultVerification({
-				vaultId: pendingVaultId,
-				email: vaultEmail.trim(),
-				password: vaultPassword.trim(),
-			});
+			await api.resendVaultVerification(pendingVaultId, vaultEmail.trim(), vaultPassword.trim());
 		} catch (e: any) {
 			vaultError = e?.message || 'Failed to resend code';
 		}
@@ -171,20 +141,21 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-4xl p-6">
-
-		<!-- Sub-tabs -->
-		<div class="flex border-b border-ink/5 mb-6">
+<div class="flex h-full flex-col">
+	<div class="flex shrink-0 items-center justify-end border-b border-border px-6 py-2">
+		<div class="flex items-center gap-1 rounded-lg border border-border p-0.5">
 			<button
-				class="flex-1 py-2 text-xs font-medium transition-colors {subTab === 'card' ? 'border-b-2 border-primary text-primary' : 'text-ink-muted hover:text-ink-dim'}"
+				class="rounded-md px-3 py-1 text-xs font-medium transition-colors {subTab === 'card' ? 'bg-primary text-white' : 'text-ink-muted hover:text-ink-dim'}"
 				onclick={() => subTab = 'card'}
-			>Credit Card</button>
+			>Card</button>
 			<button
-				class="flex-1 py-2 text-xs font-medium transition-colors {subTab === 'crypto' ? 'border-b-2 border-primary text-primary' : 'text-ink-muted hover:text-ink-dim'}"
+				class="rounded-md px-3 py-1 text-xs font-medium transition-colors {subTab === 'crypto' ? 'bg-primary text-white' : 'text-ink-muted hover:text-ink-dim'}"
 				onclick={() => subTab = 'crypto'}
-			>Crypto Vault</button>
+			>Crypto</button>
 		</div>
+	</div>
+	<div class="flex-1 overflow-y-auto">
+	<div class="mx-auto max-w-4xl p-6">
 
 		{#if loading}
 			<p class="text-sm text-ink-muted">Loading...</p>
@@ -262,7 +233,6 @@
 		{:else}
 			<!-- Crypto Vault (Vultisig Fast Vault) -->
 			{#if vaultPhase === 'form'}
-				<!-- Step 1: Enter email + password -->
 				<div class="space-y-4">
 					<div>
 						<label for="v-name" class="block text-xs font-medium text-ink-muted mb-1">Vault name</label>
@@ -276,7 +246,7 @@
 					</div>
 					<div>
 						<label for="v-pass" class="block text-xs font-medium text-ink-muted mb-1">Password (min 8 characters)</label>
-						<input id="v-pass" type="password" bind:value={vaultPassword} placeholder="Vault encryption password"
+						<input id="v-pass" type="text" bind:value={vaultPassword} placeholder="Vault encryption password"
 							class="w-full rounded-lg border border-border bg-canvas px-3 py-2 text-sm text-ink placeholder:text-ink-muted/50 focus:border-primary focus:outline-none" />
 					</div>
 					{#if vaultError}
@@ -292,17 +262,15 @@
 				</div>
 
 			{:else if vaultPhase === 'creating'}
-				<!-- Step 2: MPC keygen in progress -->
 				<div class="flex flex-col items-center justify-center py-12 text-center space-y-4">
 					<svg class="animate-spin h-8 w-8 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<path d="M21 12a9 9 0 1 1-6.219-8.56" stroke-linecap="round" />
 					</svg>
-					<p class="text-sm text-ink">{vaultProgress}</p>
-					<p class="text-xs text-ink-muted">This may take a moment. MPC key generation is in progress.</p>
+					<p class="text-sm text-ink">Creating vault...</p>
+					<p class="text-xs text-ink-muted">MPC key generation in progress. This may take a minute.</p>
 				</div>
 
 			{:else if vaultPhase === 'verify' || vaultPhase === 'verifying'}
-				<!-- Step 3: Enter verification code -->
 				<div class="space-y-4">
 					<div class="rounded-lg bg-surface p-4 text-center">
 						<p class="text-sm text-ink">A verification code was sent to <strong>{vaultEmail}</strong></p>
@@ -328,7 +296,6 @@
 				</div>
 
 			{:else if wallet.crypto}
-				<!-- Display existing vault -->
 				<div class="flex items-center justify-between mb-4">
 					<h3 class="text-sm font-medium uppercase text-ink-muted">Vultisig Fast Vault</h3>
 				</div>
@@ -348,7 +315,6 @@
 				</div>
 
 			{:else}
-				<!-- No vault — prompt to create -->
 				<div class="flex flex-col items-center justify-center py-12 text-center">
 					<p class="text-sm text-ink-muted mb-1">No crypto vault configured.</p>
 					<p class="text-xs text-ink-faint mb-4">Create a Vultisig fast vault for this agent.</p>
@@ -360,5 +326,6 @@
 			{/if}
 		{/if}
 
+	</div>
 	</div>
 </div>

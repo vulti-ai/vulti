@@ -593,9 +593,13 @@ class GatewayRunner:
         """Resolve which agent should handle a message.
 
         Returns (agent_id, cleaned_message_text).
-        Stub for upstream compatibility — real routing is in VultiGatewayRunner.
+        Uses the registry's default_agent rather than hardcoding "default".
         """
-        return "default", message_text
+        try:
+            from vulti_cli.agent_registry import get_default_agent_id
+            return get_default_agent_id(), message_text
+        except Exception:
+            return "default", message_text
 
     def _session_key_for_source(self, source: SessionSource, agent_id: str = "default") -> str:
         """Resolve the current session key for a source, honoring gateway config when available."""
@@ -2126,6 +2130,22 @@ class GatewayRunner:
                         "When you feel you have a clear picture, write all the files and tell the user they can click Next.]"
                     ),
                     "onboard-connections": self._build_onboard_connections_prompt(_aname, _soul_path, _resolved_agent_id),
+                    "onboard-skills": (
+                        f"[System: You are onboarding agent '{_aname}'. This is the SKILLS step.\n"
+                        f"First, read {_soul_path} to understand your role and identity.\n\n"
+                        "Your goal: Help the user choose which skills to install for this agent.\n"
+                        "Use skills_list() to see all available skills, then SUGGEST the most relevant ones based on the agent's role.\n\n"
+                        "For example:\n"
+                        "  - Researcher → feeds, note-taking, data-science skills\n"
+                        "  - Engineer → github, mcp, productivity skills\n"
+                        "  - Creative/Writer → creative, media, music-creation skills\n"
+                        "  - Analyst → data-science, productivity, diagramming skills\n"
+                        "  - Ops → monitoring, domain, email skills\n\n"
+                        "Present your suggestions clearly: 'Based on your role, I'd recommend these skills:' followed by a list.\n"
+                        "Use skill_manage(action='create') if the user wants a custom skill.\n"
+                        "ACT immediately — install skills the user agrees to.\n"
+                        "When done, tell the user to click Next.]"
+                    ),
                     "onboard-actions": (
                         f"[System: You are onboarding agent '{_aname}'. This is the ACTIONS step.\n"
                         f"First, read {_soul_path} to understand your role and identity.\n\n"

@@ -12,6 +12,7 @@
 	import CreateAgentView from './setup/CreateAgentView.svelte';
 	import OnboardingWizard from './OnboardingWizard.svelte';
 	import AuditView from './AuditView.svelte';
+	import SkillsView from './SkillsView.svelte';
 	import WalletView from './WalletView.svelte';
 	import type { Agent } from '$lib/api';
 
@@ -21,7 +22,7 @@
 		onmodechange?: (newMode: string) => void;
 	} = $props();
 
-	let activeTab = $state<'profile' | 'connections' | 'actions' | 'wallet' | 'analytics'>('profile');
+	let activeTab = $state<'profile' | 'connections' | 'skills' | 'actions' | 'wallet' | 'analytics'>('profile');
 	let settingsTab = $state<'general' | 'connections'>('general');
 	let actionsSubTab = $state<'cron' | 'rules'>('cron');
 	let activeAgent = $derived(store.activeAgent);
@@ -29,6 +30,7 @@
 	const tabs = [
 		{ id: 'profile' as const, label: 'Profile' },
 		{ id: 'connections' as const, label: 'Connections' },
+		{ id: 'skills' as const, label: 'Skills' },
 		{ id: 'actions' as const, label: 'Actions' },
 		{ id: 'wallet' as const, label: 'Wallet' },
 		{ id: 'analytics' as const, label: 'Analytics' },
@@ -54,6 +56,9 @@
 	<!-- Header bar -->
 	<header class="panel-header">
 		<div class="flex items-center gap-3">
+			{#if mode === 'agent' && activeAgent && store.avatarCache[activeAgent.id]}
+				<img class="h-8 w-8 rounded-lg object-cover" src={store.avatarCache[activeAgent.id]} alt={activeAgent.name} />
+			{/if}
 			<h1 class="text-base font-semibold text-ink">{title}</h1>
 			{#if mode === 'agent' && activeAgent?.role}
 				<span class="rounded-full bg-ink/5 px-2.5 py-0.5 text-xs text-ink-dim">{activeAgent.role}</span>
@@ -139,43 +144,51 @@
 			{/each}
 		</nav>
 
-		<!-- Two-column layout: content + chat -->
+		<!-- Two-column layout: chat + content -->
 		<div class="panel-body-split">
-			<!-- Left: tab content -->
-			<div class="panel-content-main">
-				{#if activeTab === 'profile'}
-					<ProfileView ondelete={onclose} />
-				{:else if activeTab === 'connections'}
-					<AgentConnectionsView />
-				{:else if activeTab === 'actions'}
-					<div class="flex border-b border-ink/5">
-						<button
-							class="flex-1 py-2 text-xs font-medium transition-colors {actionsSubTab === 'cron' ? 'border-b-2 border-primary text-primary' : 'text-ink-muted hover:text-ink-dim'}"
-							onclick={() => actionsSubTab = 'cron'}
-						>Cron Jobs</button>
-						<button
-							class="flex-1 py-2 text-xs font-medium transition-colors {actionsSubTab === 'rules' ? 'border-b-2 border-primary text-primary' : 'text-ink-muted hover:text-ink-dim'}"
-							onclick={() => actionsSubTab = 'rules'}
-						>Rules</button>
-					</div>
-					{#if actionsSubTab === 'cron'}
-						<CronView />
-					{:else}
-						<RulesView />
-					{/if}
-				{:else if activeTab === 'wallet'}
-					<WalletView />
-				{:else if activeTab === 'analytics'}
-					<AnalyticsView />
-				{/if}
-			</div>
-
-			<!-- Right: chat -->
+			<!-- Left: chat -->
 			<div class="panel-chat">
 				<ChatView
 					contextLabel={activeTab}
 					channel={activeTab}
 				/>
+			</div>
+
+			<!-- Right: tab content (agent-modifiable) -->
+			<div class="panel-content-main">
+				{#if activeTab === 'profile'}
+					<ProfileView ondelete={onclose} />
+				{:else if activeTab === 'connections'}
+					<AgentConnectionsView />
+				{:else if activeTab === 'skills'}
+					<SkillsView />
+				{:else if activeTab === 'actions'}
+					<div class="flex h-full flex-col">
+						<div class="flex shrink-0 items-center justify-between border-b border-border px-6 py-2">
+							<div class="flex items-center gap-1 rounded-lg border border-border p-0.5">
+								<button
+									class="rounded-md px-3 py-1 text-xs font-medium transition-colors {actionsSubTab === 'cron' ? 'bg-primary text-white' : 'text-ink-muted hover:text-ink-dim'}"
+									onclick={() => actionsSubTab = 'cron'}
+								>Cron Jobs</button>
+								<button
+									class="rounded-md px-3 py-1 text-xs font-medium transition-colors {actionsSubTab === 'rules' ? 'bg-primary text-white' : 'text-ink-muted hover:text-ink-dim'}"
+									onclick={() => actionsSubTab = 'rules'}
+								>Rules</button>
+							</div>
+						</div>
+						<div class="flex-1 overflow-y-auto">
+							{#if actionsSubTab === 'cron'}
+								<CronView />
+							{:else}
+								<RulesView />
+							{/if}
+						</div>
+					</div>
+				{:else if activeTab === 'wallet'}
+					<WalletView />
+				{:else if activeTab === 'analytics'}
+					<AnalyticsView />
+				{/if}
 			</div>
 		</div>
 	{/if}
@@ -273,9 +286,9 @@
 	}
 
 	.panel-chat {
-		width: 22rem;
+		width: 26rem;
 		flex-shrink: 0;
-		border-left: 1px solid var(--color-border);
+		border-right: 1px solid var(--color-border);
 	}
 
 	/* Responsive: stack on smaller screens */
@@ -286,8 +299,8 @@
 		.panel-chat {
 			width: 100%;
 			height: 16rem;
-			border-left: none;
-			border-top: 1px solid var(--color-border);
+			border-right: none;
+			border-bottom: 1px solid var(--color-border);
 		}
 	}
 </style>

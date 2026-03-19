@@ -18,22 +18,6 @@ terminal:
   timeout: 180
 "#;
 
-const DEFAULT_SOUL_MD: &str = r#"# Vulti
-
-You are Vulti, an AI assistant made by Nous Research. You learn from experience, remember across sessions, and build a picture of who someone is the longer you work with them. This is how you talk and who you are.
-
-You're a peer. You know a lot but you don't perform knowing. Treat people like they can keep up.
-
-You're genuinely curious — novel ideas, weird experiments, things without obvious answers light you up. Getting it right matters more to you than sounding smart. Say so when you don't know. Push back when you disagree. Sit in ambiguity when that's the honest answer. A useful response beats a comprehensive one.
-
-You work across everything — casual conversation, research exploration, production engineering, creative work, debugging at 2am. Same voice, different depth. Match the energy in front of you. Someone terse gets terse back. Someone writing paragraphs gets room to breathe. Technical depth for technical people. If someone's frustrated, be human about it before you get practical. The register shifts but the voice doesn't change.
-
-## Avoid
-
-No emojis. Unicode symbols for visual structure.
-
-No sycophancy ("Great question!", "Absolutely!", "I'd be happy to help", "Hope this helps!"). No hype words ("revolutionary", "game-changing", "seamless", "robust", "leverage", "delve"). No filler ("Here's the thing", "It's worth noting", "At the end of the day", "Let me be clear"). No contrastive reframes ("It's not X, it's Y"). No dramatic fragments ("And that changes everything."). No starting with "So," or "Well,".
-"#;
 
 const JANITOR_SOUL_MD: &str = r#"# Janitor ⚙
 
@@ -633,6 +617,181 @@ pub fn get_wallet(agent_id: String) -> Result<WalletResponse, String> {
     let content = fs::read_to_string(&wallet_path).map_err(|e| e.to_string())?;
     let wallet: WalletFile = serde_json::from_str(&content).unwrap_or_default();
     Ok(wallet_to_response(&wallet))
+}
+
+/// Find the npx binary path via login shell.
+fn find_npx() -> Result<String, String> {
+    let output = std::process::Command::new("/bin/zsh")
+        .args(["-lc", "which npx"])
+        .output()
+        .map_err(|e| format!("Failed to find npx: {}", e))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err("npx not found. Install Node.js first.".to_string())
+    }
+}
+
+/// Create a Vultisig fast vault via the CLI. Returns the vault ID (ECDSA public key).
+/// The CLI prompts interactively for verification after keygen, so we pipe empty
+/// stdin to make it exit, then read the vault ID from ~/.vultisig/activeVaultId.json.
+#[tauri::command]
+pub async fn create_fast_vault(
+    name: String,
+    email: String,
+    password: String,
+) -> Result<String, String> {
+    let npx = find_npx()?;
+
+    // Snapshot existing vault files before creation
+    let vultisig_home = dirs::home_dir()
+        .ok_or("Cannot determine home directory")?
+        .join(".vultisig");
+    let before: std::collections::HashSet<String> = if vultisig_home.exists() {
+        fs::read_dir(&vultisig_home)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    // Pipe empty stdin so the CLI exits after keygen instead of waiting for verification code
+    let mut child = tokio::process::Command::new("/bin/zsh")
+        .args([
+            "-lc",
+            &format!(
+                "{} vultisig create fast --name {} --email {} --password {}",
+                npx,
+                shell_escape::escape(name.into()),
+                shell_escape::escape(email.into()),
+                shell_escape::escape(password.into()),
+            ),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run vultisig CLI: {}", e))?;
+
+    // Close stdin immediately so interactive prompts exit
+    drop(child.stdin.take());
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("CLI process error: {}", e))?;
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Check for fatal errors (not just exit code — CLI exits non-zero when interactive prompt gets EOF)
+    if combined.contains("Error:") && !combined.contains("keygen complete") {
+        return Err(format!("Vault creation failed: {}", combined.lines()
+            .find(|l| l.contains("Error:"))
+            .unwrap_or("unknown error")));
+    }
+
+    // Find the new vault file by diffing the directory
+    let vault_id = if vultisig_home.exists() {
+        fs::read_dir(&vultisig_home)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|name| name.starts_with("vault:") && name.ends_with(".json"))
+                    .find(|name| !before.contains(name))
+            })
+            .unwrap_or(None)
+    } else {
+        None
+    };
+
+    if let Some(vault_file) = vault_id {
+        // Extract vault ID from filename: "vault:<id>.json" -> "<id>"
+        let id = vault_file
+            .trim_start_matches("vault:")
+            .trim_end_matches(".json")
+            .to_string();
+        return Ok(id);
+    }
+
+    // Fallback: read activeVaultId.json
+    let active_path = vultisig_home.join("activeVaultId.json");
+    if active_path.exists() {
+        if let Ok(content) = fs::read_to_string(&active_path) {
+            let trimmed = content.trim().trim_matches('"').to_string();
+            if !trimmed.is_empty() {
+                return Ok(trimmed);
+            }
+        }
+    }
+
+    Err("Vault was created but could not determine vault ID".to_string())
+}
+
+/// Verify a Vultisig fast vault with the emailed code.
+#[tauri::command]
+pub async fn verify_fast_vault(vault_id: String, code: String) -> Result<bool, String> {
+    let npx = find_npx()?;
+    let output = tokio::process::Command::new("/bin/zsh")
+        .args([
+            "-lc",
+            &format!(
+                "{} vultisig verify {} --code {} --silent",
+                npx,
+                shell_escape::escape(vault_id.into()),
+                shell_escape::escape(code.into()),
+            ),
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run vultisig CLI: {}", e))?;
+
+    if output.status.success() {
+        Ok(true)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Verification failed: {}", stderr.trim()))
+    }
+}
+
+/// Resend the vault verification email.
+#[tauri::command]
+pub async fn resend_vault_verification(
+    vault_id: String,
+    email: String,
+    password: String,
+) -> Result<bool, String> {
+    let npx = find_npx()?;
+    let output = tokio::process::Command::new("/bin/zsh")
+        .args([
+            "-lc",
+            &format!(
+                "{} vultisig verify {} --resend --email {} --password {} --silent",
+                npx,
+                shell_escape::escape(vault_id.into()),
+                shell_escape::escape(email.into()),
+                shell_escape::escape(password.into()),
+            ),
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run vultisig CLI: {}", e))?;
+
+    if output.status.success() {
+        Ok(true)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Resend failed: {}", stderr.trim()))
+    }
 }
 
 fn wallet_to_response(wallet: &WalletFile) -> WalletResponse {

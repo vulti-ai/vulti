@@ -105,7 +105,7 @@
 					{#if hasImageAvatar}<img class="h-7 w-7 shrink-0 rounded-lg object-cover" src={avatarUri} alt={agentName} />{:else}<div class="vulti-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold">{avatarChar}</div>{/if}
 					<div class="max-w-[85%] rounded-xl bg-surface px-3 py-2 text-sm text-ink">
 						<div class="prose prose-sm">{streamingContent}</div>
-						<span class="inline-block h-3 w-0.5 animate-pulse bg-primary"></span>
+						<span class="streaming-cursor"></span>
 					</div>
 				</div>
 			{/if}
@@ -132,5 +132,28 @@
 		background: linear-gradient(135deg, #E8607A, #F0A84A, #4AC6B7, #6B8BEB, #9D7AEA);
 		background-size: 200% 200%;
 		color: white;
+	}
+
+	.streaming-cursor {
+		display: inline-block;
+		width: 3px;
+		height: 14px;
+		border-radius: 1px;
+		vertical-align: text-bottom;
+		margin-left: 1px;
+		background: linear-gradient(180deg, #E8607A, #F0A84A, #4AC6B7, #9D7AEA);
+		background-size: 100% 300%;
+		animation: cursor-blink 0.8s step-end infinite, cursor-shimmer 2s ease infinite;
+	}
+
+	@keyframes cursor-blink {
+		0%, 100% { opacity: 1; }
+		50% { opacity: 0; }
+	}
+
+	@keyframes cursor-shimmer {
+		0% { background-position: 0% 0%; }
+		50% { background-position: 0% 100%; }
+		100% { background-position: 0% 0%; }
 	}
 </style>

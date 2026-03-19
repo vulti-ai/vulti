@@ -87,7 +87,7 @@ from agent.context_compressor import ContextCompressor
 from agent.prompt_caching import apply_anthropic_cache_control
 from agent.prompt_builder import (
     build_skills_system_prompt, build_context_files_prompt, build_rules_prompt,
-    build_connections_discovery_prompt,
+    build_connections_discovery_prompt, build_wallet_prompt,
 )
 from agent.display import (
     KawaiiSpinner, build_tool_preview as _build_tool_preview,
@@ -1822,19 +1822,37 @@ class AIAgent:
         #   6. Current date & time (frozen at build time)
         #   7. Platform-specific formatting hint
         # If an AI peer name is configured in Honcho, personalise the identity line.
-        _ai_peer_name = (
-            self._honcho_config.ai_peer
-            if self._honcho_config and self._honcho_config.ai_peer != "vulti"
-            else None
-        )
-        if _ai_peer_name:
-            _identity = DEFAULT_AGENT_IDENTITY.replace(
-                "You are Vulti",
-                f"You are {_ai_peer_name}",
-                1,
-            )
+        # Use the agent's SOUL.md as identity if it exists; otherwise fall back
+        # to the default Vulti identity (optionally personalized by Honcho peer name).
+        _agent_id = os.getenv("VULTI_AGENT_ID")
+        _soul_identity = None
+        if _agent_id:
+            from vulti_cli.config import get_vulti_home
+            _soul_path = get_vulti_home() / "agents" / _agent_id / "SOUL.md"
+            if _soul_path.exists():
+                try:
+                    _soul_content = _soul_path.read_text(encoding="utf-8").strip()
+                    if _soul_content:
+                        _soul_identity = _soul_content
+                except Exception:
+                    pass
+
+        if _soul_identity:
+            _identity = _soul_identity
         else:
-            _identity = DEFAULT_AGENT_IDENTITY
+            _ai_peer_name = (
+                self._honcho_config.ai_peer
+                if self._honcho_config and self._honcho_config.ai_peer != "vulti"
+                else None
+            )
+            if _ai_peer_name:
+                _identity = DEFAULT_AGENT_IDENTITY.replace(
+                    "You are Vulti",
+                    f"You are {_ai_peer_name}",
+                    1,
+                )
+            else:
+                _identity = DEFAULT_AGENT_IDENTITY
         prompt_parts = [_identity]
 
         # Tool-aware behavioral guidance: only inject when the tools are loaded
@@ -1946,6 +1964,11 @@ class AIAgent:
         connections_prompt = build_connections_discovery_prompt(agent_id=os.getenv("VULTI_AGENT_ID"))
         if connections_prompt:
             prompt_parts.append(connections_prompt)
+
+        # Wallet context — inject agent's payment methods
+        wallet_prompt = build_wallet_prompt(agent_id=os.getenv("VULTI_AGENT_ID"))
+        if wallet_prompt:
+            prompt_parts.append(wallet_prompt)
 
         from vulti_time import now as _vulti_now
         now = _vulti_now()

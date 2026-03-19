@@ -29,13 +29,14 @@
 	}
 </script>
 
-<div class="p-4 space-y-4">
-	<div class="flex items-center justify-between">
+<div class="flex h-full flex-col">
+	<div class="flex shrink-0 items-center justify-between border-b border-border px-6 py-2">
 		<p class="text-xs text-ink-muted">Choose which connections this agent can use.</p>
 		{#if allowed.size > 0}
 			<span class="rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] font-medium text-green-600">{allowed.size} active</span>
 		{/if}
 	</div>
+	<div class="flex-1 overflow-y-auto p-4 space-y-4">
 
 	{#if store.connections.length === 0}
 		<div class="rounded-lg border border-dashed border-border py-6 text-center">
@@ -80,6 +81,7 @@
 			{/each}
 		</div>
 	{/if}
+	</div>
 </div>
 
 <style>

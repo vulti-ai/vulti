@@ -572,6 +572,52 @@ def build_rules_prompt(agent_id: Optional[str] = None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Wallet context
+# ---------------------------------------------------------------------------
+
+def build_wallet_prompt(agent_id: Optional[str] = None) -> str:
+    """Load the agent's wallet.json and inject it as context so the agent
+    knows its payment methods and vault details."""
+    if not agent_id:
+        return ""
+
+    import json
+    _vulti_home = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
+    wallet_path = _vulti_home / "agents" / agent_id / "wallet.json"
+    if not wallet_path.exists():
+        return ""
+
+    try:
+        data = json.loads(wallet_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    sections = []
+
+    cc = data.get("credit_card")
+    if cc and cc.get("number"):
+        masked = "*" * max(0, len(cc["number"]) - 4) + cc["number"][-4:]
+        sections.append(
+            f"- Credit card: {cc.get('name', 'Unknown')} ending {masked} "
+            f"(exp {cc.get('expiry', '?')})"
+        )
+
+    crypto = data.get("crypto")
+    if crypto and crypto.get("vault_id"):
+        sections.append(
+            f"- Vultisig vault: \"{crypto.get('name', 'Vault')}\" "
+            f"(ID: {crypto['vault_id'][:16]}..., email: {crypto.get('email', '?')})\n"
+            f"  Use `npx vultisig` CLI with `--vault {crypto['vault_id']}` for crypto operations. "
+            f"Load the 'vultisig-cli' skill for command reference."
+        )
+
+    if not sections:
+        return ""
+
+    return "## Wallet\n\nYour configured payment methods:\n" + "\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
 # Connection discovery prompt
 # ---------------------------------------------------------------------------
 

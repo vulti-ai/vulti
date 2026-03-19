@@ -6,16 +6,17 @@
 
 	let { onclose }: { onclose: () => void } = $props();
 
-	let step = $state<1 | 2 | 3 | 4>(1);
+	let step = $state<1 | 2 | 3 | 4 | 5>(1);
 
 	const steps = [
 		{ num: 1, label: 'Role' },
 		{ num: 2, label: 'Connections' },
-		{ num: 3, label: 'Actions' },
-		{ num: 4, label: 'Wallet' },
+		{ num: 3, label: 'Skills' },
+		{ num: 4, label: 'Actions' },
+		{ num: 5, label: 'Wallet' },
 	] as const;
 
-	const stepConfig: Record<1 | 2 | 3, { channel: string; label: string; initialMessage: string }> = {
+	const stepConfig: Record<1 | 2 | 3 | 4, { channel: string; label: string; initialMessage: string }> = {
 		1: {
 			channel: 'onboard-role',
 			label: 'Role & Understanding',
@@ -27,6 +28,11 @@
 			initialMessage: "What services do you want me to connect to? Based on my role, I can suggest what I'll need.",
 		},
 		3: {
+			channel: 'onboard-skills',
+			label: 'Skills',
+			initialMessage: "What skills do you want me to have? Based on my role, here's what I'd suggest — let me check what's available and recommend the best ones for my job.",
+		},
+		4: {
 			channel: 'onboard-actions',
 			label: 'Actions',
 			initialMessage: "What do you want me to do each day, or what actions should I take when I see something?",
@@ -58,22 +64,22 @@
 			await finalizeAndReload();
 		}
 
-		if (step === 4) {
+		if (step === 5) {
 			await finalizeAndReload();
 			generateAvatarInBackground();
 			onclose();
 		} else {
-			step = (step + 1) as 2 | 3 | 4;
+			step = (step + 1) as 2 | 3 | 4 | 5;
 		}
 	}
 
 	async function skip() {
-		if (step === 4) {
+		if (step === 5) {
 			await finalizeAndReload();
 			generateAvatarInBackground();
 			onclose();
 		} else {
-			step = (step + 1) as 2 | 3 | 4;
+			step = (step + 1) as 2 | 3 | 4 | 5;
 		}
 	}
 
@@ -85,9 +91,9 @@
 	let agentName = $derived(store.activeAgent?.name || 'Agent');
 
 	// Show "Next" only after agent has replied (at least one assistant message, not still responding)
-	// For step 4 (wallet form), no need to wait for chat
+	// For step 5 (wallet form), no need to wait for chat
 	let agentReady = $derived(
-		step === 4 ||
+		step === 5 ||
 		(store.messages.some((m: { role: string }) => m.role === 'assistant')
 		&& !store.isTyping
 		&& !store.isStreaming)
@@ -130,11 +136,11 @@
 		<button onclick={skip} class="ml-auto text-xs text-ink-muted hover:text-ink">Skip</button>
 	</div>
 
-	<!-- Chat content (steps 1-3) or Wallet form (step 4) -->
+	<!-- Chat content (steps 1-4) or Wallet form (step 5) -->
 	<div class="flex flex-1 flex-col overflow-hidden">
 		<div class="flex-1 overflow-hidden">
-			{#if step <= 3}
-				{@const cfg = stepConfig[step as 1 | 2 | 3]}
+			{#if step <= 4}
+				{@const cfg = stepConfig[step as 1 | 2 | 3 | 4]}
 				<ChatView
 					channel={cfg.channel}
 					contextLabel={cfg.label}
@@ -149,9 +155,9 @@
 		<!-- Footer -->
 		<div class="flex shrink-0 items-center justify-between border-t border-border px-6 py-3">
 			<span class="text-xs text-ink-muted">
-				Step {step} of 4
+				Step {step} of 5
 			</span>
-			{#if agentReady && (step === 1 || step === 2 || step === 3)}
+			{#if agentReady && step <= 4}
 				<button
 					onclick={advance}
 					class="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover"

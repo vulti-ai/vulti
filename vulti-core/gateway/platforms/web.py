@@ -271,6 +271,21 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return await asyncio.to_thread(adapter._generate_avatar, agent_id)
 
+        @app.post("/api/agents/{agent_id}/sync-avatar")
+        async def sync_agent_avatar_endpoint(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            try:
+                from gateway.matrix_agents import sync_agent_avatar
+                from gateway.config import load_gateway_config
+                config = load_gateway_config()
+                hs = config.get("matrix", {}).get("homeserver_url")
+                if not hs:
+                    return {"ok": False, "error": "Matrix not configured"}
+                ok = await sync_agent_avatar(agent_id, hs)
+                return {"ok": ok}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
         @app.get("/api/agents/{agent_id}/cron")
         async def get_agent_cron(agent_id: str, authorization: str = Header("")):
             await get_current_user(authorization)
@@ -1542,6 +1557,10 @@ class WebAdapter(BasePlatformAdapter):
             import urllib.request
             urllib.request.urlretrieve(image_url, str(avatar_path))
             logger.info("Generated avatar for agent '%s' at %s", agent_id, avatar_path)
+
+            # Sync to Matrix in the background
+            self._sync_avatar_to_matrix_bg(agent_id)
+
             return {"ok": True, "path": str(avatar_path)}
         except Exception as e:
             logger.error("Avatar generation failed for '%s': %s", agent_id, e)
@@ -1625,6 +1644,28 @@ class WebAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.debug("OpenRouter image generation failed: %s", e)
         return None
+
+    def _sync_avatar_to_matrix_bg(self, agent_id: str) -> None:
+        """Fire-and-forget Matrix avatar sync after image generation."""
+        try:
+            from gateway.matrix_agents import sync_agent_avatar
+            from gateway.config import load_gateway_config
+
+            config = load_gateway_config()
+            matrix_cfg = config.get("matrix", {})
+            homeserver_url = matrix_cfg.get("homeserver_url")
+            if not homeserver_url:
+                return
+
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(sync_agent_avatar(agent_id, homeserver_url))
+            except RuntimeError:
+                # No running loop — run synchronously in a new one
+                asyncio.run(sync_agent_avatar(agent_id, homeserver_url))
+        except Exception as e:
+            logger.debug("Matrix avatar sync skipped for %s: %s", agent_id, e)
 
     @staticmethod
     def _role_emoji(role: str) -> str:

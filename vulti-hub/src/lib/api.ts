@@ -113,6 +113,15 @@ export const api = {
 	getWallet(agentId: string) {
 		return invoke<Wallet>('get_wallet', { agentId });
 	},
+	createFastVault(name: string, email: string, password: string) {
+		return invoke<string>('create_fast_vault', { name, email, password });
+	},
+	verifyFastVault(vaultId: string, code: string) {
+		return invoke<boolean>('verify_fast_vault', { vaultId, code });
+	},
+	resendVaultVerification(vaultId: string, email: string, password: string) {
+		return invoke<boolean>('resend_vault_verification', { vaultId, email, password });
+	},
 
 	// Sessions
 	listSessions(agentId?: string) {
@@ -224,6 +233,20 @@ export const api = {
 	},
 	updateRelationship(relId: string, updates: Partial<AgentRelationship>) {
 		return invoke<AgentRelationship>('update_relationship', { relId, updates });
+	},
+
+	// Skills
+	listAvailableSkills() {
+		return invoke<Skill[]>('list_available_skills');
+	},
+	listAgentSkills(agentId: string) {
+		return invoke<Skill[]>('list_agent_skills', { agentId });
+	},
+	installAgentSkill(agentId: string, skillName: string) {
+		return invoke<Skill>('install_agent_skill', { agentId, skillName });
+	},
+	removeAgentSkill(agentId: string, skillName: string) {
+		return invoke<void>('remove_agent_skill', { agentId, skillName });
 	},
 
 	// Audit
@@ -536,6 +559,13 @@ export interface GatewayState {
 	global: GlobalSettings;
 	agents: Agent[];
 	activeAgentId: string | null;
+}
+
+export interface Skill {
+	name: string;
+	description: string;
+	category: string;
+	installed: boolean;
 }
 
 export interface AuditEvent {

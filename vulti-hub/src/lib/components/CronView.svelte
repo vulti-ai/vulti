@@ -33,18 +33,7 @@
 	}
 </script>
 
-<div class="flex h-full flex-col">
-	<header class="flex h-14 shrink-0 items-center justify-between border-b border-border px-6">
-		<h2 class="font-semibold">Scheduled Jobs</h2>
-		<button
-			onclick={() => (showCreate = !showCreate)}
-			class="rounded-lg bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover"
-		>
-			{showCreate ? 'Cancel' : '+ New Job'}
-		</button>
-	</header>
-
-	<div class="flex-1 overflow-y-auto">
+<div>
 		<!-- Create form -->
 		{#if showCreate}
 			<div class="border-b border-border p-4">
@@ -132,5 +121,4 @@
 				{/each}
 			</div>
 		{/if}
-	</div>
 </div>

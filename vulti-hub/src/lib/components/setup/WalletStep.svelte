@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { store } from '$lib/stores/app.svelte';
 	import { api, type WalletData } from '$lib/api';
-	import { Vultisig } from '@vultisig/sdk';
 
 	let { onsave }: { onsave: () => void } = $props();
 
@@ -25,21 +24,10 @@
 	let vaultEmail = $state('');
 	let vaultPassword = $state('');
 	let vaultCode = $state('');
-	let vaultProgress = $state('');
 	let pendingVaultId = $state('');
 	let vaultFormValid = $derived(
 		vaultName.trim() !== '' && vaultEmail.trim() !== '' && vaultPassword.trim().length >= 8
 	);
-
-	let sdk: Vultisig | null = null;
-
-	async function getSDK(): Promise<Vultisig> {
-		if (!sdk) {
-			sdk = new Vultisig();
-			await sdk.initialize();
-		}
-		return sdk;
-	}
 
 	// Set default vault name from agent name
 	$effect(() => {
@@ -70,22 +58,13 @@
 		if (!vaultFormValid) return;
 		vaultPhase = 'creating';
 		error = '';
-		vaultProgress = 'Initializing...';
 
 		try {
-			const vSdk = await getSDK();
-			const vaultId = await vSdk.createFastVault({
-				name: vaultName.trim(),
-				email: vaultEmail.trim(),
-				password: vaultPassword.trim(),
-				onProgress: (step: { message: string }) => {
-					vaultProgress = step.message;
-				},
-			});
+			const vaultId = await api.createFastVault(vaultName.trim(), vaultEmail.trim(), vaultPassword.trim());
 			pendingVaultId = vaultId;
 			vaultPhase = 'verify';
 		} catch (e: any) {
-			error = e?.message || 'Vault creation failed';
+			error = e?.message || String(e) || 'Vault creation failed';
 			vaultPhase = 'form';
 		}
 	}
@@ -98,9 +77,7 @@
 		error = '';
 
 		try {
-			const vSdk = await getSDK();
-			await vSdk.verifyVault(pendingVaultId, vaultCode.trim());
-
+			await api.verifyFastVault(pendingVaultId, vaultCode.trim());
 			const data: WalletData = {
 				crypto: { vault_id: pendingVaultId, name: vaultName.trim(), email: vaultEmail.trim() }
 			};
@@ -115,12 +92,7 @@
 	async function resendCode() {
 		error = '';
 		try {
-			const vSdk = await getSDK();
-			await vSdk.resendVaultVerification({
-				vaultId: pendingVaultId,
-				email: vaultEmail.trim(),
-				password: vaultPassword.trim(),
-			});
+			await api.resendVaultVerification(pendingVaultId, vaultEmail.trim(), vaultPassword.trim());
 		} catch (e: any) {
 			error = e?.message || 'Failed to resend code';
 		}
@@ -199,7 +171,7 @@
 				</div>
 				<div>
 					<label for="v-pass" class="block text-xs font-medium text-ink-muted mb-1">Password (min 8 characters)</label>
-					<input id="v-pass" type="password" bind:value={vaultPassword} placeholder="Vault encryption password"
+					<input id="v-pass" type="text" bind:value={vaultPassword} placeholder="Vault encryption password"
 						class="w-full rounded-lg border border-border bg-canvas px-3 py-2 text-sm text-ink placeholder:text-ink-muted/50 focus:border-primary focus:outline-none" />
 				</div>
 			</div>
@@ -218,7 +190,7 @@
 				<svg class="animate-spin h-8 w-8 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 					<path d="M21 12a9 9 0 1 1-6.219-8.56" stroke-linecap="round" />
 				</svg>
-				<p class="text-sm text-ink">{vaultProgress}</p>
+				<p class="text-sm text-ink">Creating vault...</p>
 				<p class="text-xs text-ink-muted">MPC key generation in progress.</p>
 			</div>
 

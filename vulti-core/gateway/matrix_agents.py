@@ -156,6 +156,19 @@ async def register_matrix_user(
     return None
 
 
+def _matrix_displayname(agent_id: str, agent_name: str) -> str:
+    """Build Matrix display name as 'Name·role' (middle dot separator)."""
+    try:
+        from vulti_cli.agent_registry import AgentRegistry
+        registry = AgentRegistry()
+        meta = registry.get_agent(agent_id)
+        if meta and meta.role:
+            return f"{agent_name}•{meta.role.capitalize()}"
+    except Exception:
+        pass
+    return agent_name
+
+
 async def ensure_agent_matrix_user(
     agent_id: str,
     agent_name: str,
@@ -220,13 +233,80 @@ async def ensure_agent_matrix_user(
             await client.put(
                 f"{homeserver_url}/_matrix/client/v3/profile/{result['user_id']}/displayname",
                 headers={"Authorization": f"Bearer {result['access_token']}"},
-                json={"displayname": f"🤖 {agent_name}"},
+                json={"displayname": _matrix_displayname(agent_id, agent_name)},
             )
     except Exception as e:
         logger.warning("Matrix: failed to set display name for %s: %s", agent_id, e)
 
+    # Upload avatar if available
+    await _sync_avatar_to_matrix(agent_id, result["user_id"], result["access_token"], homeserver_url)
+
     logger.info("Matrix: registered agent %s as %s", agent_id, result["user_id"])
     return result["user_id"]
+
+
+async def _sync_avatar_to_matrix(
+    agent_id: str,
+    user_id: str,
+    access_token: str,
+    homeserver_url: str,
+) -> bool:
+    """Upload agent's avatar.png to Matrix and set as profile picture."""
+    from vulti_cli.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+    avatar_path = registry.agent_home(agent_id) / "avatar.png"
+    if not avatar_path.exists():
+        return False
+
+    try:
+        import httpx
+
+        avatar_data = avatar_path.read_bytes()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Upload image to Matrix media repo
+            upload_resp = await client.post(
+                f"{homeserver_url}/_matrix/media/v3/upload",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "image/png",
+                },
+                params={"filename": f"{agent_id}_avatar.png"},
+                content=avatar_data,
+            )
+            if upload_resp.status_code != 200:
+                logger.warning("Matrix: avatar upload failed for %s: %s", agent_id, upload_resp.text)
+                return False
+
+            mxc_uri = upload_resp.json().get("content_uri")
+            if not mxc_uri:
+                return False
+
+            # Set avatar URL on profile
+            await client.put(
+                f"{homeserver_url}/_matrix/client/v3/profile/{user_id}/avatar_url",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"avatar_url": mxc_uri},
+            )
+
+        logger.info("Matrix: set avatar for %s (%s)", agent_id, mxc_uri)
+        return True
+    except Exception as e:
+        logger.warning("Matrix: failed to sync avatar for %s: %s", agent_id, e)
+        return False
+
+
+async def sync_agent_avatar(agent_id: str, homeserver_url: str) -> bool:
+    """Sync an agent's avatar.png to their Matrix profile. Call after avatar generation."""
+    creds = get_agent_matrix_credentials(agent_id)
+    if not creds:
+        return False
+    return await _sync_avatar_to_matrix(
+        agent_id=agent_id,
+        user_id=creds["user_id"],
+        access_token=creds["access_token"],
+        homeserver_url=homeserver_url,
+    )
 
 
 async def sync_agents_to_matrix(

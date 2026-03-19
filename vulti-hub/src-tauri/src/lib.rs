@@ -17,6 +17,7 @@ mod relationships;
 mod status;
 mod analytics;
 mod connections;
+mod skills;
 
 // Hold the gateway child process so we can kill it on exit
 struct GatewayProcess(Mutex<Option<std::process::Child>>);
@@ -273,6 +274,7 @@ pub fn run() {
             // Agents
             agents::list_agents, agents::get_agent, agents::create_agent, agents::update_agent, agents::finalize_onboarding,
             agents::save_wallet, agents::get_wallet, agents::get_agent_avatar,
+            agents::create_fast_vault, agents::verify_fast_vault, agents::resend_vault_verification,
             // Memories & Soul
             memories::get_memories, memories::update_memory, memories::get_soul, memories::update_soul,
             // Rules
@@ -296,6 +298,9 @@ pub fn run() {
             status::get_system_status, status::get_channel_directory, status::get_integrations,
             // Analytics
             analytics::get_analytics,
+            // Skills
+            skills::list_available_skills, skills::list_agent_skills,
+            skills::install_agent_skill, skills::remove_agent_skill,
             // Audit
             audit::list_audit_events,
             // Permissions
