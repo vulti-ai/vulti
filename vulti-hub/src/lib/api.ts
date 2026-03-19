@@ -270,6 +270,14 @@ export const api = {
 		return invoke<void>('remove_agent_skill', { agentId, skillName });
 	},
 
+	// Pane Widgets
+	getPaneWidgets(agentId: string) {
+		return invoke<PaneWidgets>('get_pane_widgets', { agentId });
+	},
+	clearPaneWidgets(agentId: string, tab?: string) {
+		return invoke<void>('clear_pane_widgets', { agentId, tab: tab || null });
+	},
+
 	// Audit
 	listAuditEvents(n?: number, agentId?: string, traceId?: string, eventType?: string) {
 		return invoke<AuditEvent[]>('list_audit_events', {
@@ -407,6 +415,7 @@ export interface Agent {
 	createdAt?: string;
 	createdFrom?: string | null;
 	allowedConnections?: string[];
+	isDefault?: boolean;
 }
 
 export interface Connection {
@@ -580,6 +589,21 @@ export interface GatewayState {
 	global: GlobalSettings;
 	agents: Agent[];
 	activeAgentId: string | null;
+}
+
+export type WidgetType = 'markdown' | 'kv' | 'table' | 'image' | 'status' | 'stat_grid' | 'bar_chart' | 'progress' | 'button' | 'form' | 'toggle_list' | 'action_list' | 'empty';
+
+export interface Widget {
+	id: string;
+	type: WidgetType;
+	title?: string;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	data: Record<string, any>;
+}
+
+export interface PaneWidgets {
+	version: number;
+	tabs: Record<string, Widget[]>;
 }
 
 export interface Skill {

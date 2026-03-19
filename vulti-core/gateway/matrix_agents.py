@@ -472,8 +472,10 @@ async def ensure_room_topology(
             # Check if alias exists and we can still use the room
             alias_taken = False
             try:
+                from urllib.parse import quote
+                encoded_alias = quote(full_alias, safe="")
                 resp = await client.get(
-                    f"{homeserver_url}/_matrix/client/v3/directory/room/{full_alias}",
+                    f"{homeserver_url}/_matrix/client/v3/directory/room/{encoded_alias}",
                     headers=headers,
                 )
                 if resp.status_code == 200:
@@ -563,6 +565,24 @@ async def ensure_room_topology(
                     await client.post(
                         f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
                         headers=agent_headers,
+                        json={},
+                    )
+                except Exception:
+                    pass
+
+            # Invite owner and have them join
+            owner_creds = _get_owner_matrix_credentials()
+            if owner_creds:
+                try:
+                    await client.post(
+                        f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/invite",
+                        headers=headers,
+                        json={"user_id": owner_creds["user_id"]},
+                    )
+                    owner_headers = {"Authorization": f"Bearer {owner_creds['access_token']}"}
+                    await client.post(
+                        f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                        headers=owner_headers,
                         json={},
                     )
                 except Exception:
@@ -1151,6 +1171,35 @@ async def onboard_agent_to_matrix(
             room_id=chatter_room_id,
             body=f"Hey everyone, {agent_name} here. Just joined the squad!",
         )
+
+    # Step 4: Create daily update cron job if the daily room exists
+    if creds:
+        try:
+            daily_room_id = None
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{homeserver_url}/_matrix/client/v3/directory/room/%23daily:{server_name}",
+                )
+                if resp.status_code == 200:
+                    daily_room_id = resp.json().get("room_id")
+            if daily_room_id:
+                from cron.jobs import create_job, list_jobs
+                existing = list_jobs(include_disabled=True)
+                already = any(
+                    j.get("agent") == agent_id and j.get("name") == "Daily update"
+                    for j in existing
+                )
+                if not already:
+                    create_job(
+                        prompt="Post a short status update: what you worked on recently, what's next, and any blockers. Keep it to 2-3 sentences.",
+                        schedule="0 9 * * *",
+                        name="Daily update",
+                        deliver=f"matrix:{daily_room_id}",
+                        agent=agent_id,
+                    )
+                    logger.info("Matrix: created daily update cron for agent %s", agent_id)
+        except Exception as e:
+            logger.warning("Matrix: failed to create daily cron for %s: %s", agent_id, e)
 
     return result
 

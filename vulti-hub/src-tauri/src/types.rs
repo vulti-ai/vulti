@@ -155,6 +155,7 @@ pub struct AgentResponse {
     pub created_at: String,
     pub created_from: Option<String>,
     pub allowed_connections: Vec<String>,
+    pub is_default: bool,
 }
 
 // =============================================================================

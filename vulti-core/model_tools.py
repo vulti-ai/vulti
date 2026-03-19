@@ -94,6 +94,7 @@ def _discover_tools():
         "tools.delegate_tool",
         "tools.process_registry",
         "tools.send_message_tool",
+        "tools.modify_pane",
         "tools.honcho_tools",
         "tools.homeassistant_tool",
     ]

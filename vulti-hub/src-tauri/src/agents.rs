@@ -254,6 +254,7 @@ fn agent_to_response(entry: &AgentEntry, default_agent_id: &str) -> AgentRespons
         created_at: entry.created_at.clone(),
         created_from: entry.created_from.clone(),
         allowed_connections: entry.allowed_connections.clone(),
+        is_default: entry.id == default_agent_id,
     }
 }
 
@@ -615,8 +616,37 @@ pub fn get_wallet(agent_id: String) -> Result<WalletResponse, String> {
         return Ok(WalletResponse { credit_card: None, crypto: None });
     }
     let content = fs::read_to_string(&wallet_path).map_err(|e| e.to_string())?;
-    let wallet: WalletFile = serde_json::from_str(&content).unwrap_or_default();
-    Ok(wallet_to_response(&wallet))
+
+    // Try nested format first (WalletFile with credit_card/crypto fields)
+    if let Ok(wallet) = serde_json::from_str::<WalletFile>(&content) {
+        if wallet.credit_card.is_some() || wallet.crypto.is_some() {
+            return Ok(wallet_to_response(&wallet));
+        }
+    }
+
+    // Fall back: legacy flat format written by agent tools
+    // e.g. {"type": "credit_card", "name": "...", "number": "...", ...}
+    if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&content) {
+        let mut wallet = WalletFile::default();
+        match raw.get("type").and_then(|v| v.as_str()) {
+            Some("credit_card") => {
+                wallet.credit_card = serde_json::from_value(raw.clone()).ok();
+            }
+            Some("crypto") => {
+                wallet.crypto = serde_json::from_value(raw.clone()).ok();
+            }
+            _ => {
+                if raw.get("number").is_some() {
+                    wallet.credit_card = serde_json::from_value(raw.clone()).ok();
+                } else if raw.get("vault_id").is_some() {
+                    wallet.crypto = serde_json::from_value(raw.clone()).ok();
+                }
+            }
+        }
+        return Ok(wallet_to_response(&wallet));
+    }
+
+    Ok(WalletResponse { credit_card: None, crypto: None })
 }
 
 /// Return the path to the vultisig CLI binary.

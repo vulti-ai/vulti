@@ -33,6 +33,7 @@
 
 	$effect(() => {
 		const _id = agentId;
+		const _v = store.skillsVersion;
 		load();
 	});
 

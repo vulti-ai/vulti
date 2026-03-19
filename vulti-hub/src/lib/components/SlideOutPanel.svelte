@@ -88,11 +88,12 @@
 			{#if mode === 'agent' && activeAgent?.role}
 				<span class="rounded-full bg-ink/5 px-2.5 py-0.5 text-xs text-ink-dim">{activeAgent.role}</span>
 			{/if}
-		</div>
-		<div class="flex items-center gap-2">
+			{#if mode === 'agent' && activeAgent?.isDefault}
+				<span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">default</span>
+			{/if}
 			{#if mode === 'agent' && activeAgent}
 				{#if !showDeleteConfirm}
-					<button onclick={() => showDeleteConfirm = true} class="text-xs text-red-400 hover:text-red-300">Delete</button>
+					<button onclick={() => showDeleteConfirm = true} class="text-xs text-red-400/60 hover:text-red-400">Delete</button>
 				{:else}
 					<div class="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-2.5 py-1">
 						<span class="text-xs text-ink-muted">Delete?</span>
@@ -105,6 +106,8 @@
 					</div>
 				{/if}
 			{/if}
+		</div>
+		<div class="flex items-center gap-2">
 		<button class="close-btn" onclick={onclose} title="Back to canvas">
 			{#if store.isBusy}
 				<svg class="animate-spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -207,12 +210,12 @@
 					<SkillsView />
 				{:else if activeTab === 'actions'}
 					<div class="flex h-full flex-col">
-						<div class="flex shrink-0 items-center justify-between border-b border-border px-6 py-2">
+						<div class="flex shrink-0 items-center justify-end border-b border-border px-6 py-2">
 							<div class="flex items-center gap-1 rounded-lg border border-border p-0.5">
 								<button
 									class="rounded-md px-3 py-1 text-xs font-medium transition-colors {actionsSubTab === 'cron' ? 'bg-primary text-white' : 'text-ink-muted hover:text-ink-dim'}"
 									onclick={() => actionsSubTab = 'cron'}
-								>Cron Jobs</button>
+								>Jobs</button>
 								<button
 									class="rounded-md px-3 py-1 text-xs font-medium transition-colors {actionsSubTab === 'rules' ? 'bg-primary text-white' : 'text-ink-muted hover:text-ink-dim'}"
 									onclick={() => actionsSubTab = 'rules'}

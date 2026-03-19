@@ -1,15 +1,15 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Mutex;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::vulti_home::vulti_home;
 
 #[derive(Clone, Serialize)]
 pub struct FileChanged {
-    /// "soul", "memory", or "user"
+    /// "soul", "memory", "user", "connections", "cron", "rules", "skills"
     pub kind: String,
     /// Agent ID if agent-specific, empty for global
     pub agent_id: String,
@@ -17,7 +17,7 @@ pub struct FileChanged {
 
 pub struct WatcherState(pub Mutex<Option<RecommendedWatcher>>);
 
-/// Start watching ~/.vulti for SOUL.md and memory file changes.
+/// Start watching ~/.vulti for resource file changes.
 /// Emits "file-changed" events to the Tauri frontend.
 pub fn start_watcher(app: tauri::AppHandle) {
     let home = vulti_home();
@@ -32,7 +32,6 @@ pub fn start_watcher(app: tauri::AppHandle) {
         }
     };
 
-    // Watch the entire vulti home recursively
     if let Err(e) = watcher.watch(&home, RecursiveMode::Recursive) {
         eprintln!("[watcher] failed to watch {}: {e}", home.display());
         return;
@@ -53,13 +52,16 @@ pub fn start_watcher(app: tauri::AppHandle) {
                 Err(_) => continue,
             };
 
-            // Only care about creates/modifies (not removes, renames, etc.)
             match event.kind {
                 EventKind::Create(_) | EventKind::Modify(_) => {}
                 _ => continue,
             }
 
             for path in &event.paths {
+                // Skip .tmp files from atomic writes
+                if path.extension().map(|e| e == "tmp").unwrap_or(false) {
+                    continue;
+                }
                 if let Some(changed) = classify_path(path, &home_clone) {
                     let _ = app.emit("file-changed", changed);
                 }
@@ -68,25 +70,11 @@ pub fn start_watcher(app: tauri::AppHandle) {
     });
 }
 
-/// Determine if a changed path is a soul/memory file we care about.
-fn classify_path(path: &PathBuf, home: &PathBuf) -> Option<FileChanged> {
-    let filename = path.file_name()?.to_str()?;
-
-    let kind = match filename {
-        "SOUL.md" => "soul",
-        "MEMORY.md" => "memory",
-        "USER.md" => "user",
-        _ => return None,
-    };
-
-    // Ignore .tmp files from atomic writes
-    if path.extension().map(|e| e == "tmp").unwrap_or(false) {
-        return None;
-    }
-
-    // Extract agent_id from path: ~/.vulti/agents/{agent_id}/...
+/// Determine if a changed path is a resource file we care about.
+fn classify_path(path: &Path, home: &PathBuf) -> Option<FileChanged> {
     let rel = path.strip_prefix(home).ok()?;
-    let components: Vec<&str> = rel.components()
+    let components: Vec<&str> = rel
+        .components()
         .filter_map(|c| c.as_os_str().to_str())
         .collect();
 
@@ -96,8 +84,26 @@ fn classify_path(path: &PathBuf, home: &PathBuf) -> Option<FileChanged> {
         String::new()
     };
 
+    let filename = path.file_name()?.to_str()?;
+
+    // Match by filename
+    let kind = match filename {
+        "SOUL.md" => "soul",
+        "MEMORY.md" => "memory",
+        "USER.md" => "user",
+        "connections.yaml" => "connections",
+        "jobs.json" if path_contains_segment(&components, "cron") => "cron",
+        "rules.json" if path_contains_segment(&components, "rules") => "rules",
+        "SKILL.md" => "skills",
+        _ => return None,
+    };
+
     Some(FileChanged {
         kind: kind.to_string(),
         agent_id,
     })
+}
+
+fn path_contains_segment(components: &[&str], segment: &str) -> bool {
+    components.iter().any(|c| *c == segment)
 }

@@ -1000,13 +1000,14 @@ class GatewayRunner:
                             server_name=server_name,
                             registration_token=self._continuwuity.registration_token,
                         )
+                        logger.info("Matrix: sync_agents_to_matrix returned %d agents: %s", len(agent_matrix_ids), list(agent_matrix_ids.keys()))
                         # Inject primary agent credentials into Matrix platform config
-                        default_agent_id = self._agent_routing_table.get("*", "")
-                        if not default_agent_id or default_agent_id not in agent_matrix_ids:
-                            # Fall back to registry's default agent
-                            default_agent_id = self.agent_registry.default_agent_id or next(iter(agent_matrix_ids), "")
+                        from vulti_cli.agent_registry import get_default_agent_id
+                        default_agent_id = get_default_agent_id() or next(iter(agent_matrix_ids), "")
+                        logger.info("Matrix: default_agent_id=%s", default_agent_id)
                         creds = get_agent_matrix_credentials(default_agent_id)
                         if creds:
+                            logger.info("Matrix: got creds for %s, setting up topology...", default_agent_id)
                             matrix_config.extra["user_id"] = creds["user_id"]
                             matrix_config.extra["access_token"] = creds["access_token"]
                             matrix_config.extra["homeserver_url"] = creds["homeserver_url"]
@@ -1018,6 +1019,7 @@ class GatewayRunner:
                                     server_name=server_name,
                                     agent_matrix_ids=agent_matrix_ids,
                                 )
+                                logger.info("Matrix: ensure_room_topology returned %d rooms: %s", len(rooms), rooms)
                                 # Set home channel to Agent Coordination if not configured
                                 coordination_alias = f"#coordination:{server_name}"
                                 if coordination_alias in rooms and not matrix_config.home_channel:
@@ -1028,11 +1030,11 @@ class GatewayRunner:
                                         name="Agent Coordination",
                                     )
                             except Exception as e:
-                                logger.warning("Matrix room topology setup: %s", e)
+                                logger.warning("Matrix room topology setup: %s", e, exc_info=True)
                         else:
-                            logger.warning("Matrix: no credentials for default agent, adapter may fail")
+                            logger.warning("Matrix: no credentials for default agent '%s', adapter may fail", default_agent_id)
                     except Exception as e:
-                        logger.warning("Matrix agent registration: %s", e)
+                        logger.warning("Matrix agent registration: %s", e, exc_info=True)
                 else:
                     logger.warning("✗ Continuwuity failed to start — Matrix will be disabled")
                     matrix_config.enabled = False

@@ -62,6 +62,8 @@ _VULTI_CORE_TOOLS = [
     "rule",
     # Cross-platform messaging (gated on gateway running via check_fn)
     "send_message",
+    # Hub UI pane manipulation
+    "modify_pane",
     # Honcho memory tools (gated on honcho being active via check_fn)
     "honcho_context", "honcho_profile", "honcho_search", "honcho_conclude",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
@@ -147,6 +149,12 @@ TOOLSETS = {
     "connections": {
         "description": "Connection access management - request permission to use external service connections",
         "tools": ["request_connection"],
+        "includes": []
+    },
+
+    "ui": {
+        "description": "Hub UI manipulation - dynamically add/remove/update widgets in the content pane",
+        "tools": ["modify_pane"],
         "includes": []
     },
 

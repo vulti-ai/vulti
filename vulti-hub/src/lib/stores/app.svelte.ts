@@ -92,7 +92,9 @@ let providers = $state<Provider[]>([]);
 let relationships = $state<AgentRelationship[]>([]);
 let owner = $state<OwnerProfile>({ name: 'Human' });
 let connections = $state<Connection[]>([]);
+let skillsVersion = $state(0);
 let avatarCache = $state<Record<string, string>>({});
+let paneWidgets = $state<Record<string, Record<string, any[]>>>({});
 let pendingOps = $state(0);
 
 /** Wrap any async operation to track in-flight state.
@@ -133,9 +135,6 @@ ws.onMessage((msg: WsMessage) => {
 				});
 			}
 			isTyping = false;
-			// Refresh agent resources that may have been modified by the agent
-			store.loadSoul();
-			store.loadMemories();
 			break;
 		case 'typing':
 			isTyping = msg.active ?? false;
@@ -154,6 +153,21 @@ ws.onMessage((msg: WsMessage) => {
 		case 'notification':
 			notifications = [msg, ...notifications].slice(0, 50);
 			break;
+	}
+});
+
+// Auto-refresh soul/memories when files change on disk
+listen<{ kind: string; agent_id: string }>('file-changed', (event) => {
+	const { kind, agent_id } = event.payload;
+	// Only refresh if the change is for the currently active agent (or global)
+	if (agent_id && agent_id !== activeAgentId) return;
+	switch (kind) {
+		case 'soul': store.loadSoul(); break;
+		case 'memory': case 'user': store.loadMemories(); break;
+		case 'cron': store.loadCron(); break;
+		case 'rules': store.loadRules(); break;
+		case 'connections': store.loadConnections(); break;
+		case 'skills': skillsVersion++; break;
 	}
 });
 
@@ -202,6 +216,7 @@ export const store = {
 	get channels() { return channels; },
 	get analytics() { return analytics; },
 	get integrations() { return integrations; },
+	get paneWidgets() { return paneWidgets; },
 	get isBusy() { return pendingOps > 0; },
 	ws,
 
@@ -493,6 +508,32 @@ export const store = {
 		});
 	},
 
+	async loadPaneWidgets() {
+		const agentId = activeAgentId;
+		if (!agentId) return;
+		try {
+			const data = await api.getPaneWidgets(agentId);
+			paneWidgets = { ...paneWidgets, [agentId]: data.tabs || {} };
+		} catch {
+			// No widgets — use defaults
+		}
+	},
+
+	async clearPaneWidgets(tab?: string) {
+		const agentId = activeAgentId;
+		if (!agentId) return;
+		try {
+			await api.clearPaneWidgets(agentId, tab);
+			if (tab) {
+				const agentWidgets = { ...paneWidgets[agentId] };
+				delete agentWidgets[tab];
+				paneWidgets = { ...paneWidgets, [agentId]: agentWidgets };
+			} else {
+				paneWidgets = { ...paneWidgets, [agentId]: {} };
+			}
+		} catch {}
+	},
+
 	async loadIntegrations() {
 		await tracked(async () => {
 			try { integrations = await api.getIntegrations(); } catch { integrations = []; }
@@ -510,6 +551,7 @@ export const store = {
 
 	// Connections
 	get connections() { return connections; },
+	get skillsVersion() { return skillsVersion; },
 
 	async loadConnections() {
 		await tracked(async () => {

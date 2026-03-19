@@ -18,6 +18,7 @@ mod status;
 mod analytics;
 mod connections;
 mod skills;
+mod pane;
 mod watcher;
 
 // Hold the gateway child process so we can kill it on exit
@@ -309,6 +310,8 @@ pub fn run() {
             // Skills
             skills::list_available_skills, skills::list_agent_skills,
             skills::install_agent_skill, skills::remove_agent_skill,
+            // Pane Widgets
+            pane::get_pane_widgets, pane::clear_pane_widgets,
             // Audit
             audit::list_audit_events,
             // Permissions
