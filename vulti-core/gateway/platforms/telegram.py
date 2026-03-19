@@ -89,6 +89,8 @@ def _strip_mdv2(text: str) -> str:
     # Remove MarkdownV2 italic markers that format_message converted from *italic*
     # Use word boundary (\b) to avoid breaking snake_case like my_variable_name
     cleaned = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'\1', cleaned)
+    # Remove MarkdownV2 strikethrough markers ~~text~~ -> text
+    cleaned = re.sub(r'~~([^~]+)~~', r'\1', cleaned)
     return cleaned
 
 
@@ -409,12 +411,15 @@ class TelegramAdapter(BasePlatformAdapter):
                     text=formatted,
                     parse_mode=ParseMode.MARKDOWN_V2,
                 )
-            except Exception:
-                # Fallback: retry without markdown formatting
+            except Exception as md_error:
+                # MarkdownV2 failed — strip formatting and retry as plain text
+                logger.warning("[%s] MarkdownV2 edit failed, falling back to plain text: %s", self.name, md_error)
+                plain_text = _strip_mdv2(formatted)
                 await self._bot.edit_message_text(
                     chat_id=int(chat_id),
                     message_id=int(message_id),
-                    text=content,
+                    text=plain_text,
+                    parse_mode=None,
                 )
             return SendResult(success=True, message_id=message_id)
         except Exception as e:
@@ -781,6 +786,15 @@ class TelegramAdapter(BasePlatformAdapter):
         text = re.sub(
             r'\*([^*\n]+)\*',
             lambda m: _ph(f'_{_escape_mdv2(m.group(1))}_'),
+            text,
+        )
+
+        # 6b) Protect strikethrough: ~~text~~ is valid MarkdownV2 — escape
+        #     the inner text but preserve the ~~ delimiters so they aren't
+        #     escaped in step 7.
+        text = re.sub(
+            r'~~(.+?)~~',
+            lambda m: _ph(f'~~{_escape_mdv2(m.group(1))}~~'),
             text,
         )
 

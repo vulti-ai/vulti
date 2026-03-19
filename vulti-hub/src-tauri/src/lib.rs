@@ -15,6 +15,7 @@ mod secrets;
 mod sessions;
 mod relationships;
 mod status;
+mod analytics;
 mod connections;
 
 // Hold the gateway child process so we can kill it on exit
@@ -271,6 +272,7 @@ pub fn run() {
             tailscale_status, install_tailscale, open_tailscale, get_continuwuity_path,
             // Agents
             agents::list_agents, agents::get_agent, agents::create_agent, agents::update_agent, agents::finalize_onboarding,
+            agents::save_wallet, agents::get_wallet, agents::get_agent_avatar,
             // Memories & Soul
             memories::get_memories, memories::update_memory, memories::get_soul, memories::update_soul,
             // Rules
@@ -292,6 +294,8 @@ pub fn run() {
             connections::update_connection, connections::delete_connection,
             // Status
             status::get_system_status, status::get_channel_directory, status::get_integrations,
+            // Analytics
+            analytics::get_analytics,
             // Audit
             audit::list_audit_events,
             // Permissions

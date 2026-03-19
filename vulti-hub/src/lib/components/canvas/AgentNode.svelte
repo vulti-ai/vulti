@@ -3,7 +3,7 @@
 
 	let { data, selected }: {
 		id: string;
-		data: { label: string; sublabel: string; color: string; status?: string };
+		data: { label: string; sublabel: string; color: string; status?: string; avatarUri?: string };
 		selected: boolean;
 		isConnectable: boolean;
 	} = $props();
@@ -24,6 +24,10 @@
 	<Handle type="target" position={Position.Left} id="left-in" />
 
 	<div class="status-dot" style="background: {statusColor(data.status)}"></div>
+
+	{#if data.avatarUri}
+		<img class="avatar" src={data.avatarUri} alt={data.label} />
+	{/if}
 	<div class="label">{data.label}</div>
 	{#if data.sublabel}
 		<div class="sublabel" style="color: {data.color}">{data.sublabel}</div>
@@ -49,6 +53,14 @@
 	}
 	:global(html.dark) .agent-node {
 		background: rgba(38, 36, 34, 0.85);
+	}
+
+	.avatar {
+		width: 32px;
+		height: 32px;
+		border-radius: 6px;
+		object-fit: cover;
+		margin: 0 auto 4px;
 	}
 
 	.label {

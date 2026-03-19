@@ -64,9 +64,13 @@
 				{#each store.agents as agent}
 					<div class="rounded-xl border border-border bg-surface p-4">
 						<div class="flex items-center gap-3 mb-3">
-							<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-800 text-lg font-bold text-primary">
-								{agent.name.charAt(0)}
-							</div>
+							{#if store.avatarCache[agent.id]}
+								<img class="h-10 w-10 rounded-lg object-cover" src={store.avatarCache[agent.id]} alt={agent.name} />
+							{:else}
+								<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-800 text-lg font-bold text-primary">
+									{agent.name.charAt(0)}
+								</div>
+							{/if}
 							<div class="flex-1">
 								<p class="font-medium">{agent.name}</p>
 								<p class="text-xs text-slate-400">{agent.url}</p>

@@ -266,6 +266,11 @@ class WebAdapter(BasePlatformAdapter):
             data = await req.json()
             return adapter._update_soul(data.get("content", ""), agent_id=agent_id)
 
+        @app.post("/api/agents/{agent_id}/generate-avatar")
+        async def generate_agent_avatar(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return await asyncio.to_thread(adapter._generate_avatar, agent_id)
+
         @app.get("/api/agents/{agent_id}/cron")
         async def get_agent_cron(agent_id: str, authorization: str = Header("")):
             await get_current_user(authorization)
@@ -1493,6 +1498,148 @@ class WebAdapter(BasePlatformAdapter):
         soul_path.parent.mkdir(parents=True, exist_ok=True)
         soul_path.write_text(content, encoding="utf-8")
         return {"ok": True}
+
+    def _generate_avatar(self, agent_id: str) -> dict:
+        """Generate a profile avatar for an agent using fal or OpenRouter."""
+        registry = self._get_agent_registry()
+        meta = registry.get_agent(agent_id)
+        if not meta:
+            return {"ok": False, "error": f"Agent '{agent_id}' not found"}
+
+        # Read a snippet of SOUL.md for prompt context
+        soul_path = registry.agent_soul_path(agent_id)
+        soul_snippet = ""
+        if soul_path.exists():
+            soul_snippet = soul_path.read_text(encoding="utf-8")[:500]
+
+        # Build avatar prompt
+        role = meta.role or "assistant"
+        name = meta.name or agent_id
+        prompt = (
+            f"A minimalist, stylized profile avatar icon for an AI agent named '{name}' "
+            f"with the role of '{role}'. "
+            f"Clean digital art style, simple geometric shapes, muted professional colors, "
+            f"abstract representation — not a face or person. "
+            f"Suitable as a small square profile picture. White or transparent background."
+        )
+        if soul_snippet:
+            first_line = soul_snippet.split("\n")[0].strip("# ").strip()
+            if first_line and first_line != name:
+                prompt += f" Visual theme inspired by: {first_line}."
+
+        avatar_path = registry.agent_home(agent_id) / "avatar.png"
+
+        # Try fal first, then OpenRouter
+        image_url = self._try_fal_image(prompt, agent_id) or self._try_openrouter_image(prompt)
+
+        if not image_url:
+            # No image gen available — fall back to a role-appropriate emoji
+            emoji = self._role_emoji(role)
+            registry.update_agent(agent_id, avatar=emoji)
+            return {"ok": True, "avatar": emoji, "fallback": "emoji"}
+
+        try:
+            import urllib.request
+            urllib.request.urlretrieve(image_url, str(avatar_path))
+            logger.info("Generated avatar for agent '%s' at %s", agent_id, avatar_path)
+            return {"ok": True, "path": str(avatar_path)}
+        except Exception as e:
+            logger.error("Avatar generation failed for '%s': %s", agent_id, e)
+            return {"ok": False, "error": str(e)}
+
+    def _try_fal_image(self, prompt: str, agent_id: str) -> Optional[str]:
+        """Try generating an image via fal.ai. Returns image URL or None."""
+        from vulti_cli.connection_registry import inject_credentials
+
+        with inject_credentials(agent_id):
+            if not os.getenv("FAL_KEY"):
+                return None
+            try:
+                import fal_client
+                handler = fal_client.submit(
+                    "fal-ai/flux-2-pro",
+                    arguments={
+                        "prompt": prompt,
+                        "image_size": "square",
+                        "num_inference_steps": 30,
+                        "guidance_scale": 4.5,
+                        "num_images": 1,
+                        "output_format": "png",
+                        "enable_safety_checker": False,
+                    },
+                )
+                result = handler.get()
+                if result and result.get("images"):
+                    return result["images"][0].get("url")
+            except Exception as e:
+                logger.debug("fal image generation failed: %s", e)
+        return None
+
+    def _try_openrouter_image(self, prompt: str) -> Optional[str]:
+        """Try generating an image via OpenRouter (Gemini image model). Returns image URL or None."""
+        import base64 as _b64
+        import tempfile
+
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            return None
+        try:
+            import urllib.request
+            import json as _json
+
+            body = _json.dumps({
+                "model": "google/gemini-3.1-flash-image-preview",
+                "messages": [{"role": "user", "content": prompt}],
+                "modalities": ["image", "text"],
+                "max_tokens": 4096,
+            }).encode()
+
+            req = urllib.request.Request(
+                "https://openrouter.ai/api/v1/chat/completions",
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://vulti.ai",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                result = _json.loads(resp.read())
+
+            msg = result.get("choices", [{}])[0].get("message", {})
+            images = msg.get("images", [])
+            if images:
+                img = images[0]
+                # Could be a dict with url/b64_json, or a raw base64 string
+                if isinstance(img, dict):
+                    return img.get("url")
+                elif isinstance(img, str):
+                    if img.startswith("http"):
+                        return img
+                    # Raw base64 — save to temp file and return path as file:// URL
+                    data = _b64.b64decode(img)
+                    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                    tmp.write(data)
+                    tmp.close()
+                    return f"file://{tmp.name}"
+        except Exception as e:
+            logger.debug("OpenRouter image generation failed: %s", e)
+        return None
+
+    @staticmethod
+    def _role_emoji(role: str) -> str:
+        """Pick an emoji that fits the agent's role."""
+        return {
+            "assistant": "✦",
+            "engineer": "⚙",
+            "researcher": "◎",
+            "analyst": "◆",
+            "writer": "✎",
+            "therapist": "☯",
+            "coach": "⚑",
+            "creative": "✧",
+            "ops": "⚿",
+        }.get(role, "◇")
 
     def _get_agent_sessions(self, agent_id: str = None) -> list:
         """Get sessions, optionally filtered by agent."""

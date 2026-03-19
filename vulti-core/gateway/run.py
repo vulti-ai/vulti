@@ -3446,7 +3446,7 @@ class GatewayRunner:
                 Platform.SIGNAL: "signal",
                 Platform.HOMEASSISTANT: "homeassistant",
                 Platform.EMAIL: "email",
-                Platform.WEB: "web",
+                Platform.WEB: "app",
             }.get(source.platform, "telegram")
 
             config_toolsets = platform_toolsets_config.get(platform_config_key)
@@ -3456,7 +3456,7 @@ class GatewayRunner:
                 default_toolset = default_toolset_map.get(source.platform, "vulti-telegram")
                 enabled_toolsets = [default_toolset]
 
-            platform_key = "cli" if source.platform == Platform.LOCAL else source.platform.value
+            platform_key = "cli" if source.platform == Platform.LOCAL else ("app" if source.platform == Platform.WEB else source.platform.value)
 
             pr = self._provider_routing
             max_iterations = int(os.getenv("VULTI_MAX_ITERATIONS", "90"))
@@ -4689,7 +4689,7 @@ class GatewayRunner:
 
             # Map platform enum to the platform hint key the agent understands.
             # Platform.LOCAL ("local") maps to "cli"; others pass through as-is.
-            platform_key = "cli" if source.platform == Platform.LOCAL else source.platform.value
+            platform_key = "cli" if source.platform == Platform.LOCAL else ("app" if source.platform == Platform.WEB else source.platform.value)
 
             # Load per-agent config overrides
             _agent_config = {}
@@ -4871,19 +4871,27 @@ class GatewayRunner:
             # Audit: log the owner<>agent exchange
             try:
                 from orchestrator.audit import emit as _audit_emit
-                _audit_agent = os.getenv("VULTI_AGENT_ID", "default")
+                _audit_agent = os.getenv("VULTI_AGENT_ID", "")
+                if not _audit_agent or _audit_agent == "default":
+                    try:
+                        from orchestrator.agent_registry import get_default_agent_id
+                        _audit_agent = get_default_agent_id()
+                    except Exception:
+                        _audit_agent = "default"
+                _audit_platform = platform_key if platform_key != "web" else "app"
                 _audit_emit("message_received", agent_id=_audit_agent, details={
-                    "platform": platform_key,
+                    "platform": _audit_platform,
                     "message_preview": message[:200],
                 })
                 _final = result.get("final_response", "")
                 if _final:
                     _audit_emit("message_response", agent_id=_audit_agent, details={
-                        "platform": platform_key,
+                        "platform": _audit_platform,
                         "response_preview": _final[:200],
                     })
-            except Exception:
-                pass
+            except Exception as _ae:
+                import logging as _al
+                _al.getLogger(__name__).debug("Audit emit failed: %s", _ae)
 
             # Signal the stream consumer that the agent is done
             if _stream_consumer is not None:

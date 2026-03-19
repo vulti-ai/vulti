@@ -118,7 +118,9 @@ PLATFORM_HINTS = {
     ),
     "telegram": (
         "You are on a text messaging communication platform, Telegram. "
-        "Please do not use markdown as it does not render. "
+        "Markdown is supported — use **bold**, *italic*, `code`, ```code blocks```, "
+        "~~strikethrough~~, and [links](url) freely. They are automatically converted "
+        "to Telegram's native formatting. "
         "You can send media files natively: to deliver a file to the user, "
         "include MEDIA:/absolute/path/to/file in your response. Images "
         "(.png, .jpg, .webp) appear as photos, audio (.ogg) sends as voice "

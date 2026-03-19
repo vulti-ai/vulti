@@ -101,6 +101,18 @@ export const api = {
 	finalizeOnboarding(agentId: string) {
 		return invoke<{ role: string; agent: string }>('finalize_onboarding', { agentId });
 	},
+	getAgentAvatar(agentId: string) {
+		return invoke<string | null>('get_agent_avatar', { agentId });
+	},
+	generateAgentAvatar(agentId: string) {
+		return request(`/agents/${agentId}/generate-avatar`, { method: 'POST' });
+	},
+	saveWallet(agentId: string, wallet: WalletData) {
+		return invoke<Wallet>('save_wallet', { agentId, wallet });
+	},
+	getWallet(agentId: string) {
+		return invoke<Wallet>('get_wallet', { agentId });
+	},
 
 	// Sessions
 	listSessions(agentId?: string) {
@@ -311,11 +323,9 @@ export const api = {
 		});
 	},
 
-	// Analytics (needs Python InsightsEngine + SQLite)
+	// Analytics (direct SQLite via Tauri IPC)
 	getAnalytics(days: number = 30, agentId?: string) {
-		const params = new URLSearchParams({ days: String(days) });
-		if (agentId) params.set('agent_id', agentId);
-		return request<Analytics>(`/analytics?${params}`);
+		return invoke<Analytics>('get_analytics', { days, agentId: agentId || null });
 	}
 };
 
@@ -481,6 +491,35 @@ export interface AgentRelationship {
 	type: 'manages' | 'collaborates';
 	matrixRoomId?: string;
 	createdAt: string;
+}
+
+export interface CreditCard {
+	name: string;
+	number: string;
+	expiry: string;
+	code: string;
+}
+
+export interface CryptoWallet {
+	vaultId: string;
+	name: string;
+	email: string;
+}
+
+export interface CryptoWalletData {
+	vault_id: string;
+	name: string;
+	email: string;
+}
+
+export interface WalletData {
+	credit_card?: CreditCard;
+	crypto?: CryptoWalletData;
+}
+
+export interface Wallet {
+	creditCard?: CreditCard;
+	crypto?: CryptoWallet;
 }
 
 export interface OwnerProfile {

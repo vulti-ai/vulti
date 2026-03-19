@@ -281,6 +281,64 @@ pub struct SoulResponse {
 }
 
 // =============================================================================
+// Wallet
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CreditCardEntry {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub number: String,
+    #[serde(default)]
+    pub expiry: String,
+    #[serde(default)]
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CryptoWalletEntry {
+    #[serde(default)]
+    pub vault_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WalletFile {
+    #[serde(default)]
+    pub credit_card: Option<CreditCardEntry>,
+    #[serde(default)]
+    pub crypto: Option<CryptoWalletEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalletResponse {
+    pub credit_card: Option<CreditCardResponse>,
+    pub crypto: Option<CryptoResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditCardResponse {
+    pub name: String,
+    pub number: String,
+    pub expiry: String,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CryptoResponse {
+    pub vault_id: String,
+    pub name: String,
+    pub email: String,
+}
+
+// =============================================================================
 // Status
 // =============================================================================
 

@@ -58,9 +58,13 @@
 					class="flex flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors
 						{agent.id === store.activeAgentId && !settingsActive ? 'bg-surface text-ink' : 'text-ink-dim hover:bg-surface-hover'}"
 				>
-					<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm">
-						{agent.name.charAt(0)}
-					</span>
+					{#if store.avatarCache[agent.id]}
+						<img class="h-7 w-7 shrink-0 rounded-full object-cover" src={store.avatarCache[agent.id]} alt={agent.name} />
+					{:else}
+						<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm">
+							{agent.name.charAt(0)}
+						</span>
+					{/if}
 					<span class="flex-1 truncate font-medium">{agent.name}</span>
 					<span class="h-2 w-2 shrink-0 rounded-full {statusColor(agent.status)}"></span>
 				</button>

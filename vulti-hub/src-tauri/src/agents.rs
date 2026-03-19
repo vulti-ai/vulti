@@ -1,4 +1,4 @@
-use crate::types::{AgentEntry, AgentRegistry, AgentResponse};
+use crate::types::{AgentEntry, AgentRegistry, AgentResponse, CreditCardResponse, CryptoResponse, WalletFile, WalletResponse};
 use crate::vulti_home::{atomic_write_json, atomic_write_text, ensure_dir, read_text_file, vulti_home};
 use regex::Regex;
 use std::collections::HashSet;
@@ -275,7 +275,12 @@ fn agent_to_response(entry: &AgentEntry, default_agent_id: &str) -> AgentRespons
 
 #[tauri::command]
 pub fn list_agents() -> Result<Vec<AgentResponse>, String> {
-    let reg = load_registry();
+    // Ensure the janitor system agent exists on every load so the
+    // canvas is never empty on first launch.
+    let mut reg = load_registry();
+    if !reg.agents.contains_key(JANITOR_AGENT_ID) {
+        let _ = seed_janitor(&mut reg);
+    }
     let default_id = reg.default_agent.clone().unwrap_or_else(|| "default".to_string());
     let mut agents: Vec<AgentResponse> = reg
         .agents
@@ -570,4 +575,78 @@ pub fn finalize_onboarding(agent_id: String) -> Result<serde_json::Value, String
     let _ = seed_janitor(&mut reg);
 
     Ok(serde_json::json!({ "role": role, "agent": agent_name }))
+}
+
+/// Read the agent's generated avatar image as a base64 data URI.
+/// Returns null if no avatar image exists.
+#[tauri::command]
+pub fn get_agent_avatar(agent_id: String) -> Result<Option<String>, String> {
+    use base64::Engine;
+
+    let avatar_path = agent_home(&agent_id).join("avatar.png");
+    if !avatar_path.exists() {
+        return Ok(None);
+    }
+
+    let bytes = fs::read(&avatar_path)
+        .map_err(|e| format!("Failed to read avatar: {}", e))?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(Some(format!("data:image/png;base64,{}", b64)))
+}
+
+#[tauri::command]
+pub fn save_wallet(agent_id: String, wallet: WalletFile) -> Result<WalletResponse, String> {
+    let home = agent_home(&agent_id);
+    if !home.exists() {
+        return Err(format!("Agent '{}' not found", agent_id));
+    }
+    let wallet_path = home.join("wallet.json");
+
+    // Merge with existing wallet so saving one section doesn't erase the other
+    let mut existing = if wallet_path.exists() {
+        fs::read_to_string(&wallet_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<WalletFile>(&c).ok())
+            .unwrap_or_default()
+    } else {
+        WalletFile::default()
+    };
+
+    if wallet.credit_card.is_some() {
+        existing.credit_card = wallet.credit_card;
+    }
+    if wallet.crypto.is_some() {
+        existing.crypto = wallet.crypto;
+    }
+
+    atomic_write_json(&wallet_path, &existing)?;
+    Ok(wallet_to_response(&existing))
+}
+
+#[tauri::command]
+pub fn get_wallet(agent_id: String) -> Result<WalletResponse, String> {
+    let home = agent_home(&agent_id);
+    let wallet_path = home.join("wallet.json");
+    if !wallet_path.exists() {
+        return Ok(WalletResponse { credit_card: None, crypto: None });
+    }
+    let content = fs::read_to_string(&wallet_path).map_err(|e| e.to_string())?;
+    let wallet: WalletFile = serde_json::from_str(&content).unwrap_or_default();
+    Ok(wallet_to_response(&wallet))
+}
+
+fn wallet_to_response(wallet: &WalletFile) -> WalletResponse {
+    WalletResponse {
+        credit_card: wallet.credit_card.as_ref().map(|cc| CreditCardResponse {
+            name: cc.name.clone(),
+            number: cc.number.clone(),
+            expiry: cc.expiry.clone(),
+            code: cc.code.clone(),
+        }),
+        crypto: wallet.crypto.as_ref().map(|cw| CryptoResponse {
+            vault_id: cw.vault_id.clone(),
+            name: cw.name.clone(),
+            email: cw.email.clone(),
+        }),
+    }
 }

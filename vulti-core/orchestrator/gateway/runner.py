@@ -55,6 +55,10 @@ class VultiGatewayRunner:
         self._original_handle_message = self._runner._handle_message
         self._runner._handle_message = self._handle_message_with_agent_routing
 
+        # Also patch _resolve_agent_for_source so the base _handle_message
+        # uses proper routing instead of the stub that returns "default".
+        self._runner._resolve_agent_for_source = self._resolve_agent_for_source
+
     async def _handle_message_with_agent_routing(self, event) -> Optional[str]:
         """Wrap upstream _handle_message with multi-agent routing and scoping.
 
@@ -87,6 +91,17 @@ class VultiGatewayRunner:
         # so hermes-agent code that reads the env var gets the right agent.
         with AgentContext.scope(agent_id, hop_count=0):
             return await self._original_handle_message(event)
+
+    def _resolve_agent_for_source(self, source, message_text: str = ""):
+        """Override the base runner's stub to use proper multi-agent routing."""
+        platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
+        return resolve_agent_for_message(
+            platform=platform_name,
+            chat_id=str(source.chat_id),
+            message_text=message_text,
+            registry=self.registry,
+            routing_table=self.routing_table,
+        )
 
     def resolve_agent(self, platform: str, chat_id: str, message_text: str):
         """Resolve which agent should handle a message.

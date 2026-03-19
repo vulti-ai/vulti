@@ -6,6 +6,9 @@
 	let loading = $state(false);
 	let filterAgent = $state('');
 	let filterType = $state('');
+	let filterPlatform = $state('');
+
+	const platforms = ['', 'app', 'telegram', 'discord', 'slack', 'matrix', 'signal', 'email'];
 
 	const eventTypes = [
 		'', 'message_received', 'message_response', 'interagent_send', 'interagent_receive',
@@ -40,13 +43,19 @@
 	async function load() {
 		loading = true;
 		try {
-			events = await api.listAuditEvents(
-				100,
+			let result = await api.listAuditEvents(
+				200,
 				filterAgent || undefined,
 				undefined,
 				filterType || undefined,
 			);
-			events = events.reverse();
+			// Client-side platform filter (platform is inside details JSON)
+			if (filterPlatform) {
+				result = result.filter(ev =>
+					ev.details && (ev.details as Record<string, unknown>).platform === filterPlatform
+				);
+			}
+			events = result.reverse();
 		} catch {
 			events = [];
 		}
@@ -57,6 +66,7 @@
 		// Re-run when filters change
 		const _a = filterAgent;
 		const _t = filterType;
+		const _p = filterPlatform;
 		load();
 	});
 
@@ -90,8 +100,12 @@
 		if (details.connection) parts.push(`${details.connection}`);
 		if (details.job_name) parts.push(`${details.job_name}`);
 		if (details.rule_name) parts.push(`${details.rule_name}`);
-		if (details.platform) parts.push(`${details.platform}`);
 		return parts.join(' ');
+	}
+
+	function getPlatform(details: Record<string, unknown> | undefined): string {
+		if (!details?.platform) return '';
+		return String(details.platform);
 	}
 </script>
 
@@ -116,6 +130,15 @@
 				<option value={t}>{eventLabels[t] || t}</option>
 			{/each}
 		</select>
+		<select
+			class="audit-select flex-1"
+			bind:value={filterPlatform}
+		>
+			<option value="">All platforms</option>
+			{#each platforms.slice(1) as p}
+				<option value={p}>{p}</option>
+			{/each}
+		</select>
 		<button class="audit-btn" onclick={load} title="Refresh">
 			<svg class:animate-spin={loading} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
 				<path d="M21 12a9 9 0 1 1-6.219-8.56" />
@@ -138,6 +161,9 @@
 							<span class="text-xs font-medium text-ink-dim">{ev.agent_id}</span>
 							{#if getDetail(ev.details)}
 								<span class="text-xs text-ink-muted">{getDetail(ev.details)}</span>
+							{/if}
+							{#if getPlatform(ev.details)}
+								<span class="platform-tag">{getPlatform(ev.details)}</span>
 							{/if}
 							<span class="ml-auto text-[10px] tabular-nums text-ink-muted/60">{formatTime(ev.ts)}</span>
 						</div>
@@ -216,5 +242,21 @@
 		font-size: 10px;
 		font-weight: 500;
 		white-space: nowrap;
+	}
+
+	.platform-tag {
+		display: inline-block;
+		padding: 0 5px;
+		border-radius: 3px;
+		font-size: 9px;
+		font-weight: 500;
+		letter-spacing: 0.02em;
+		background: rgba(0, 0, 0, 0.04);
+		color: var(--ink-muted, #999);
+		white-space: nowrap;
+	}
+	:global(.dark) .platform-tag {
+		background: rgba(255, 255, 255, 0.06);
+		color: rgba(255, 255, 255, 0.4);
 	}
 </style>

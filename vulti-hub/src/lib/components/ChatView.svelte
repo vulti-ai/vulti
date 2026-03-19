@@ -106,7 +106,11 @@
 		<div class="flex-1 overflow-y-auto p-3">
 			<div class="space-y-3">
 				<div class="flex gap-2">
-					<div class="vulti-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold">{store.activeAgent?.avatar || agentName.charAt(0)}</div>
+					{#if store.activeAgentId && store.avatarCache[store.activeAgentId]}
+						<img class="h-7 w-7 shrink-0 rounded-lg object-cover" src={store.avatarCache[store.activeAgentId]} alt={agentName} />
+					{:else}
+						<div class="vulti-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold">{store.activeAgent?.avatar || agentName.charAt(0)}</div>
+					{/if}
 					<div class="max-w-[85%] rounded-xl bg-surface px-3 py-2 text-sm text-ink whitespace-pre-line">
 						{initialMessage}
 					</div>
@@ -129,6 +133,7 @@
 			streamingContent={store.streamingContent}
 			isStreaming={store.isStreaming}
 			isTyping={store.isTyping}
+			avatarUri={store.activeAgentId ? store.avatarCache[store.activeAgentId] : undefined}
 		/>
 	{/if}
 

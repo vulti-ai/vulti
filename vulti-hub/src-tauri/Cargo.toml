@@ -22,3 +22,5 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 regex = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+base64 = "0.22"

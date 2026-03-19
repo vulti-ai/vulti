@@ -62,7 +62,7 @@
 				id: n.id,
 				type: n.type === 'owner' ? 'owner' : 'agent',
 				position: { x: n.x - (n.type === 'owner' ? 40 : 70), y: n.y - (n.type === 'owner' ? 40 : 28) },
-				data: { label: n.label, sublabel: n.sublabel, color: n.color, status: n.status },
+				data: { label: n.label, sublabel: n.sublabel, color: n.color, status: n.status, avatarUri: n.type === 'agent' ? store.avatarCache[n.id] : undefined },
 				draggable: n.type !== 'owner',
 				sourcePosition: Position.Bottom,
 				targetPosition: Position.Top,

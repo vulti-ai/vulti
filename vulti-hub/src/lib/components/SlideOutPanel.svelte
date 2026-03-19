@@ -12,6 +12,7 @@
 	import CreateAgentView from './setup/CreateAgentView.svelte';
 	import OnboardingWizard from './OnboardingWizard.svelte';
 	import AuditView from './AuditView.svelte';
+	import WalletView from './WalletView.svelte';
 	import type { Agent } from '$lib/api';
 
 	let { mode, onclose, onmodechange }: {
@@ -20,7 +21,7 @@
 		onmodechange?: (newMode: string) => void;
 	} = $props();
 
-	let activeTab = $state<'profile' | 'connections' | 'actions' | 'analytics'>('profile');
+	let activeTab = $state<'profile' | 'connections' | 'actions' | 'wallet' | 'analytics'>('profile');
 	let settingsTab = $state<'general' | 'connections'>('general');
 	let actionsSubTab = $state<'cron' | 'rules'>('cron');
 	let activeAgent = $derived(store.activeAgent);
@@ -29,6 +30,7 @@
 		{ id: 'profile' as const, label: 'Profile' },
 		{ id: 'connections' as const, label: 'Connections' },
 		{ id: 'actions' as const, label: 'Actions' },
+		{ id: 'wallet' as const, label: 'Wallet' },
 		{ id: 'analytics' as const, label: 'Analytics' },
 	];
 
@@ -161,6 +163,8 @@
 					{:else}
 						<RulesView />
 					{/if}
+				{:else if activeTab === 'wallet'}
+					<WalletView />
 				{:else if activeTab === 'analytics'}
 					<AnalyticsView />
 				{/if}

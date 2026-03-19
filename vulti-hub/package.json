@@ -32,6 +32,9 @@
 		"vite": "^7.3.1"
 	},
 	"dependencies": {
-		"@xyflow/svelte": "^1.5.1"
+		"@vultisig/sdk": "^0.5.0",
+		"@xyflow/svelte": "^1.5.1",
+		"vite-plugin-top-level-await": "^1.6.0",
+		"vite-plugin-wasm": "^3.6.0"
 	}
 }

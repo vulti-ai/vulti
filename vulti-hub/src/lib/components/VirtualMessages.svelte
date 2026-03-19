@@ -7,7 +7,8 @@
 		agentName,
 		streamingContent,
 		isStreaming,
-		isTyping
+		isTyping,
+		avatarUri
 	}: {
 		messages: Message[];
 		activeAgent: { avatar?: string } | undefined;
@@ -15,6 +16,7 @@
 		streamingContent: string;
 		isStreaming: boolean;
 		isTyping: boolean;
+		avatarUri?: string;
 	} = $props();
 
 	const WINDOW_SIZE = 40;
@@ -67,6 +69,7 @@
 	});
 
 	let avatarChar = $derived(activeAgent?.avatar || agentName.charAt(0));
+	let hasImageAvatar = $derived(!!avatarUri);
 </script>
 
 <div bind:this={container} onscroll={onScroll} class="flex-1 overflow-y-auto p-3">
@@ -82,7 +85,7 @@
 			{#each allVisibleMessages as message (message.id)}
 				<div class="flex gap-2" class:justify-end={message.role === 'user'}>
 					{#if message.role === 'assistant'}
-						<div class="vulti-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold">{avatarChar}</div>
+						{#if hasImageAvatar}<img class="h-7 w-7 shrink-0 rounded-lg object-cover" src={avatarUri} alt={agentName} />{:else}<div class="vulti-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold">{avatarChar}</div>{/if}
 					{/if}
 					<div
 						class="max-w-[85%] rounded-xl px-3 py-2 text-sm"
@@ -99,7 +102,7 @@
 			<!-- Streaming content -->
 			{#if isStreaming && streamingContent}
 				<div class="flex gap-2">
-					<div class="vulti-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold">{avatarChar}</div>
+					{#if hasImageAvatar}<img class="h-7 w-7 shrink-0 rounded-lg object-cover" src={avatarUri} alt={agentName} />{:else}<div class="vulti-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold">{avatarChar}</div>{/if}
 					<div class="max-w-[85%] rounded-xl bg-surface px-3 py-2 text-sm text-ink">
 						<div class="prose prose-sm">{streamingContent}</div>
 						<span class="inline-block h-3 w-0.5 animate-pulse bg-primary"></span>
@@ -110,7 +113,7 @@
 			<!-- Typing indicator -->
 			{#if isTyping && !isStreaming}
 				<div class="flex gap-2">
-					<div class="vulti-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold">{avatarChar}</div>
+					{#if hasImageAvatar}<img class="h-7 w-7 shrink-0 rounded-lg object-cover" src={avatarUri} alt={agentName} />{:else}<div class="vulti-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold">{avatarChar}</div>{/if}
 					<div class="rounded-xl bg-surface px-3 py-2">
 						<div class="flex gap-1">
 							<span class="h-1.5 w-1.5 animate-bounce rounded-full bg-ink-muted" style="animation-delay: 0ms"></span>

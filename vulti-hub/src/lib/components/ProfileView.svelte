@@ -75,9 +75,13 @@
 		<!-- Agent Identity -->
 		{#if store.activeAgent}
 			<section class="flex items-center gap-4">
-				<div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 text-2xl font-bold text-primary">
-					{store.activeAgent.name.charAt(0)}
-				</div>
+				{#if store.activeAgentId && store.avatarCache[store.activeAgentId]}
+					<img class="h-16 w-16 rounded-2xl object-cover" src={store.avatarCache[store.activeAgentId]} alt={store.activeAgent.name} />
+				{:else}
+					<div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 text-2xl font-bold text-primary">
+						{store.activeAgent.name.charAt(0)}
+					</div>
+				{/if}
 				<div class="flex-1">
 					{#if editingName}
 						<div class="flex items-center gap-2">

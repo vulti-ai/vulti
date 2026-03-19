@@ -91,6 +91,7 @@ let providers = $state<Provider[]>([]);
 let relationships = $state<AgentRelationship[]>([]);
 let owner = $state<OwnerProfile>({ name: 'Human' });
 let connections = $state<Connection[]>([]);
+let avatarCache = $state<Record<string, string>>({});
 let pendingOps = $state(0);
 
 /** Wrap any async operation to track in-flight state.
@@ -173,6 +174,7 @@ export const store = {
 	get activeAgent(): Agent | undefined {
 		return agents.find(a => a.id === activeAgentId);
 	},
+	get avatarCache() { return avatarCache; },
 
 	// App state
 	get sessions() { return sessions; },
@@ -263,6 +265,14 @@ export const store = {
 						activeAgentId = saved;
 					} else if (agents.length > 0) {
 						activeAgentId = agents[0].id;
+					}
+				}
+				// Load avatar images in background
+				for (const a of agents) {
+					if (!avatarCache[a.id]) {
+						api.getAgentAvatar(a.id).then(uri => {
+							if (uri) avatarCache[a.id] = uri;
+						}).catch(() => {});
 					}
 				}
 			} catch { agents = []; }

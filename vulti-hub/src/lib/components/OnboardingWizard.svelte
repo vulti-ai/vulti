@@ -2,15 +2,17 @@
 	import { store } from '$lib/stores/app.svelte';
 	import { api } from '$lib/api';
 	import ChatView from './ChatView.svelte';
+	import WalletStep from './setup/WalletStep.svelte';
 
 	let { onclose }: { onclose: () => void } = $props();
 
-	let step = $state<1 | 2 | 3>(1);
+	let step = $state<1 | 2 | 3 | 4>(1);
 
 	const steps = [
 		{ num: 1, label: 'Role' },
 		{ num: 2, label: 'Connections' },
 		{ num: 3, label: 'Actions' },
+		{ num: 4, label: 'Wallet' },
 	] as const;
 
 	const stepConfig: Record<1 | 2 | 3, { channel: string; label: string; initialMessage: string }> = {
@@ -42,36 +44,53 @@
 		} catch {}
 	}
 
+	function generateAvatarInBackground() {
+		const agentId = store.activeAgentId;
+		if (!agentId) return;
+		// Fire and forget — don't block onboarding completion
+		api.generateAgentAvatar(agentId)
+			.then(() => store.loadAgents())
+			.catch(() => {}); // Silently skip if image gen unavailable
+	}
+
 	async function advance() {
 		if (step === 1) {
-			// After Role step, apply role + reload so canvas/header updates
 			await finalizeAndReload();
 		}
 
-		if (step === 3) {
+		if (step === 4) {
 			await finalizeAndReload();
+			generateAvatarInBackground();
 			onclose();
 		} else {
-			step = (step + 1) as 2 | 3;
+			step = (step + 1) as 2 | 3 | 4;
 		}
 	}
 
 	async function skip() {
-		if (step === 3) {
+		if (step === 4) {
 			await finalizeAndReload();
+			generateAvatarInBackground();
 			onclose();
 		} else {
-			step = (step + 1) as 2 | 3;
+			step = (step + 1) as 2 | 3 | 4;
 		}
+	}
+
+	function handleWalletSaved() {
+		generateAvatarInBackground();
+		finalizeAndReload().then(() => onclose());
 	}
 
 	let agentName = $derived(store.activeAgent?.name || 'Agent');
 
 	// Show "Next" only after agent has replied (at least one assistant message, not still responding)
+	// For step 4 (wallet form), no need to wait for chat
 	let agentReady = $derived(
-		store.messages.some((m: { role: string }) => m.role === 'assistant')
+		step === 4 ||
+		(store.messages.some((m: { role: string }) => m.role === 'assistant')
 		&& !store.isTyping
-		&& !store.isStreaming
+		&& !store.isStreaming)
 	);
 </script>
 
@@ -111,28 +130,33 @@
 		<button onclick={skip} class="ml-auto text-xs text-ink-muted hover:text-ink">Skip</button>
 	</div>
 
-	<!-- Chat content -->
+	<!-- Chat content (steps 1-3) or Wallet form (step 4) -->
 	<div class="flex flex-1 flex-col overflow-hidden">
 		<div class="flex-1 overflow-hidden">
-			<ChatView
-				channel={stepConfig[step].channel}
-				contextLabel={stepConfig[step].label}
-				initialMessage={stepConfig[step].initialMessage}
-				autoSend={true}
-			/>
+			{#if step <= 3}
+				{@const cfg = stepConfig[step as 1 | 2 | 3]}
+				<ChatView
+					channel={cfg.channel}
+					contextLabel={cfg.label}
+					initialMessage={cfg.initialMessage}
+					autoSend={true}
+				/>
+			{:else}
+				<WalletStep onsave={handleWalletSaved} />
+			{/if}
 		</div>
 
 		<!-- Footer -->
 		<div class="flex shrink-0 items-center justify-between border-t border-border px-6 py-3">
 			<span class="text-xs text-ink-muted">
-				Step {step} of 3
+				Step {step} of 4
 			</span>
-			{#if agentReady}
+			{#if agentReady && (step === 1 || step === 2 || step === 3)}
 				<button
 					onclick={advance}
 					class="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
 				>
-					{step === 3 ? 'Done' : 'Next'}
+					Next
 				</button>
 			{/if}
 		</div>
