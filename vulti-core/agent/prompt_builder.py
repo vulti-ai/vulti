@@ -576,8 +576,11 @@ def build_rules_prompt(agent_id: Optional[str] = None) -> str:
 # ---------------------------------------------------------------------------
 
 def build_wallet_prompt(agent_id: Optional[str] = None) -> str:
-    """Load the agent's wallet.json and inject it as context so the agent
-    knows its payment methods and vault details."""
+    """Build a wallet summary for the system prompt.
+
+    Only includes non-sensitive identifiers (cardholder name, last 4 digits,
+    vault name). Full card details are fetched on demand via the ``wallet`` tool.
+    """
     if not agent_id:
         return ""
 
@@ -596,12 +599,10 @@ def build_wallet_prompt(agent_id: Optional[str] = None) -> str:
 
     cc = data.get("credit_card")
     if cc and cc.get("number"):
+        last4 = cc["number"][-4:]
         sections.append(
-            f"- **Credit card** (this is YOUR card — you can use it for purchases and payments):\n"
-            f"  Name: {cc.get('name', '')}\n"
-            f"  Number: {cc['number']}\n"
-            f"  Expiry: {cc.get('expiry', '')}\n"
-            f"  CVV: {cc.get('code', '')}"
+            f"- **Credit card**: {cc.get('name', 'Unknown')} ending in {last4}. "
+            f"Call `wallet(action='get_credit_card')` to retrieve full number, expiry, and CVV."
         )
 
     crypto = data.get("crypto")

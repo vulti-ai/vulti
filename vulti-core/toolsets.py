@@ -68,6 +68,8 @@ _VULTI_CORE_TOOLS = [
     "honcho_context", "honcho_profile", "honcho_search", "honcho_conclude",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
     "ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service",
+    # Wallet (gated on wallet.json existing via check_fn)
+    "wallet",
 ]
 
 
@@ -227,6 +229,12 @@ TOOLSETS = {
     "homeassistant": {
         "description": "Home Assistant smart home control and monitoring",
         "tools": ["ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service"],
+        "includes": []
+    },
+
+    "wallet": {
+        "description": "Read-only access to stored payment card details",
+        "tools": ["wallet"],
         "includes": []
     },
 

@@ -60,8 +60,8 @@
 		error = '';
 
 		try {
-			const vaultId = await api.createFastVault(vaultName.trim(), vaultEmail.trim(), vaultPassword.trim());
-			pendingVaultId = vaultId;
+			const id = await api.createFastVault(vaultName.trim(), vaultEmail.trim(), vaultPassword.trim());
+			pendingVaultId = id;
 			vaultPhase = 'verify';
 		} catch (e: any) {
 			error = e?.message || String(e) || 'Vault creation failed';
@@ -77,9 +77,9 @@
 		error = '';
 
 		try {
-			await api.verifyFastVault(pendingVaultId, vaultCode.trim());
+			const vaultId = await api.verifyFastVault(pendingVaultId, vaultCode.trim(), agentId);
 			const data: WalletData = {
-				crypto: { vault_id: pendingVaultId, name: vaultName.trim(), email: vaultEmail.trim() }
+				crypto: { vault_id: vaultId, name: vaultName.trim(), email: vaultEmail.trim() }
 			};
 			await api.saveWallet(agentId, data);
 			onsave();
@@ -90,6 +90,7 @@
 	}
 
 	async function resendCode() {
+		if (!pendingVaultId) return;
 		error = '';
 		try {
 			await api.resendVaultVerification(pendingVaultId, vaultEmail.trim(), vaultPassword.trim());

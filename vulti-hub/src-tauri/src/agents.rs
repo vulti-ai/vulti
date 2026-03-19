@@ -1,4 +1,4 @@
-use crate::types::{AgentEntry, AgentRegistry, AgentResponse, CreditCardResponse, CryptoResponse, WalletFile, WalletResponse};
+use crate::types::{AgentEntry, AgentRegistry, AgentResponse, CreditCardResponse, CryptoResponse, CryptoWalletEntry, WalletFile, WalletResponse};
 use crate::vulti_home::{atomic_write_json, atomic_write_text, ensure_dir, read_text_file, vulti_home};
 use regex::Regex;
 use std::collections::HashSet;
@@ -701,9 +701,9 @@ pub fn ensure_vultisig() -> Result<String, String> {
     ensure_vultisig_cli()
 }
 
-/// Create a Vultisig fast vault via the CLI. Returns the vault ID (ECDSA public key).
-/// The CLI prompts interactively for verification after keygen, so we pipe empty
-/// stdin to make it exit, then read the vault ID from ~/.vultisig/activeVaultId.json.
+/// Create a Vultisig fast vault via the CLI using --two-step.
+/// MPC keygen runs, vault keyshare is persisted to disk, then exits.
+/// Verification is done separately via verify_fast_vault.
 #[tauri::command]
 pub async fn create_fast_vault(
     name: String,
@@ -712,111 +712,69 @@ pub async fn create_fast_vault(
 ) -> Result<String, String> {
     let vultisig_bin = ensure_vultisig_cli()?;
 
-    // Snapshot existing vault files before creation
-    let vultisig_home = dirs::home_dir()
-        .ok_or("Cannot determine home directory")?
-        .join(".vultisig");
-    let before: std::collections::HashSet<String> = if vultisig_home.exists() {
-        fs::read_dir(&vultisig_home)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        std::collections::HashSet::new()
-    };
-
-    // Pipe empty stdin so the CLI exits after keygen instead of waiting for verification code
-    let mut child = tokio::process::Command::new("/bin/zsh")
+    let output = tokio::process::Command::new("/bin/zsh")
         .args([
             "-lc",
             &format!(
-                "{} create fast --name {} --email {} --password {}",
+                "{} create fast --name {} --email {} --password {} --two-step -o json --silent",
                 vultisig_bin,
                 shell_escape::escape(name.into()),
                 shell_escape::escape(email.into()),
                 shell_escape::escape(password.into()),
             ),
         ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+        .output()
+        .await
         .map_err(|e| format!("Failed to run vultisig CLI: {}", e))?;
 
-    // Close stdin immediately so interactive prompts exit
-    drop(child.stdin.take());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("CLI process error: {}", e))?;
-
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // Check for fatal errors (not just exit code — CLI exits non-zero when interactive prompt gets EOF)
-    if combined.contains("Error:") && !combined.contains("keygen complete") {
-        return Err(format!("Vault creation failed: {}", combined.lines()
-            .find(|l| l.contains("Error:"))
-            .unwrap_or("unknown error")));
+    if !output.status.success() {
+        return Err(format!("Vault creation failed: {}{}", stderr.trim(),
+            if stdout.trim().is_empty() { String::new() } else { format!(" ({})", stdout.trim()) }));
     }
 
-    // Find the new vault file by diffing the directory
-    let vault_id = if vultisig_home.exists() {
-        fs::read_dir(&vultisig_home)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-                    .filter(|name| name.starts_with("vault:") && name.ends_with(".json"))
-                    .find(|name| !before.contains(name))
-            })
-            .unwrap_or(None)
-    } else {
-        None
-    };
-
-    if let Some(vault_file) = vault_id {
-        // Extract vault ID from filename: "vault:<id>.json" -> "<id>"
-        let id = vault_file
-            .trim_start_matches("vault:")
-            .trim_end_matches(".json")
-            .to_string();
-        return Ok(id);
-    }
-
-    // Fallback: read activeVaultId.json
-    let active_path = vultisig_home.join("activeVaultId.json");
-    if active_path.exists() {
-        if let Ok(content) = fs::read_to_string(&active_path) {
-            let trimmed = content.trim().trim_matches('"').to_string();
-            if !trimmed.is_empty() {
-                return Ok(trimmed);
+    // Parse vault ID from JSON output
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+        if let Some(id) = json.get("vaultId").or(json.get("vault_id")).or(json.get("id")).and_then(|v| v.as_str()) {
+            return Ok(id.to_string());
+        }
+        if let Some(data) = json.get("data") {
+            if let Some(id) = data.get("vaultId").or(data.get("vault_id")).and_then(|v| v.as_str()) {
+                return Ok(id.to_string());
             }
         }
     }
 
-    Err("Vault was created but could not determine vault ID".to_string())
+    // Fallback: scan output for vault ID pattern (hex public key)
+    let combined = format!("{}{}", stdout, stderr);
+    for line in combined.lines() {
+        let trimmed = line.trim();
+        if trimmed.len() >= 60 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    Err(format!("Vault created but could not parse vault ID from output: {}", stdout.trim()))
 }
 
-/// Verify a Vultisig fast vault with the emailed code.
+/// Verify a fast vault with the emailed code. Separate CLI command.
 #[tauri::command]
-pub async fn verify_fast_vault(vault_id: String, code: String) -> Result<bool, String> {
+pub async fn verify_fast_vault(
+    vault_id: String,
+    code: String,
+    agent_id: Option<String>,
+) -> Result<String, String> {
     let vultisig_bin = ensure_vultisig_cli()?;
+
     let output = tokio::process::Command::new("/bin/zsh")
         .args([
             "-lc",
             &format!(
-                "{} verify {} --code {} --silent",
+                "{} verify {} --code {} -o json --silent",
                 vultisig_bin,
-                shell_escape::escape(vault_id.into()),
+                shell_escape::escape(vault_id.clone().into()),
                 shell_escape::escape(code.into()),
             ),
         ])
@@ -824,12 +782,70 @@ pub async fn verify_fast_vault(vault_id: String, code: String) -> Result<bool, S
         .await
         .map_err(|e| format!("Failed to run vultisig CLI: {}", e))?;
 
-    if output.status.success() {
-        Ok(true)
-    } else {
+    if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Verification failed: {}", stderr.trim()))
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Verification failed: {}{}", stderr.trim(),
+            if stdout.trim().is_empty() { String::new() } else { format!(" ({})", stdout.trim()) }));
     }
+
+    // Copy vault keyshare to agent directory and save crypto to wallet.json
+    if let Some(ref agent) = agent_id {
+        let vultisig_home = dirs::home_dir()
+            .map(|h| h.join(".vultisig"))
+            .unwrap_or_default();
+        // Export the .vult backup to the agent's directory
+        let agent_dir = agent_home(agent);
+        let vault_name_for_file = {
+            let vf = vultisig_home.join(format!("vault:{}.json", vault_id));
+            fs::read_to_string(&vf).ok()
+                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                .and_then(|j| j.get("name").and_then(|v| v.as_str()).map(String::from))
+                .unwrap_or_else(|| vault_id[..8].to_string())
+        };
+        let export_dest = agent_dir.join(format!("{}.vult", vault_name_for_file));
+        // Use CLI export command
+        let _ = tokio::process::Command::new("/bin/zsh")
+            .args(["-lc", &format!(
+                "{} export {} --password {} --silent",
+                ensure_vultisig_cli().unwrap_or_default(),
+                shell_escape::escape(export_dest.to_string_lossy().into()),
+                shell_escape::escape(String::new().into()), // no export password
+            )])
+            .output()
+            .await;
+
+        // Auto-save crypto data to wallet.json so the Wallet tab shows the vault
+        let wallet_path = agent_home(agent).join("wallet.json");
+        let mut wallet = if wallet_path.exists() {
+            fs::read_to_string(&wallet_path)
+                .ok()
+                .and_then(|c| serde_json::from_str::<WalletFile>(&c).ok())
+                .unwrap_or_default()
+        } else {
+            WalletFile::default()
+        };
+
+        // Read vault name/email from pending state if available, fallback to vault ID
+        let vault_name = {
+            // Try to read from the vault keyshare file for the name
+            let vf = vultisig_home.join(format!("vault:{}.json", vault_id));
+            if let Ok(content) = fs::read_to_string(&vf) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    json.get("name").and_then(|v| v.as_str()).unwrap_or(&vault_id).to_string()
+                } else { vault_id.clone() }
+            } else { vault_id.clone() }
+        };
+
+        wallet.crypto = Some(CryptoWalletEntry {
+            vault_id: vault_id.clone(),
+            name: vault_name,
+            email: String::new(),
+        });
+        let _ = atomic_write_json(&wallet_path, &wallet);
+    }
+
+    Ok(vault_id)
 }
 
 /// Resend the vault verification email.
@@ -840,6 +856,7 @@ pub async fn resend_vault_verification(
     password: String,
 ) -> Result<bool, String> {
     let vultisig_bin = ensure_vultisig_cli()?;
+
     let output = tokio::process::Command::new("/bin/zsh")
         .args([
             "-lc",

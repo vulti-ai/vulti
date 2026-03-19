@@ -39,15 +39,6 @@
 </script>
 
 <div class="flex h-full flex-col">
-	<div class="flex shrink-0 items-center justify-end border-b border-border px-6 py-2">
-		<button
-			class="text-xs text-ink-muted hover:text-ink transition-colors"
-			onclick={restoreDefaults}
-		>
-			Restore defaults
-		</button>
-	</div>
-
 	<div class="flex-1 overflow-y-auto p-6 space-y-4">
 		{#each widgets as widget (widget.id)}
 			{@const Comp = COMPONENTS[widget.type]}

@@ -2052,6 +2052,11 @@ class GatewayRunner:
 
         # Hub channel context: inject tab-specific instructions when message
         # comes from the dashboard chat panel (profile/actions/analytics/config)
+        if _hub_channel:
+            os.environ["VULTI_HUB_CHANNEL"] = _hub_channel
+        else:
+            os.environ.pop("VULTI_HUB_CHANNEL", None)
+
         if _hub_channel and _resolved_agent_id:
             # Lazy-init agent registry (same pattern as web platform adapter)
             if not hasattr(self, '_hub_agent_registry') or not self._hub_agent_registry:
@@ -2171,10 +2176,32 @@ class GatewayRunner:
                         "ACT immediately — create the jobs and rules as the user describes them.\n"
                         "Keep asking if there's more to set up. When done, tell the user to click Done.]"
                     ),
+                    "wallet": (
+                        f"[System: The user is on the WALLET tab for agent '{_aname}'. "
+                        "Help them manage payment methods, view card details, set up crypto vaults, "
+                        "or check balances. Use the wallet tool for wallet operations.]"
+                    ),
+                    "connections": (
+                        f"[System: The user is on the CONNECTIONS tab for agent '{_aname}'. "
+                        "Help them enable/disable service connections, add new API keys, or troubleshoot integrations.]"
+                    ),
+                    "skills": (
+                        f"[System: The user is on the SKILLS tab for agent '{_aname}'. "
+                        "Help them browse, install, or remove skills. Use skills_list to show available skills.]"
+                    ),
                 }
                 _hub_prompt = _HUB_CHANNEL_PROMPTS.get(_hub_channel, "")
                 if _hub_prompt:
                     context_prompt += "\n\n" + _hub_prompt
+
+                # Universal pane instruction for ALL hub tabs
+                context_prompt += (
+                    f"\n\n[System: IMPORTANT — You have a modify_pane tool that can update the right-side "
+                    f"content panel. The user is currently on the '{_hub_channel}' tab. "
+                    f"When using modify_pane, NEVER specify a tab parameter — it will automatically target "
+                    f"the '{_hub_channel}' tab the user is viewing. Do NOT modify other tabs unless the user "
+                    f"explicitly asks you to change a different tab by name.]"
+                )
 
         # One-time prompt if no home channel is set for this platform
         # Skip for web (hub chat handles its own context)

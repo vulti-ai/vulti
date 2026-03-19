@@ -25,5 +25,5 @@ regex = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 base64 = "0.22"
 shell-escape = "0.1"
-tokio = { version = "1", features = ["process"] }
+tokio = { version = "1", features = ["process", "macros", "rt", "io-util", "time"] }
 notify = "7"

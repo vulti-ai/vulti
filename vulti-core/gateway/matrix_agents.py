@@ -197,6 +197,23 @@ async def ensure_agent_matrix_user(
                     headers={"Authorization": f"Bearer {creds['access_token']}"},
                 )
                 if resp.status_code == 200:
+                    # Ensure display name and avatar are set (may be missing after DB reset)
+                    try:
+                        profile_resp = await client.get(
+                            f"{homeserver_url}/_matrix/client/v3/profile/{matrix_user_id}",
+                            headers={"Authorization": f"Bearer {creds['access_token']}"},
+                        )
+                        profile = profile_resp.json() if profile_resp.status_code == 200 else {}
+                        if not profile.get("displayname"):
+                            await client.put(
+                                f"{homeserver_url}/_matrix/client/v3/profile/{matrix_user_id}/displayname",
+                                headers={"Authorization": f"Bearer {creds['access_token']}"},
+                                json={"displayname": _matrix_displayname(agent_id, agent_name)},
+                            )
+                        if not profile.get("avatar_url"):
+                            await _sync_avatar_to_matrix(agent_id, matrix_user_id, creds["access_token"], homeserver_url)
+                    except Exception:
+                        pass
                     logger.debug("Matrix: agent %s already registered as %s", agent_id, matrix_user_id)
                     return matrix_user_id
         except Exception:
@@ -729,6 +746,14 @@ async def ensure_relationship_rooms(
         owner_dm_agents: List[str] = []
         collab_pairs: List[tuple] = []
 
+        # First pass: identify agents managed by another agent (not owner)
+        team_managed: set = set()
+        for rel in relationships:
+            from_id = rel.get("from_agent_id", "")
+            to_id = rel.get("to_agent_id", "")
+            if rel.get("rel_type") == "manages" and from_id not in ("owner", ""):
+                team_managed.add(to_id)
+
         for rel in relationships:
             # Skip if room already exists
             if rel.get("matrix_room_id"):
@@ -740,7 +765,9 @@ async def ensure_relationship_rooms(
 
             if from_id == "owner" or to_id == "owner":
                 agent_id = to_id if from_id == "owner" else from_id
-                owner_dm_agents.append(agent_id)
+                # Don't create owner DM for agents managed by another agent
+                if agent_id not in team_managed:
+                    owner_dm_agents.append(agent_id)
             elif rel_type == "manages":
                 manager_teams.setdefault(from_id, [from_id])
                 if to_id not in manager_teams[from_id]:

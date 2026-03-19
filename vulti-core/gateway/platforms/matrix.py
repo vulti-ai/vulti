@@ -94,6 +94,9 @@ class MatrixAdapter(BasePlatformAdapter):
             if tokens_dir.exists():
                 for f in sorted(tokens_dir.iterdir()):
                     if f.suffix == ".json":
+                        # Skip owner credentials — owner is not an agent
+                        if f.stem.startswith("_"):
+                            continue
                         try:
                             creds = _json.loads(f.read_text())
                             agent_id = f.stem
@@ -248,6 +251,12 @@ class MatrixAdapter(BasePlatformAdapter):
             reg_data = reg._load()
             relationships = reg_data.get("relationships", [])
 
+            # Identify team-managed agents (managed by another agent, not owner)
+            team_managed = set()
+            for rel in relationships:
+                if rel.get("rel_type") == "manages" and rel.get("from_agent_id") not in ("owner", ""):
+                    team_managed.add(rel.get("to_agent_id"))
+
             for agent_id in self._agent_clients:
                 agent = reg.get_agent(agent_id)
                 if not agent:
@@ -256,17 +265,20 @@ class MatrixAdapter(BasePlatformAdapter):
                 if existing and existing.get("chat_id"):
                     continue  # Already configured
 
-                # Check if managed by another agent (team member)
-                team_room = None
-                for rel in relationships:
-                    if rel.get("to_agent_id") == agent_id and rel.get("from_agent_id") not in ("owner", ""):
-                        team_room = rel.get("matrix_room_id")
-                        if team_room:
-                            break
-
-                if team_room:
-                    reg.set_home_channel(agent_id, "matrix", team_room, name="Team")
-                    logger.info("Matrix: %s home channel → team room %s", agent_id, team_room)
+                # Team-managed agents: use team room
+                if agent_id in team_managed:
+                    team_room = None
+                    for rel in relationships:
+                        if rel.get("to_agent_id") == agent_id and rel.get("from_agent_id") not in ("owner", ""):
+                            team_room = rel.get("matrix_room_id")
+                            if team_room:
+                                break
+                    if team_room:
+                        reg.set_home_channel(agent_id, "matrix", team_room, name="Team")
+                        logger.info("Matrix: %s home channel → team room %s", agent_id, team_room)
+                    elif updates_room_id:
+                        reg.set_home_channel(agent_id, "matrix", updates_room_id, name="Updates")
+                        logger.info("Matrix: %s home channel → #updates (team room not set)", agent_id)
                     continue
 
                 # Solo agent: find DM with owner
@@ -480,7 +492,8 @@ class MatrixAdapter(BasePlatformAdapter):
         """Find the correct agent client to use for sending to a room.
 
         For DM rooms, find which agent is in the room and use their client.
-        For group rooms, use the primary client.
+        For group rooms, use the active agent's client (from VULTI_AGENT_ID)
+        so each agent sends as themselves.
         """
         # Check each agent's client to see if they're in this room
         for agent_id, info in self._agent_clients.items():
@@ -490,6 +503,14 @@ class MatrixAdapter(BasePlatformAdapter):
                 chat_type = self._determine_chat_type(room)
                 if chat_type == "dm":
                     return cli
+
+        # For group rooms, use the current agent's client if available
+        current_agent = os.environ.get("VULTI_AGENT_ID", "")
+        if current_agent and current_agent in self._agent_clients:
+            cli = self._agent_clients[current_agent].get("client")
+            if cli:
+                return cli
+
         # Fallback to primary
         return self._client
 

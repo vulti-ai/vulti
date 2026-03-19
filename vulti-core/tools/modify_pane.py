@@ -62,7 +62,9 @@ def _ensure_ids(widgets: List[dict]) -> List[dict]:
 
 def modify_pane(args, **kw) -> str:
     action = (args.get("action") or "").strip().lower()
-    tab = (args.get("tab") or "profile").strip().lower()
+    # Default to the tab the user is currently viewing in the Hub
+    default_tab = os.getenv("VULTI_HUB_CHANNEL", "profile")
+    tab = (args.get("tab") or default_tab).strip().lower()
     widgets = args.get("widgets") or []
     widget_id = args.get("widget_id") or ""
     widget_data = args.get("widget_data")
@@ -232,7 +234,7 @@ MODIFY_PANE_SCHEMA = {
             },
             "tab": {
                 "type": "string",
-                "description": "Target tab. Default: profile",
+                "description": "Target tab. Defaults to the tab the user is currently viewing. Options: profile, connections, skills, actions, wallet, analytics",
             },
             "widgets": {
                 "type": "array",

@@ -110,6 +110,9 @@
 			{#if mode === 'agent' && activeAgent?.role}
 				<span class="rounded-full bg-ink/5 px-2.5 py-0.5 text-xs text-ink-dim">{activeAgent.role}</span>
 			{/if}
+			{#if mode === 'agent' && activeAgent}
+				<span class="text-[11px] font-mono text-ink-muted/50">@{activeAgent.id}-vulti</span>
+			{/if}
 			{#if mode === 'agent' && activeAgent?.isDefault}
 				<span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">default</span>
 			{/if}
@@ -224,6 +227,17 @@
 
 			<!-- Right: tab content (agent-modifiable) -->
 			<div class="panel-content-main">
+				<div class="flex shrink-0 items-center justify-between border-b border-border px-6 py-2">
+					<span class="text-[11px] text-ink-muted/50">Ask your agent to add or remove widgets from this tab</span>
+					{#if customWidgets}
+						<button
+							class="text-xs font-medium text-primary hover:text-primary-hover transition-colors"
+							onclick={() => store.clearPaneWidgets(activeTab)}
+						>
+							Restore defaults
+						</button>
+					{/if}
+				</div>
 				{#if customWidgets}
 					<DynamicPane widgets={customWidgets} tab={activeTab} />
 				{:else if activeTab === 'profile'}
@@ -351,7 +365,9 @@
 
 	.panel-content-main {
 		flex: 1;
-		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
 		min-width: 0;
 	}
 

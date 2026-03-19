@@ -116,8 +116,8 @@ export const api = {
 	createFastVault(name: string, email: string, password: string) {
 		return invoke<string>('create_fast_vault', { name, email, password });
 	},
-	verifyFastVault(vaultId: string, code: string) {
-		return invoke<boolean>('verify_fast_vault', { vaultId, code });
+	verifyFastVault(vaultId: string, code: string, agentId?: string) {
+		return invoke<string>('verify_fast_vault', { vaultId, code, agentId: agentId || null });
 	},
 	resendVaultVerification(vaultId: string, email: string, password: string) {
 		return invoke<boolean>('resend_vault_verification', { vaultId, email, password });
