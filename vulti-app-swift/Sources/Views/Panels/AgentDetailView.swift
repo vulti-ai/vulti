@@ -65,15 +65,15 @@ struct AgentDetailView: View {
     /// Tab bar matching original: 0.625rem vertical, 1rem horizontal padding,
     /// 0.8125rem font, weight 500, 2px bottom border on active.
     private var tabBar: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .bottom, spacing: 0) {
             ForEach(Tab.allCases, id: \.self) { tab in
                 Button {
                     selectedTab = tab
                 } label: {
                     Text(tab.rawValue)
                         .font(.system(size: 13, weight: .medium))
-                        .padding(.vertical, 10)
                         .padding(.horizontal, 16)
+                        .frame(height: 40)
                         .overlay(alignment: .bottom) {
                             if selectedTab == tab {
                                 Rectangle()
@@ -88,6 +88,7 @@ struct AgentDetailView: View {
             Spacer()
         }
         .padding(.horizontal, 8)
+        .frame(height: 40)
     }
 
     @ViewBuilder
@@ -315,9 +316,8 @@ struct AgentProfileTab: View {
                     .foregroundStyle(VultiTheme.inkDim)
             } else {
                 ForEach(userMem.components(separatedBy: "\u{00A7}").filter({ !$0.trimmingCharacters(in: .whitespaces).isEmpty }), id: \.self) { entry in
-                    Text(entry.trimmingCharacters(in: .whitespacesAndNewlines))
-                        .font(.system(size: 12))
-                        .padding(8)
+                    MarkdownMessageView(content: entry.trimmingCharacters(in: .whitespacesAndNewlines), isUser: false)
+                        .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(VultiTheme.paperDeep, in: RoundedRectangle(cornerRadius: 6))
                 }
@@ -329,7 +329,21 @@ struct AgentProfileTab: View {
                     .font(.system(size: 13))
                     .foregroundStyle(VultiTheme.inkDim)
             } else {
-                MarkdownMessageView(content: memory, isUser: false)
+                let entries = memory.components(separatedBy: "\u{00A7}")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                if entries.count > 1 {
+                    // Multiple entries separated by § — render as cards
+                    ForEach(entries, id: \.self) { entry in
+                        MarkdownMessageView(content: entry, isUser: false)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(VultiTheme.paperDeep, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                } else {
+                    // Single block — render as markdown
+                    MarkdownMessageView(content: memory, isUser: false)
+                }
             }
         default:
             EmptyView()

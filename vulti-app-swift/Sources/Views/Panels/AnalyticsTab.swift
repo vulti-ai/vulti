@@ -269,20 +269,54 @@ struct PlatformStats: Codable {
 struct ToolStats: Codable {
     var toolName: String
     var callCount: Int
-    var sessions: Int
+    var sessions: Int?
+    var percentage: Double?
     enum CodingKeys: String, CodingKey {
-        case toolName = "tool_name"
-        case callCount = "call_count"
-        case sessions
+        case toolName = "tool"
+        case callCount = "count"
+        case sessions, percentage
     }
 }
 
 struct ActivityStats: Codable {
-    var hourly: [Int]
-    var daily: [Int]
+    var byHour: [HourBucket]
+    var byDay: [DayBucket]
+
+    /// Flat counts indexed 0–23 (for chart rendering)
+    var hourly: [Int] {
+        var result = Array(repeating: 0, count: 24)
+        for b in byHour { if b.hour >= 0 && b.hour < 24 { result[b.hour] = b.count } }
+        return result
+    }
+    /// Flat counts indexed 0–6 Sun–Sat (for chart rendering)
+    var daily: [Int] {
+        let order = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        var result = Array(repeating: 0, count: 7)
+        for b in byDay {
+            if let i = order.firstIndex(of: b.day) { result[i] = b.count }
+        }
+        return result
+    }
+
+    /// Convenience init from flat arrays (used by local AnalyticsStore).
+    init(hourly: [Int], daily: [Int]) {
+        let days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        self.byHour = hourly.enumerated().map { HourBucket(hour: $0.offset, count: $0.element) }
+        self.byDay = daily.enumerated().map { DayBucket(day: days[$0.offset], count: $0.element) }
+    }
 
     enum CodingKeys: String, CodingKey {
-        case hourly = "hourly_distribution"
-        case daily = "daily_distribution"
+        case byHour = "by_hour"
+        case byDay = "by_day"
     }
+}
+
+struct HourBucket: Codable {
+    var hour: Int
+    var count: Int
+}
+
+struct DayBucket: Codable {
+    var day: String
+    var count: Int
 }

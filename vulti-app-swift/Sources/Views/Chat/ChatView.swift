@@ -185,7 +185,7 @@ struct ChatView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .frame(height: 40)
     }
 
     /// Display label for the current session — preview > name > truncated ID

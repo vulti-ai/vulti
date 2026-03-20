@@ -46,6 +46,16 @@ final class WebSocketManager {
     func disconnect() {
         reconnectTask?.cancel()
         reconnectTask = nil
+        // Preserve any in-flight streaming content as a completed message
+        if isStreaming && !streamingContent.isEmpty {
+            messages.append(ChatMessage(
+                messageId: UUID().uuidString,
+                type: "message",
+                role: "assistant",
+                content: streamingContent
+            ))
+            streamingContent = ""
+        }
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         isConnected = false
@@ -85,6 +95,17 @@ final class WebSocketManager {
 
             case .failure:
                 Task { @MainActor in
+                    // If we were streaming, save partial content as a message
+                    if self.isStreaming && !self.streamingContent.isEmpty {
+                        let msg = ChatMessage(
+                            messageId: UUID().uuidString,
+                            type: "message",
+                            role: "assistant",
+                            content: self.streamingContent
+                        )
+                        self.messages.append(msg)
+                        self.streamingContent = ""
+                    }
                     self.isConnected = false
                     self.isTyping = false
                     self.isStreaming = false

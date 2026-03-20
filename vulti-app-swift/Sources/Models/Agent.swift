@@ -265,18 +265,28 @@ struct AnyCodable: Codable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let s = try? container.decode(String.self) { value = s }
+        if container.decodeNil() { value = NSNull() }
+        else if let b = try? container.decode(Bool.self) { value = b }
         else if let i = try? container.decode(Int.self) { value = i }
         else if let d = try? container.decode(Double.self) { value = d }
-        else if let b = try? container.decode(Bool.self) { value = b }
+        else if let s = try? container.decode(String.self) { value = s }
+        else if let arr = try? container.decode([AnyCodable].self) { value = arr.map(\.value) }
+        else if let dict = try? container.decode([String: AnyCodable].self) {
+            value = dict.mapValues(\.value)
+        }
         else { value = "" }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        if let s = value as? String { try container.encode(s) }
-        else if let i = value as? Int { try container.encode(i) }
-        else if let d = value as? Double { try container.encode(d) }
-        else if let b = value as? Bool { try container.encode(b) }
+        switch value {
+        case let s as String: try container.encode(s)
+        case let i as Int: try container.encode(i)
+        case let d as Double: try container.encode(d)
+        case let b as Bool: try container.encode(b)
+        case let arr as [Any]: try container.encode(arr.map { AnyCodable($0) })
+        case let dict as [String: Any]: try container.encode(dict.mapValues { AnyCodable($0) })
+        default: try container.encodeNil()
+        }
     }
 }
