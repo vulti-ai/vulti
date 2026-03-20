@@ -1492,6 +1492,18 @@ class GatewayRunner:
 
         # Set agent identity env var so tools know which agent they serve.
         os.environ["VULTI_AGENT_ID"] = _resolved_agent_id
+        # For group chats, tell tools which agents are in the same chat (to prevent relay)
+        if source.chat_type == "group" and source.platform == Platform.MATRIX:
+            try:
+                adapter = self.adapters.get(Platform.MATRIX)
+                if adapter and hasattr(adapter, '_agent_clients'):
+                    # All agents that could be in this room
+                    group_agents = [aid for aid in adapter._agent_clients if aid != _resolved_agent_id]
+                    os.environ["VULTI_GROUP_CHAT_AGENTS"] = ",".join(group_agents)
+            except Exception:
+                pass
+        else:
+            os.environ.pop("VULTI_GROUP_CHAT_AGENTS", None)
 
         # PRIORITY handling when an agent is already running for this session.
         # Default behavior is to interrupt immediately so user text/stop messages
@@ -2109,6 +2121,13 @@ class GatewayRunner:
                     pass
 
                 _HUB_CHANNEL_PROMPTS = {
+                    "home": (
+                        f"[System: The user is on the HOME tab for agent '{_aname}'. "
+                        "This is the agent's custom dashboard. Use the modify_pane tool with tab='home' "
+                        "to set, add, or update widgets here. If the user asks for a home view, "
+                        "create useful widgets based on the agent's role and capabilities. "
+                        "ACT immediately — build the dashboard, don't just describe it.]"
+                    ),
                     "profile": (
                         f"[System: The user is on the PROFILE tab in the Hub dashboard for agent '{_aname}'. "
                         f"They want to edit this agent's identity. When they ask you to change personality, soul, "
@@ -2209,13 +2228,11 @@ class GatewayRunner:
                 if _hub_prompt:
                     context_prompt += "\n\n" + _hub_prompt
 
-                # Universal pane instruction for ALL hub tabs
+                # Universal pane instruction — widgets only go on the Home tab
                 context_prompt += (
-                    f"\n\n[System: IMPORTANT — You have a modify_pane tool that can update the right-side "
-                    f"content panel. The user is currently on the '{_hub_channel}' tab. "
-                    f"When using modify_pane, NEVER specify a tab parameter — it will automatically target "
-                    f"the '{_hub_channel}' tab the user is viewing. Do NOT modify other tabs unless the user "
-                    f"explicitly asks you to change a different tab by name.]"
+                    "\n\n[System: IMPORTANT — You have a modify_pane tool that can update the "
+                    "Home tab's widget pane. Always use tab='home' (or omit tab, it defaults to 'home'). "
+                    "Only the Home tab supports custom widgets — other tabs have fixed views.]"
                 )
 
         # One-time prompt if no home channel is set for this platform
@@ -2354,8 +2371,19 @@ class GatewayRunner:
             }
             await self.hooks.emit("agent:start", hook_ctx)
             
-            # Group observe mode: agent reads but may stay silent
+            # Context: tell the agent where this message came from
             _response_required = getattr(event, 'response_required', True)
+            if source.chat_type == "group":
+                _chat_label = source.chat_name or source.chat_id
+                context_prompt += (
+                    f"\n\n[System: GROUP CHAT '{_chat_label}'. "
+                    "You are in this group chat right now. Your text response is posted here automatically — "
+                    "never use send_message to this chat. "
+                    "Other agents mentioned in the same message will each receive it separately and respond on their own — "
+                    "do not relay, forward, or coordinate for them. Only respond for yourself.]"
+                )
+
+            # Group observe mode: agent reads but may stay silent
             if not _response_required:
                 context_prompt += (
                     "\n\n[System: You are observing a group conversation. "
@@ -2363,6 +2391,8 @@ class GatewayRunner:
                     "based on your role and expertise. It is perfectly fine to stay silent. "
                     "If you have nothing to add, respond with exactly: [SILENT]]"
                 )
+                # Disable streaming for observe-mode so [SILENT] can be suppressed
+                source._no_streaming = True
 
             # Run the agent
             agent_result = await self._run_agent(
@@ -4836,7 +4866,11 @@ class GatewayRunner:
                 from gateway.config import StreamingConfig
                 _scfg = StreamingConfig()
 
-            if _scfg.enabled and _scfg.transport != "off":
+            _no_stream = getattr(source, '_no_streaming', False)
+            # Disable streaming for Matrix — no message edit support, creates duplicate messages
+            if source.platform == Platform.MATRIX:
+                _no_stream = True
+            if _scfg.enabled and _scfg.transport != "off" and not _no_stream:
                 try:
                     from gateway.stream_consumer import GatewayStreamConsumer, StreamConsumerConfig
                     _adapter = self.adapters.get(source.platform)

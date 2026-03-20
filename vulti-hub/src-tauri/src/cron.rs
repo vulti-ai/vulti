@@ -171,6 +171,8 @@ pub fn create_cron(data: serde_json::Value, agent_id: Option<String>) -> Result<
         "deliver": "local",
         "origin": null,
         "agent": effective_agent,
+        "persist_session": data.get("persist_session").and_then(|v| v.as_bool()).unwrap_or(false),
+        "max_session_turns": data.get("max_session_turns").and_then(|v| v.as_u64()).unwrap_or(40),
     });
 
     file.jobs.push(job.clone());

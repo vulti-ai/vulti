@@ -23,12 +23,25 @@
 		onmodechange?: (newMode: string) => void;
 	} = $props();
 
-	let activeTab = $state<'profile' | 'connections' | 'skills' | 'actions' | 'wallet' | 'analytics'>('profile');
+	let activeTab = $state<'home' | 'profile' | 'connections' | 'skills' | 'actions' | 'wallet' | 'analytics'>('home');
 	let settingsTab = $state<'general' | 'connections'>('general');
 	let actionsSubTab = $state<'cron' | 'rules'>('cron');
 	let activeAgent = $derived(store.activeAgent);
 
+	// Tab loading state: show spinner while content mounts
+	let tabLoading = $state(false);
+	let tabLoadingTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function switchTab(id: typeof activeTab) {
+		if (id === activeTab) return;
+		activeTab = id;
+		tabLoading = true;
+		clearTimeout(tabLoadingTimer);
+		tabLoadingTimer = setTimeout(() => { tabLoading = false; }, 150);
+	}
+
 	const tabHints: Record<string, string> = {
+		home: 'Ask your agent to create a custom home view with any widget',
 		profile: 'Ask about editing name, role, personality, or description',
 		connections: 'Ask about connecting services or managing API access',
 		skills: 'Ask about installing skills or creating custom ones',
@@ -38,13 +51,13 @@
 	};
 	let chatHint = $derived(tabHints[activeTab] || '');
 
-	// Dynamic pane widgets — if the agent has set custom widgets for the active tab, show DynamicPane instead of the static view
-	let customWidgets = $derived.by((): Widget[] | null => {
+	// Dynamic pane widgets — only used on the Home tab
+	let homeWidgets = $derived.by((): Widget[] | null => {
 		const agentId = activeAgent?.id;
 		if (!agentId) return null;
 		const agentPanes = store.paneWidgets[agentId];
 		if (!agentPanes) return null;
-		const tabWidgets = agentPanes[activeTab];
+		const tabWidgets = agentPanes['home'];
 		if (!tabWidgets || tabWidgets.length === 0) return null;
 		return tabWidgets as Widget[];
 	});
@@ -60,6 +73,7 @@
 	});
 
 	const tabs = [
+		{ id: 'home' as const, label: 'Home' },
 		{ id: 'profile' as const, label: 'Profile' },
 		{ id: 'connections' as const, label: 'Connections' },
 		{ id: 'skills' as const, label: 'Skills' },
@@ -207,7 +221,7 @@
 				<button
 					class="panel-tab"
 					class:active={activeTab === tab.id}
-					onclick={() => activeTab = tab.id}
+					onclick={() => switchTab(tab.id)}
 				>
 					{tab.label}
 				</button>
@@ -225,21 +239,34 @@
 				/>
 			</div>
 
-			<!-- Right: tab content (agent-modifiable) -->
+			<!-- Right: tab content -->
 			<div class="panel-content-main">
-				<div class="flex shrink-0 items-center justify-between border-b border-border px-6 py-2">
-					<span class="text-[11px] text-ink-muted/50">Ask your agent to add or remove widgets from this tab</span>
-					{#if customWidgets}
-						<button
-							class="text-xs font-medium text-primary hover:text-primary-hover transition-colors"
-							onclick={() => store.clearPaneWidgets(activeTab)}
-						>
-							Restore defaults
-						</button>
+				{#if tabLoading}
+					<div class="flex flex-1 items-center justify-center">
+						<svg class="animate-spin text-ink-muted/40" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+							<path d="M21 12a9 9 0 1 1-6.219-8.56" />
+						</svg>
+					</div>
+				{:else if activeTab === 'home'}
+					{#if homeWidgets}
+						<div class="flex shrink-0 items-center justify-between border-b border-border px-6 py-2">
+							<span class="text-[11px] text-ink-muted/50">Custom home view</span>
+							<button
+								class="text-xs font-medium text-primary hover:text-primary-hover transition-colors"
+								onclick={() => store.clearPaneWidgets('home')}
+							>
+								Clear widgets
+							</button>
+						</div>
+						<DynamicPane widgets={homeWidgets} tab="home" />
+					{:else}
+						<div class="flex flex-1 items-center justify-center">
+							<div class="text-center space-y-3 max-w-xs">
+								<div class="text-3xl opacity-30">&#9670;</div>
+								<p class="text-sm text-ink-muted">Ask your Agent to create a custom home view for you, with any widget</p>
+							</div>
+						</div>
 					{/if}
-				</div>
-				{#if customWidgets}
-					<DynamicPane widgets={customWidgets} tab={activeTab} />
 				{:else if activeTab === 'profile'}
 					<ProfileView />
 				{:else if activeTab === 'connections'}

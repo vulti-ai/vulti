@@ -68,6 +68,14 @@ def _handle_agent_send(target_agent_id: str, message: str) -> str:
     hop_count = int(os.getenv("VULTI_AGENT_HOP_COUNT", "0"))
     sender_agent_id = os.getenv("VULTI_AGENT_ID", "default")
 
+    # Block relaying to agents in the same group chat — they get the message independently
+    _group_chat = os.getenv("VULTI_GROUP_CHAT_AGENTS", "")
+    if _group_chat and target_agent_id in _group_chat.split(","):
+        return json.dumps({
+            "error": f"{target_agent_id} is in this group chat and will see the message directly. "
+            "Do not relay — just respond for yourself. Other agents respond independently."
+        })
+
     if hop_count >= 1:
         return json.dumps({
             "error": "Inter-agent nesting not allowed. "

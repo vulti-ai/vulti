@@ -462,12 +462,12 @@ class MatrixAdapter(BasePlatformAdapter):
     # Message dispatch
     # ------------------------------------------------------------------
 
-    async def _dispatch_to_agent(
+    def _build_agent_event(
         self, room, event, agent_id: str, chat_type: str,
         response_required: bool, msg_type: MessageType = MessageType.TEXT,
         media_urls: List[str] = None, media_types: List[str] = None,
-    ) -> None:
-        """Build a MessageEvent and dispatch to the gateway for a specific agent."""
+    ) -> MessageEvent:
+        """Build a MessageEvent for a specific agent."""
         text = self._translate_mentions(event.body or "")
 
         # Thread detection
@@ -490,7 +490,7 @@ class MatrixAdapter(BasePlatformAdapter):
             event.server_timestamp / 1000, tz=timezone.utc
         ) if event.server_timestamp else datetime.now(tz=timezone.utc)
 
-        msg_event = MessageEvent(
+        return MessageEvent(
             source=source,
             text=text,
             message_type=msg_type,
@@ -502,9 +502,35 @@ class MatrixAdapter(BasePlatformAdapter):
             media_types=media_types or [],
         )
 
+    async def _dispatch_to_agent(
+        self, room, event, agent_id: str, chat_type: str,
+        response_required: bool, msg_type: MessageType = MessageType.TEXT,
+        media_urls: List[str] = None, media_types: List[str] = None,
+    ) -> None:
+        """Dispatch a message to a specific agent.
+
+        For DMs: uses handle_message (background task, single agent).
+        For groups: processes synchronously to avoid VULTI_AGENT_ID race conditions.
+        """
+        msg_event = self._build_agent_event(
+            room, event, agent_id, chat_type, response_required,
+            msg_type=msg_type, media_urls=media_urls, media_types=media_types,
+        )
+
         logger.info("Matrix: dispatch → %s (required=%s) chat=%s text='%s'",
-                     agent_id, response_required, chat_type, text[:80])
-        await self.handle_message(msg_event)
+                     agent_id, response_required, chat_type, msg_event.text[:80])
+
+        if chat_type == "dm":
+            # DMs: use normal background task flow (only one agent per room)
+            await self.handle_message(msg_event)
+        else:
+            # Groups: process synchronously to avoid env var race
+            # Use agent-specific session key to avoid session conflicts
+            session_key = f"agent:{agent_id}:matrix:{msg_event.source.chat_id}"
+            try:
+                await self._process_message_background(msg_event, session_key)
+            except Exception as e:
+                logger.warning("Matrix: agent %s processing failed: %s", agent_id, e)
 
     async def _on_room_message(self, room, event, agent_id: str, client) -> None:
         """Handle incoming text messages.
@@ -533,18 +559,49 @@ class MatrixAdapter(BasePlatformAdapter):
             oldest = next(iter(self._processed_group_events))
             del self._processed_group_events[oldest]
 
-        # Fan out to all agents in the room
+        # Fan out to all agents in the room — each decides independently
         room_agents = self._get_room_agent_ids(room)
         if not room_agents:
-            # Fallback: use all connected agents
             room_agents = [aid for aid, info in self._agent_clients.items() if info.get("client")]
 
         mentioned = self._detect_mentioned_agents(event.body or "")
         thread_target = self._detect_thread_target(event)
 
+        # Process mentioned/required agents first, then observers
+        # Sequential processing avoids VULTI_AGENT_ID env var race condition
+        required = []
+        observers = []
         for aid in room_agents:
-            must_respond = (aid in mentioned) or (aid == thread_target)
-            await self._dispatch_to_agent(room, event, aid, chat_type, response_required=must_respond)
+            if (aid in mentioned) or (aid == thread_target):
+                required.append(aid)
+            else:
+                observers.append(aid)
+
+        for aid in required:
+            await self._dispatch_to_agent(room, event, aid, chat_type, response_required=True)
+
+        # For unrouted group messages (no @mention, no thread target),
+        # use task lock so only one observer claims the work.
+        if not required:
+            try:
+                from orchestrator.task_lock import try_claim, release
+                lock_key = f"matrix_{room.room_id}_{event.event_id}"
+                claimed_by = None
+                for aid in observers:
+                    if try_claim(lock_key, aid, ttl_seconds=300):
+                        claimed_by = aid
+                        break
+                if claimed_by:
+                    await self._dispatch_to_agent(room, event, claimed_by, chat_type, response_required=False)
+                    release(lock_key, claimed_by)
+                # Other observers skip — one agent handles unrouted messages
+            except ImportError:
+                # Fallback: all observers process (original behavior)
+                for aid in observers:
+                    await self._dispatch_to_agent(room, event, aid, chat_type, response_required=False)
+        else:
+            for aid in observers:
+                await self._dispatch_to_agent(room, event, aid, chat_type, response_required=False)
 
     async def _on_room_media(self, room, event, agent_id: str, client, msg_type: MessageType) -> None:
         """Handle incoming media messages."""

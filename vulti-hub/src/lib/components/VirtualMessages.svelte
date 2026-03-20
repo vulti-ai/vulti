@@ -1,6 +1,16 @@
 <script lang="ts">
 	import type { Message } from '$lib/api';
 
+	function handleLinkClick(e: MouseEvent) {
+		const a = (e.target as HTMLElement).closest('a');
+		if (!a) return;
+		const href = a.getAttribute('href');
+		if (!href || (!href.startsWith('http://') && !href.startsWith('https://'))) return;
+		e.preventDefault();
+		// @ts-ignore — withGlobalTauri exposes this
+		window.__TAURI__?.shell?.open(href);
+	}
+
 	let {
 		messages,
 		activeAgent,
@@ -72,7 +82,8 @@
 	let hasImageAvatar = $derived(!!avatarUri);
 </script>
 
-<div bind:this={container} onscroll={onScroll} class="flex-1 overflow-y-auto p-3">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div bind:this={container} onscroll={onScroll} onclick={handleLinkClick} class="flex-1 overflow-y-auto p-3">
 	{#if allVisibleMessages.length === 0}
 		<!-- empty state handled by parent -->
 	{:else}

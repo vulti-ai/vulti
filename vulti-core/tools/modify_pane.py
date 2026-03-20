@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 _VULTI_HOME = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
 
-VALID_TABS = {"profile", "connections", "skills", "actions", "wallet", "analytics"}
+VALID_TABS = {"home"}
 VALID_WIDGET_TYPES = {
     "markdown", "kv", "table", "image",
     "status", "stat_grid", "bar_chart", "progress",
@@ -63,7 +63,7 @@ def _ensure_ids(widgets: List[dict]) -> List[dict]:
 def modify_pane(args, **kw) -> str:
     action = (args.get("action") or "").strip().lower()
     # Default to the tab the user is currently viewing in the Hub
-    default_tab = os.getenv("VULTI_HUB_CHANNEL", "profile")
+    default_tab = os.getenv("VULTI_HUB_CHANNEL", "home")
     tab = (args.get("tab") or default_tab).strip().lower()
     widgets = args.get("widgets") or []
     widget_id = args.get("widget_id") or ""
@@ -222,8 +222,8 @@ MODIFY_PANE_SCHEMA = {
         "  toggle_list — Toggleable items (data: {items: [{id, label, description?, enabled, tags?}], on_toggle_message})\n"
         "  action_list — Items with buttons (data: {items: [{id, title, subtitle?, status?, actions: [{label, message, variant?}]}]})\n"
         "  empty       — Empty state (data: {icon?: clock|bolt|book|search, heading, subtext?, button?: {label, message}})\n\n"
-        "Tabs: profile, connections, skills, actions, wallet, analytics\n"
-        "Widgets replace the default tab view when set. Use clear to restore defaults."
+        "Widgets are placed on the agent's Home tab only.\n"
+        "Use clear to remove widgets and restore the default empty state."
     ),
     "parameters": {
         "type": "object",
@@ -234,7 +234,7 @@ MODIFY_PANE_SCHEMA = {
             },
             "tab": {
                 "type": "string",
-                "description": "Target tab. Defaults to the tab the user is currently viewing. Options: profile, connections, skills, actions, wallet, analytics",
+                "description": "Always 'home'. Only the Home tab supports custom widgets.",
             },
             "widgets": {
                 "type": "array",

@@ -3,8 +3,11 @@ import { createWsStore, type WsMessage } from '$lib/ws';
 import { listen } from '@tauri-apps/api/event';
 import { marked } from 'marked';
 
-// Configure marked for safe HTML rendering
-marked.setOptions({ breaks: true, gfm: true });
+// Configure marked for safe HTML rendering — open links externally
+const renderer = new marked.Renderer();
+renderer.link = ({ href, text }: { href: string; text: string }) =>
+	`<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+marked.setOptions({ breaks: true, gfm: true, renderer });
 
 // Markdown render cache — avoids re-parsing on session switch
 const markdownCache = new Map<string, string>();

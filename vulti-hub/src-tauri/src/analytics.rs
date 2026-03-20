@@ -7,6 +7,12 @@ fn state_db_path() -> std::path::PathBuf {
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+pub struct ActivityStats {
+    pub hourly_distribution: Vec<u64>,
+    pub daily_distribution: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct AnalyticsResponse {
     pub days: u32,
     pub empty: bool,
@@ -20,6 +26,8 @@ pub struct AnalyticsResponse {
     pub platforms: Vec<PlatformStats>,
     #[serde(default)]
     pub tools: Vec<ToolStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<ActivityStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -33,6 +41,9 @@ pub struct OverviewStats {
     pub estimated_cost: f64,
     pub user_messages: u64,
     pub assistant_messages: u64,
+    pub total_hours: f64,
+    pub avg_session_duration: f64,
+    pub avg_messages_per_session: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,15 +111,21 @@ pub fn get_analytics(days: Option<u32>, agent_id: Option<String>) -> Result<Anal
     let (wc, p) = build_filter(cutoff, &agent_id);
     let sql = format!(
         "SELECT COUNT(*), COALESCE(SUM(s.message_count),0), COALESCE(SUM(s.tool_call_count),0),
-                COALESCE(SUM(s.input_tokens),0), COALESCE(SUM(s.output_tokens),0)
+                COALESCE(SUM(s.input_tokens),0), COALESCE(SUM(s.output_tokens),0),
+                COALESCE(SUM(CASE WHEN s.ended_at IS NOT NULL THEN s.ended_at - s.started_at ELSE 0 END), 0)
          FROM sessions s WHERE {wc}"
     );
     let overview = conn.query_row(&sql, params_from_iter(p.iter().map(|x| x.as_ref())), |row| {
         let inp: u64 = row.get(3)?;
         let out: u64 = row.get(4)?;
+        let total_seconds: f64 = row.get(5)?;
+        let total_sessions: u64 = row.get(0)?;
+        let total_messages: u64 = row.get(1)?;
+        let avg_msgs = if total_sessions > 0 { total_messages as f64 / total_sessions as f64 } else { 0.0 };
+        let avg_dur = if total_sessions > 0 { total_seconds / total_sessions as f64 } else { 0.0 };
         Ok(OverviewStats {
-            total_sessions: row.get(0)?,
-            total_messages: row.get(1)?,
+            total_sessions,
+            total_messages,
             total_tool_calls: row.get(2)?,
             total_input_tokens: inp,
             total_output_tokens: out,
@@ -116,6 +133,9 @@ pub fn get_analytics(days: Option<u32>, agent_id: Option<String>) -> Result<Anal
             estimated_cost: 0.0,
             user_messages: 0,
             assistant_messages: 0,
+            total_hours: total_seconds / 3600.0,
+            avg_session_duration: avg_dur,
+            avg_messages_per_session: avg_msgs,
         })
     }).unwrap_or_default();
 
@@ -193,6 +213,40 @@ pub fn get_analytics(days: Option<u32>, agent_id: Option<String>) -> Result<Anal
         }
     }
 
+    // Activity: daily distribution (day of week: 0=Sun..6=Sat)
+    let (wc, p) = build_filter(cutoff, &agent_id);
+    let sql = format!(
+        "SELECT CAST(strftime('%w', s.started_at, 'unixepoch') AS INTEGER) as dow, COUNT(*)
+         FROM sessions s WHERE {wc} GROUP BY dow ORDER BY dow"
+    );
+    let mut daily_distribution = vec![0u64; 7];
+    {
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let mut rows = stmt.query(params_from_iter(p.iter().map(|x| x.as_ref()))).map_err(|e| e.to_string())?;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let dow: usize = row.get::<_, i64>(0).unwrap_or(0) as usize;
+            let count: u64 = row.get::<_, u64>(1).unwrap_or(0);
+            if dow < 7 { daily_distribution[dow] = count; }
+        }
+    }
+
+    // Activity: hourly distribution
+    let (wc, p) = build_filter(cutoff, &agent_id);
+    let sql = format!(
+        "SELECT CAST(strftime('%H', s.started_at, 'unixepoch') AS INTEGER) as hr, COUNT(*)
+         FROM sessions s WHERE {wc} GROUP BY hr ORDER BY hr"
+    );
+    let mut hourly_distribution = vec![0u64; 24];
+    {
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let mut rows = stmt.query(params_from_iter(p.iter().map(|x| x.as_ref()))).map_err(|e| e.to_string())?;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let hr: usize = row.get::<_, i64>(0).unwrap_or(0) as usize;
+            let count: u64 = row.get::<_, u64>(1).unwrap_or(0);
+            if hr < 24 { hourly_distribution[hr] = count; }
+        }
+    }
+
     Ok(AnalyticsResponse {
         days,
         empty: false,
@@ -201,5 +255,6 @@ pub fn get_analytics(days: Option<u32>, agent_id: Option<String>) -> Result<Anal
         models,
         platforms,
         tools,
+        activity: Some(ActivityStats { hourly_distribution, daily_distribution }),
     })
 }

@@ -52,6 +52,18 @@
 		}
 	}
 
+	async function deleteVault() {
+		const agentId = store.activeAgentId;
+		if (!agentId) return;
+		try {
+			await api.deleteAgentVault(agentId);
+			vaultInfo = null;
+			vaultAddresses = {};
+		} catch (e: any) {
+			console.error('Failed to delete vault:', e);
+		}
+	}
+
 	// Vultisig fast vault creation state
 	type VaultPhase = 'idle' | 'form' | 'creating' | 'verify' | 'verifying';
 	let vaultPhase = $state<VaultPhase>('idle');
@@ -352,6 +364,10 @@
 			{:else if vaultInfo}
 				<div class="flex items-center justify-between mb-4">
 					<h3 class="text-sm font-medium uppercase text-ink-muted">Vultisig Fast Vault</h3>
+					<button
+						onclick={deleteVault}
+						class="text-xs text-red-400/60 hover:text-red-400 transition-colors"
+					>Delete Vault</button>
 				</div>
 				<div class="rounded-xl border border-border bg-surface p-5 space-y-3">
 					<div class="flex justify-between">
