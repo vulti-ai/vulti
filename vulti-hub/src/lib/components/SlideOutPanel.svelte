@@ -23,7 +23,29 @@
 		onmodechange?: (newMode: string) => void;
 	} = $props();
 
-	let activeTab = $state<'home' | 'profile' | 'connections' | 'skills' | 'actions' | 'wallet' | 'analytics'>('home');
+	type TabId = 'home' | 'profile' | 'connections' | 'skills' | 'actions' | 'wallet' | 'analytics';
+
+	// Two-phase tab state:
+	// - activeTab: updates immediately on click (drives tab bar highlight)
+	// - renderedTab: updates after the browser paints (drives content area mount)
+	// Svelte flushes activeTab + tabLoading via microtask → browser paints tab highlight
+	// + spinner → setTimeout(0) fires in next macrotask → heavy content mounts.
+	let activeTab = $state<TabId>('home');
+	let renderedTab = $state<TabId>('home');
+	let tabLoading = $state(false);
+	let switchTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function switchTab(id: TabId) {
+		if (id === activeTab) return;
+		activeTab = id;
+		tabLoading = true;
+		clearTimeout(switchTimer);
+		switchTimer = setTimeout(() => {
+			renderedTab = id;
+			tabLoading = false;
+		}, 0);
+	}
+
 	let settingsTab = $state<'general' | 'connections'>('general');
 	let actionsSubTab = $state<'cron' | 'rules'>('cron');
 	let activeAgent = $derived(store.activeAgent);
@@ -209,7 +231,7 @@
 				<button
 					class="panel-tab"
 					class:active={activeTab === tab.id}
-					onclick={() => activeTab = tab.id}
+					onclick={() => switchTab(tab.id)}
 				>
 					{tab.label}
 				</button>
@@ -223,15 +245,19 @@
 				<ChatView
 					contextLabel={activeTab}
 					contextHint={chatHint}
-					channel={activeTab}
+					channel={renderedTab}
 				/>
 			</div>
 
 			<!-- Right: tab content -->
 			<div class="panel-content-main">
-				{#key activeTab}
-				<div class="tab-content-enter">
-				{#if activeTab === 'home'}
+				{#if tabLoading}
+					<div class="flex flex-1 items-center justify-center">
+						<svg class="animate-spin text-ink-muted/40" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+							<path d="M21 12a9 9 0 1 1-6.219-8.56" />
+						</svg>
+					</div>
+				{:else if renderedTab === 'home'}
 					{#if homeWidgets}
 						<div class="flex shrink-0 items-center justify-between border-b border-border px-6 py-2">
 							<span class="text-[11px] text-ink-muted/50">Custom home view</span>
@@ -242,7 +268,9 @@
 								Clear widgets
 							</button>
 						</div>
+						<div class="flex-1 overflow-hidden min-h-0">
 						<DynamicPane widgets={homeWidgets} tab="home" />
+					</div>
 					{:else}
 						<div class="flex flex-1 items-center justify-center">
 							<div class="text-center space-y-3 max-w-xs">
@@ -251,13 +279,13 @@
 							</div>
 						</div>
 					{/if}
-				{:else if activeTab === 'profile'}
+				{:else if renderedTab === 'profile'}
 					<ProfileView />
-				{:else if activeTab === 'connections'}
+				{:else if renderedTab === 'connections'}
 					<AgentConnectionsView />
-				{:else if activeTab === 'skills'}
+				{:else if renderedTab === 'skills'}
 					<SkillsView />
-				{:else if activeTab === 'actions'}
+				{:else if renderedTab === 'actions'}
 					<div class="flex h-full flex-col">
 						<div class="flex shrink-0 items-center justify-end border-b border-border px-6 py-2">
 							<div class="flex items-center gap-1 rounded-lg border border-border p-0.5">
@@ -279,13 +307,11 @@
 							{/if}
 						</div>
 					</div>
-				{:else if activeTab === 'wallet'}
+				{:else if renderedTab === 'wallet'}
 					<WalletView />
-				{:else if activeTab === 'analytics'}
+				{:else if renderedTab === 'analytics'}
 					<AnalyticsView />
 				{/if}
-				</div>
-				{/key}
 			</div>
 		</div>
 	{/if}
@@ -349,7 +375,7 @@
 		font-weight: 500;
 		color: var(--color-ink-muted);
 		border-bottom: 2px solid transparent;
-		transition: all 150ms ease;
+		transition: color 150ms ease;
 	}
 	.panel-tab:hover {
 		color: var(--color-ink-dim);
@@ -357,6 +383,7 @@
 	.panel-tab.active {
 		color: var(--color-ink);
 		border-bottom-color: var(--color-ink);
+		transition: none;
 	}
 
 	.panel-body {
@@ -384,18 +411,6 @@
 		min-width: 0;
 	}
 
-	.tab-content-enter {
-		display: flex;
-		flex-direction: column;
-		flex: 1;
-		overflow: hidden;
-		animation: tab-fade-in 200ms ease-out;
-	}
-
-	@keyframes tab-fade-in {
-		from { opacity: 0; transform: translateY(6px); }
-		to { opacity: 1; transform: translateY(0); }
-	}
 
 	.panel-chat {
 		width: 26rem;
