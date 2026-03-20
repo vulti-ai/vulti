@@ -145,8 +145,8 @@ class InsightsEngine:
     def _build_session_filter(cutoff: float, source: str = None, agent_id: str = None):
         """Build WHERE clause and params for session-scoped queries.
 
-        When agent_id is provided, filters sessions whose ID starts with
-        ``agent:{agent_id}:`` (the multi-agent session key format).
+        When agent_id is provided, filters on the ``agent_id`` column
+        (falls back to session ID prefix for legacy data).
         """
         conditions = ["s.started_at >= ?"]
         params: list = [cutoff]
@@ -154,7 +154,8 @@ class InsightsEngine:
             conditions.append("s.source = ?")
             params.append(source)
         if agent_id:
-            conditions.append("s.id LIKE ?")
+            conditions.append("(s.agent_id = ? OR s.id LIKE ?)")
+            params.append(agent_id)
             params.append(f"agent:{agent_id}:%")
         return " AND ".join(conditions), params
 

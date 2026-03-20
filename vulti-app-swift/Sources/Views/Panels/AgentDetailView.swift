@@ -17,24 +17,48 @@ struct AgentDetailView: View {
         case analytics = "Analytics"
     }
 
-    var body: some View {
-        HStack(spacing: 0) {
-            // Left: Chat — fixed proportion via layoutPriority
-            ChatView(agentId: agentId)
-                .frame(minWidth: 280, idealWidth: 380, maxWidth: 416)
-                .layoutPriority(1)
-                .border(width: 1, edges: [.trailing], color: VultiTheme.border)
+    @State private var chatWidth: CGFloat = 380
 
-            // Right: Tabs — fills remaining space
-            VStack(spacing: 0) {
-                tabBar
-                Divider()
-                ScrollView {
-                    tabContent
-                        .padding(24)
+    var body: some View {
+        GeometryReader { geo in
+            let minChat = geo.size.width / 3
+            let maxChat = geo.size.width * 2 / 3
+
+            HStack(spacing: 0) {
+                // Left: Chat — resizable
+                ChatView(agentId: agentId)
+                    .frame(width: max(minChat, min(maxChat, chatWidth)))
+
+                // Drag handle divider
+                Rectangle()
+                    .fill(VultiTheme.border)
+                    .frame(width: 1)
+                    .overlay(
+                        Rectangle()
+                            .fill(Color.clear)
+                            .frame(width: 8)
+                            .contentShape(Rectangle())
+                            .onHover { h in if h { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+                            .gesture(
+                                DragGesture(minimumDistance: 1)
+                                    .onChanged { value in
+                                        let newWidth = chatWidth + value.translation.width
+                                        chatWidth = max(minChat, min(maxChat, newWidth))
+                                    }
+                            )
+                    )
+
+                // Right: Tabs — fills remaining space
+                VStack(spacing: 0) {
+                    tabBar
+                    Divider()
+                    ScrollView {
+                        tabContent
+                            .padding(24)
+                    }
                 }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
         }
     }
 
@@ -332,55 +356,84 @@ struct AgentConnectionsTab: View {
     @State private var allowedNames: Set<String> = []
     @State private var providers: [GatewayClient.ProviderResponse] = []
     @State private var configModel = ""
+    @State private var expandedProvider: String?
+    @State private var isSavingModel = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             // ── Model / Provider ──
             Section {
-                Group {
-                    if providers.isEmpty {
-                        Text("No providers configured. Add an API key in Settings.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(VultiTheme.inkDim)
-                    } else {
-                        ForEach(providers, id: \.id) { provider in
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(provider.authenticated ? .green : VultiTheme.inkDim)
-                                    .frame(width: 8, height: 8)
-                                Text(provider.name)
-                                    .font(.system(size: 13, weight: .medium))
-                                Spacer()
-                                if provider.authenticated {
-                                    Text("Connected")
-                                        .font(.system(size: 10))
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(.green.opacity(0.1), in: Capsule())
-                                        .foregroundStyle(.green)
-                                } else {
-                                    Text("No key")
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(VultiTheme.inkMuted)
+                if providers.isEmpty {
+                    Text("No providers configured. Add an API key in Settings.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                } else {
+                    ForEach(providers, id: \.id) { provider in
+                        VStack(alignment: .leading, spacing: 0) {
+                            // Provider row — click to expand model list
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    expandedProvider = expandedProvider == provider.id ? nil : provider.id
                                 }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Circle()
+                                        .fill(provider.authenticated ? .green : VultiTheme.inkDim)
+                                        .frame(width: 8, height: 8)
+                                    Text(provider.name)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(VultiTheme.inkSoft)
+                                    Spacer()
+                                    if provider.authenticated {
+                                        // Show current model if this provider is active
+                                        if configModel.hasPrefix(provider.id + "/") || configModel.hasPrefix(provider.id + ":") {
+                                            Text(configModel.split(separator: "/").last.map(String.init) ?? configModel)
+                                                .font(.system(size: 10, design: .monospaced))
+                                                .foregroundStyle(VultiTheme.inkMuted)
+                                                .lineLimit(1)
+                                        }
+                                        Image(systemName: expandedProvider == provider.id ? "chevron.up" : "chevron.down")
+                                            .font(.system(size: 9))
+                                            .foregroundStyle(VultiTheme.inkMuted)
+                                        Text("Connected")
+                                            .font(.system(size: 10))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(.green.opacity(0.1), in: Capsule())
+                                            .foregroundStyle(.green)
+                                    } else {
+                                        Text("No key")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(VultiTheme.inkMuted)
+                                    }
+                                }
+                                .padding(.vertical, 6)
                             }
-                        }
+                            .buttonStyle(.plain)
+                            .disabled(!provider.authenticated)
+                            .opacity(provider.authenticated ? 1.0 : 0.5)
 
-                        if !configModel.isEmpty {
-                            HStack(spacing: 6) {
-                                Text("Active model:")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(VultiTheme.inkDim)
-                                Text(configModel)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(VultiTheme.inkSoft)
+                            // Expanded model list
+                            if expandedProvider == provider.id, provider.authenticated {
+                                modelList(for: provider)
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
                             }
-                            .padding(.top, 4)
                         }
                     }
+
+                    // Active model display
+                    if !configModel.isEmpty {
+                        HStack(spacing: 6) {
+                            Text("Active:")
+                                .font(.system(size: 11))
+                                .foregroundStyle(VultiTheme.inkDim)
+                            Text(configModel)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(VultiTheme.primary)
+                        }
+                        .padding(.top, 4)
+                    }
                 }
-                .blur(radius: 3)
-                .allowsHitTesting(false)
             } header: {
                 Text("MODEL PROVIDER")
                     .font(.system(size: 12, weight: .medium))
@@ -481,6 +534,57 @@ struct AgentConnectionsTab: View {
             ]
             _ = try? await app.client.updateAgent(agentId, updates: updates)
             await app.refreshAgents()
+        }
+    }
+
+    // MARK: Model picker
+
+    @ViewBuilder
+    private func modelList(for provider: GatewayClient.ProviderResponse) -> some View {
+        let models = provider.models ?? []
+        VStack(alignment: .leading, spacing: 0) {
+            if models.isEmpty {
+                Text("No models available")
+                    .font(.system(size: 11))
+                    .foregroundStyle(VultiTheme.inkMuted)
+                    .padding(.vertical, 8)
+                    .padding(.leading, 16)
+            } else {
+                ForEach(models, id: \.self) { model in
+                    let fullId = "\(provider.id)/\(model)"
+                    let isActive = configModel == fullId || configModel == model
+                    Button {
+                        saveModel(fullId)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 12))
+                                .foregroundStyle(isActive ? VultiTheme.primary : VultiTheme.inkMuted)
+                            Text(model)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(isActive ? VultiTheme.inkSoft : VultiTheme.inkDim)
+                                .lineLimit(1)
+                            Spacer()
+                        }
+                        .padding(.vertical, 5)
+                        .padding(.horizontal, 16)
+                        .background(isActive ? VultiTheme.primary.opacity(0.06) : .clear)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func saveModel(_ model: String) {
+        guard !isSavingModel else { return }
+        isSavingModel = true
+        configModel = model
+        Task {
+            _ = try? await app.client.updateAgent(agentId, updates: ["model": model])
+            isSavingModel = false
         }
     }
 }

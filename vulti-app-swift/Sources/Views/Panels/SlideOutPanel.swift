@@ -88,6 +88,8 @@ struct AgentPanelHeader: View {
     let agentId: String
     @Environment(AppState.self) private var app
     @State private var isGeneratingAvatar = false
+    @State private var showDeleteConfirm = false
+    @State private var isDeleting = false
 
     private var agent: GatewayClient.AgentResponse? {
         app.agent(byId: agentId)
@@ -159,16 +161,43 @@ struct AgentPanelHeader: View {
                             .foregroundStyle(VultiTheme.lime)
                     }
 
-                    Button("Delete") {
-                        Task {
-                            try? await app.client.deleteAgent(agentId)
-                            await app.refreshAgents()
+                    // Delete with confirmation (matches Tauri)
+                    if showDeleteConfirm {
+                        HStack(spacing: 6) {
+                            Text("Delete?")
+                                .font(.system(size: 11))
+                                .foregroundStyle(VultiTheme.inkMuted)
+                            Button(isDeleting ? "..." : "Yes") {
+                                isDeleting = true
+                                Task {
+                                    try? await app.client.deleteAgent(agentId)
+                                    await app.refreshAgents()
+                                    await MainActor.run {
+                                        isDeleting = false
+                                        showDeleteConfirm = false
+                                        app.closePanel()
+                                    }
+                                }
+                            }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(.red, in: RoundedRectangle(cornerRadius: 4))
+                            .buttonStyle(.plain)
+                            .disabled(isDeleting)
+
+                            Button("No") { showDeleteConfirm = false }
+                                .font(.system(size: 11))
+                                .foregroundStyle(VultiTheme.inkMuted)
+                                .buttonStyle(.plain)
                         }
-                        app.closePanel()
+                    } else {
+                        Button("Delete") { showDeleteConfirm = true }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(VultiTheme.coral)
+                            .buttonStyle(.plain)
                     }
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(VultiTheme.coral)
-                    .buttonStyle(.plain)
                 }
 
                 Text("@\(agentId)-vulti")

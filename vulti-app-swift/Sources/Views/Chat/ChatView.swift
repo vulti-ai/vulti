@@ -155,13 +155,9 @@ struct ChatView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "bubble.left.and.bubble.right")
                         .font(.system(size: 11))
-                    if let sessionId {
-                        Text(truncatedSessionId(sessionId))
-                            .font(.system(size: 12, weight: .medium))
-                    } else {
-                        Text("New Session")
-                            .font(.system(size: 12, weight: .medium))
-                    }
+                    Text(currentSessionLabel)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .semibold))
                 }
@@ -172,47 +168,66 @@ struct ChatView: View {
 
             Spacer()
 
-            // New session button
-            Button {
-                startNewSession()
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 10))
-                    Text("New")
-                        .font(.system(size: 12))
+            // Delete current session
+            if sessionId != nil {
+                Button {
+                    if let sid = sessionId {
+                        Task { try? await app.client.deleteSession(sid) }
+                        startNewSession()
+                    }
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkDim)
                 }
-                .foregroundStyle(VultiTheme.inkDim)
+                .buttonStyle(.plain)
+                .help("Delete session")
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
 
+    /// Display label for the current session — preview > name > truncated ID
+    private var currentSessionLabel: String {
+        if let sid = sessionId,
+           let session = recentSessions.first(where: { $0.id == sid }) {
+            return sessionDisplayName(session)
+        }
+        if sessionId != nil {
+            return "Session"
+        }
+        return "New Session"
+    }
+
+    private func sessionDisplayName(_ session: GatewayClient.SessionResponse) -> String {
+        if let name = session.name, !name.isEmpty, !name.hasPrefix("onboard:") {
+            return name
+        }
+        if let preview = session.preview, !preview.isEmpty {
+            return String(preview.prefix(40))
+        }
+        return truncatedSessionId(session.id)
+    }
+
     // MARK: - Session Menu Item
 
     private func sessionMenuItemLabel(_ session: GatewayClient.SessionResponse) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(truncatedSessionId(session.id))
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sessionDisplayName(session))
                     .font(.system(size: 12, weight: .medium))
-                if session.id == sessionId {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 10))
-                }
-                Spacer()
-                if let preview = session.preview, !preview.isEmpty {
-                    Text(preview)
+                    .lineLimit(1)
+                if let date = session.createdAt {
+                    Text(formatSessionDate(date))
                         .font(.system(size: 10))
                         .foregroundStyle(VultiTheme.inkDim)
-                        .lineLimit(1)
                 }
             }
-            if let date = session.createdAt {
-                Text(formatSessionDate(date))
+            Spacer()
+            if session.id == sessionId {
+                Image(systemName: "checkmark")
                     .font(.system(size: 10))
-                    .foregroundStyle(VultiTheme.inkDim)
             }
         }
     }
@@ -354,13 +369,18 @@ struct ChatView: View {
 
         Task {
             // Create session via gateway if needed (associates agentId server-side)
-            if sessionId == nil {
+            let isFirstMessage = sessionId == nil
+            if isFirstMessage {
+                // Name the session from the first message (truncated)
+                let sessionName = String(text.prefix(60))
                 do {
-                    let session = try await app.client.createSession(agentId: agentId)
+                    let session = try await app.client.createSession(agentId: agentId, name: sessionName)
                     sessionId = session.id
                     ws.connect(sessionId: session.id)
                     // Brief delay for WS to open
                     try? await Task.sleep(for: .milliseconds(200))
+                    // Refresh session list to show the new name
+                    loadSessions()
                 } catch {
                     ws.messages.append(ChatMessage(
                         messageId: UUID().uuidString,

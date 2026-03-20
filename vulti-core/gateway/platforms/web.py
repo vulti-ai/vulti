@@ -1859,9 +1859,27 @@ class WebAdapter(BasePlatformAdapter):
             return [s for s in sessions if s.get("agent_id") == agent_id or not s.get("agent_id")]
         return sessions
 
-    def _get_cron_jobs(self) -> list:
-        """List cron jobs from the cron system."""
+    def _get_cron_jobs(self, agent_id: str = None) -> list:
+        """List cron jobs, optionally filtered by agent."""
         try:
+            # Per-agent: read directly from agent's cron/jobs.json
+            if agent_id:
+                jobs_file = self._get_vulti_home() / "agents" / agent_id / "cron" / "jobs.json"
+                if jobs_file.exists():
+                    data = json.loads(jobs_file.read_text())
+                    jobs = data.get("jobs", [])
+                    return [{
+                        "id": j.get("id", ""),
+                        "name": j.get("name", ""),
+                        "prompt": j.get("prompt", ""),
+                        "schedule": j.get("schedule_display", j.get("schedule", "")),
+                        "status": j.get("state", "active" if j.get("enabled", True) else "paused"),
+                        "last_run": j.get("last_run_at"),
+                        "last_output": j.get("last_output"),
+                    } for j in jobs]
+                return []
+
+            # Global: use scheduler singleton
             from cron.scheduler import CronScheduler
             scheduler = CronScheduler.get_instance()
             if scheduler:
