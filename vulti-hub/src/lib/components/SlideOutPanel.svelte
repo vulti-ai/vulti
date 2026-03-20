@@ -28,18 +28,6 @@
 	let actionsSubTab = $state<'cron' | 'rules'>('cron');
 	let activeAgent = $derived(store.activeAgent);
 
-	// Tab loading state: show spinner while content mounts
-	let tabLoading = $state(false);
-	let tabLoadingTimer: ReturnType<typeof setTimeout> | undefined;
-
-	function switchTab(id: typeof activeTab) {
-		if (id === activeTab) return;
-		activeTab = id;
-		tabLoading = true;
-		clearTimeout(tabLoadingTimer);
-		tabLoadingTimer = setTimeout(() => { tabLoading = false; }, 150);
-	}
-
 	const tabHints: Record<string, string> = {
 		home: 'Ask your agent to create a custom home view with any widget',
 		profile: 'Ask about editing name, role, personality, or description',
@@ -221,7 +209,7 @@
 				<button
 					class="panel-tab"
 					class:active={activeTab === tab.id}
-					onclick={() => switchTab(tab.id)}
+					onclick={() => activeTab = tab.id}
 				>
 					{tab.label}
 				</button>
@@ -241,13 +229,9 @@
 
 			<!-- Right: tab content -->
 			<div class="panel-content-main">
-				{#if tabLoading}
-					<div class="flex flex-1 items-center justify-center">
-						<svg class="animate-spin text-ink-muted/40" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-							<path d="M21 12a9 9 0 1 1-6.219-8.56" />
-						</svg>
-					</div>
-				{:else if activeTab === 'home'}
+				{#key activeTab}
+				<div class="tab-content-enter">
+				{#if activeTab === 'home'}
 					{#if homeWidgets}
 						<div class="flex shrink-0 items-center justify-between border-b border-border px-6 py-2">
 							<span class="text-[11px] text-ink-muted/50">Custom home view</span>
@@ -300,6 +284,8 @@
 				{:else if activeTab === 'analytics'}
 					<AnalyticsView />
 				{/if}
+				</div>
+				{/key}
 			</div>
 		</div>
 	{/if}
@@ -396,6 +382,19 @@
 		flex-direction: column;
 		overflow: hidden;
 		min-width: 0;
+	}
+
+	.tab-content-enter {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		overflow: hidden;
+		animation: tab-fade-in 200ms ease-out;
+	}
+
+	@keyframes tab-fade-in {
+		from { opacity: 0; transform: translateY(6px); }
+		to { opacity: 1; transform: translateY(0); }
 	}
 
 	.panel-chat {
