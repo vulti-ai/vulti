@@ -276,25 +276,6 @@ export const api = {
 		return invoke<void>('remove_agent_skill', { agentId, skillName });
 	},
 
-	// Config Versioning
-	listConfigRevisions(agentId: string) {
-		return invoke<ConfigRevision[]>('list_config_revisions', { agentId });
-	},
-	getConfigRevision(agentId: string, revision: string) {
-		return invoke<string>('get_config_revision', { agentId, revision });
-	},
-	rollbackConfig(agentId: string, revision: string) {
-		return invoke<void>('rollback_config', { agentId, revision });
-	},
-
-	// Approvals
-	listApprovals(agentId?: string) {
-		return invoke<ApprovalRequest[]>('list_approvals', { agentId: agentId || null });
-	},
-	resolveApproval(approvalId: string, approved: boolean) {
-		return invoke<ApprovalRequest>('resolve_approval', { approvalId, approved });
-	},
-
 	// Pane Widgets
 	getPaneWidgets(agentId: string) {
 		return invoke<PaneWidgets>('get_pane_widgets', { agentId });
@@ -462,8 +443,6 @@ export interface CronJob {
 	status: 'active' | 'paused';
 	last_run?: string;
 	last_output?: string;
-	persist_session?: boolean;
-	max_session_turns?: number;
 }
 
 export interface Rule {
@@ -638,25 +617,6 @@ export interface Skill {
 	description: string;
 	category: string;
 	installed: boolean;
-}
-
-export interface ConfigRevision {
-	revision: string;
-	timestamp: string;
-	size: number;
-}
-
-export interface ApprovalRequest {
-	id: string;
-	agent_id: string;
-	action_type: string;
-	description: string;
-	details: Record<string, unknown>;
-	status: 'pending' | 'approved' | 'denied' | 'expired';
-	created_at: string;
-	expires_at: string;
-	resolved_at?: string;
-	resolved_by?: string;
 }
 
 export interface AuditEvent {

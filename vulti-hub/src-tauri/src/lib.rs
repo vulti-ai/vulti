@@ -284,10 +284,6 @@ pub fn run() {
             agents::ensure_vultisig, agents::get_agent_vault, agents::delete_agent_vault,
             agents::vault_addresses, agents::vault_balance, agents::vault_send,
             agents::vault_swap, agents::vault_swap_quote, agents::vault_portfolio,
-            // Config versioning
-            agents::list_config_revisions, agents::get_config_revision, agents::rollback_config,
-            // Approvals
-            agents::list_approvals, agents::resolve_approval,
             // Memories & Soul
             memories::get_memories, memories::update_memory, memories::get_soul, memories::update_soul,
             // Rules
