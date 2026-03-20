@@ -82,11 +82,12 @@ fn open_db() -> Result<Connection, String> {
 }
 
 /// Build WHERE clause and parameter list for session-scoped queries.
+/// Includes legacy sessions (agent_id IS NULL) alongside the requested agent.
 fn build_filter(cutoff: f64, agent_id: &Option<String>) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
     let mut conditions = vec!["s.started_at >= ?".to_string()];
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(cutoff)];
     if let Some(aid) = agent_id {
-        conditions.push("s.agent_id = ?".to_string());
+        conditions.push("(s.agent_id = ? OR s.agent_id IS NULL)".to_string());
         params.push(Box::new(aid.clone()));
     }
     (conditions.join(" AND "), params)

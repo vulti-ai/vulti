@@ -347,24 +347,6 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         os.environ["VULTI_AGENT_ID"] = cron_agent_id
         os.environ["VULTI_AGENT_HOP_COUNT"] = "0"
 
-        # Session persistence: recurring jobs can carry forward context
-        if job.get("persist_session"):
-            session_id = f"cron_{job_id}_persistent"
-            # Load prior transcript as prefill for context continuity
-            if _session_db and prefill_messages is None:
-                try:
-                    prior = _session_db.get_messages(session_id)
-                    if prior:
-                        max_turns = job.get("max_session_turns", 40)
-                        if len(prior) > max_turns:
-                            prior = prior[-max_turns:]
-                        prefill_messages = prior
-                        logger.info("Job '%s': loaded %d prior messages from persistent session", job_id, len(prior))
-                except Exception as e:
-                    logger.debug("Job '%s': could not load persistent session: %s", job_id, e)
-        else:
-            session_id = f"cron_{job_id}_{_vulti_now().strftime('%Y%m%d_%H%M%S')}"
-
         agent = AIAgent(
             model=turn_route["model"],
             api_key=turn_route["runtime"].get("api_key"),
@@ -381,7 +363,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             disabled_toolsets=["cronjob"],
             quiet_mode=True,
             platform="cron",
-            session_id=session_id,
+            session_id=f"cron_{job_id}_{_vulti_now().strftime('%Y%m%d_%H%M%S')}",
             session_db=_session_db,
         )
 
