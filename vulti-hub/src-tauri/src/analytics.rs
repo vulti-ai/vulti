@@ -82,11 +82,13 @@ fn open_db() -> Result<Connection, String> {
 }
 
 /// Build WHERE clause and parameter list for session-scoped queries.
-/// Note: agent_id filtering is accepted but currently shows all sessions,
-/// since the sessions table doesn't have an agent_id column yet.
-fn build_filter(cutoff: f64, _agent_id: &Option<String>) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
-    let conditions = vec!["s.started_at >= ?".to_string()];
-    let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(cutoff)];
+fn build_filter(cutoff: f64, agent_id: &Option<String>) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let mut conditions = vec!["s.started_at >= ?".to_string()];
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(cutoff)];
+    if let Some(aid) = agent_id {
+        conditions.push("s.agent_id = ?".to_string());
+        params.push(Box::new(aid.clone()));
+    }
     (conditions.join(" AND "), params)
 }
 

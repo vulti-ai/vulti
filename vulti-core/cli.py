@@ -2738,6 +2738,7 @@ class VultiCLI:
                             "max_iterations": self.max_turns,
                             "reasoning_config": self.reasoning_config,
                         },
+                        agent_id=os.getenv("VULTI_AGENT_ID"),
                     )
                 except Exception:
                     pass

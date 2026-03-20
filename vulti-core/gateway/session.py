@@ -625,9 +625,10 @@ class SessionStore:
         return len(self._entries) > 1
     
     def get_or_create_session(
-        self, 
+        self,
         source: SessionSource,
-        force_new: bool = False
+        force_new: bool = False,
+        agent_id: str = None,
     ) -> SessionEntry:
         """
         Get an existing session or create a new one.
@@ -686,10 +687,11 @@ class SessionStore:
                     session_id=session_id,
                     source=source.platform.value,
                     user_id=source.user_id,
+                    agent_id=agent_id,
                 )
             except Exception as e:
                 print(f"[gateway] Warning: Failed to create SQLite session: {e}")
-        
+
         return entry
     
     def update_session(
@@ -722,7 +724,7 @@ class SessionStore:
                 except Exception as e:
                     logger.debug("Session DB operation failed: %s", e)
     
-    def reset_session(self, session_key: str) -> Optional[SessionEntry]:
+    def reset_session(self, session_key: str, agent_id: str = None) -> Optional[SessionEntry]:
         """Force reset a session, creating a new session ID."""
         self._ensure_loaded()
         
@@ -762,10 +764,11 @@ class SessionStore:
                     session_id=session_id,
                     source=old_entry.platform.value if old_entry.platform else "unknown",
                     user_id=old_entry.origin.user_id if old_entry.origin else None,
+                    agent_id=agent_id,
                 )
             except Exception as e:
                 logger.debug("Session DB operation failed: %s", e)
-        
+
         return new_entry
 
     def switch_session(self, session_key: str, target_session_id: str) -> Optional[SessionEntry]:

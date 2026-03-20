@@ -1727,7 +1727,7 @@ class GatewayRunner:
             # If it's not clearly an approval/denial, fall through to normal processing
         
         # Get or create session
-        session_entry = self.session_store.get_or_create_session(source)
+        session_entry = self.session_store.get_or_create_session(source, agent_id=_resolved_agent_id)
         session_key = session_entry.session_key
         
         # Emit session:start for new or auto-reset sessions

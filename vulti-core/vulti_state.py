@@ -25,7 +25,7 @@ from typing import Dict, Any, List, Optional
 
 DEFAULT_DB_PATH = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti")) / "state.db"
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
     title TEXT,
+    agent_id TEXT,
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
 );
 
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
 """
 
@@ -152,6 +154,19 @@ class SessionDB:
                 except sqlite3.OperationalError:
                     pass  # Index already exists
                 cursor.execute("UPDATE schema_version SET version = 4")
+            if current_version < 5:
+                # v5: add agent_id column to sessions for per-agent analytics
+                try:
+                    cursor.execute("ALTER TABLE sessions ADD COLUMN agent_id TEXT")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                try:
+                    cursor.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id)"
+                    )
+                except sqlite3.OperationalError:
+                    pass
+                cursor.execute("UPDATE schema_version SET version = 5")
 
         # Unique title index — always ensure it exists (safe to run after migrations
         # since the title column is guaranteed to exist at this point)
@@ -190,12 +205,13 @@ class SessionDB:
         system_prompt: str = None,
         user_id: str = None,
         parent_session_id: str = None,
+        agent_id: str = None,
     ) -> str:
         """Create a new session record. Returns the session_id."""
         self._conn.execute(
             """INSERT INTO sessions (id, source, user_id, model, model_config,
-               system_prompt, parent_session_id, started_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               system_prompt, parent_session_id, started_at, agent_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id,
                 source,
@@ -205,6 +221,7 @@ class SessionDB:
                 system_prompt,
                 parent_session_id,
                 time.time(),
+                agent_id,
             ),
         )
         self._conn.commit()

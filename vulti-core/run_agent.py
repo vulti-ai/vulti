@@ -711,6 +711,7 @@ class AIAgent:
         # SQLite session store (optional -- provided by CLI or gateway)
         self._session_db = session_db
         self._last_flushed_db_idx = 0  # tracks DB-write cursor to prevent duplicate writes
+        self._agent_id = os.getenv("VULTI_AGENT_ID")
         if self._session_db:
             try:
                 self._session_db.create_session(
@@ -723,6 +724,7 @@ class AIAgent:
                         "max_tokens": max_tokens,
                     },
                     user_id=None,
+                    agent_id=self._agent_id,
                 )
             except Exception as e:
                 logger.debug("Session DB create_session failed: %s", e)
@@ -3957,6 +3959,7 @@ class AIAgent:
                     source=self.platform or "cli",
                     model=self.model,
                     parent_session_id=old_session_id,
+                    agent_id=self._agent_id,
                 )
                 # Auto-number the title for the continuation session
                 if old_title:
