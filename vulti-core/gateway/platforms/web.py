@@ -778,6 +778,175 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return adapter._get_analytics(days, agent_id=agent_id)
 
+        # --- Connections ---
+
+        @app.get("/api/connections")
+        async def list_connections(authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._list_connections()
+
+        @app.post("/api/connections")
+        async def add_connection(req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._add_connection(data)
+
+        @app.put("/api/connections/{name}")
+        async def update_connection(name: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._update_connection(name, data)
+
+        @app.delete("/api/connections/{name}")
+        async def delete_connection(name: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._delete_connection(name)
+
+        # --- Relationships ---
+
+        @app.get("/api/relationships")
+        async def list_relationships(authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._list_relationships()
+
+        @app.post("/api/relationships")
+        async def create_relationship(req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._create_relationship(data)
+
+        @app.put("/api/relationships/{rel_id}")
+        async def update_relationship(rel_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._update_relationship(rel_id, data)
+
+        @app.delete("/api/relationships/{rel_id}")
+        async def delete_relationship(rel_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._delete_relationship(rel_id)
+
+        # --- Skills ---
+
+        @app.get("/api/skills")
+        async def list_available_skills(authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._list_available_skills()
+
+        @app.get("/api/agents/{agent_id}/skills")
+        async def list_agent_skills(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._list_agent_skills(agent_id)
+
+        @app.post("/api/agents/{agent_id}/skills")
+        async def install_agent_skill(agent_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._install_agent_skill(agent_id, data.get("name", ""))
+
+        @app.delete("/api/agents/{agent_id}/skills/{skill_name}")
+        async def remove_agent_skill(agent_id: str, skill_name: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._remove_agent_skill(agent_id, skill_name)
+
+        # --- Audit ---
+
+        @app.get("/api/audit")
+        async def list_audit_events(
+            n: int = 50,
+            agent_id: str = None,
+            trace_id: str = None,
+            event_type: str = None,
+            authorization: str = Header(""),
+        ):
+            await get_current_user(authorization)
+            return adapter._list_audit_events(n, agent_id, trace_id, event_type)
+
+        # --- Permissions ---
+
+        @app.get("/api/permissions")
+        async def list_permissions(agent_id: str = None, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._list_permissions(agent_id)
+
+        @app.post("/api/permissions/{request_id}/resolve")
+        async def resolve_permission(request_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._resolve_permission(request_id, data.get("approved", False))
+
+        # --- Owner ---
+
+        @app.get("/api/owner")
+        async def get_owner(authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_owner()
+
+        @app.put("/api/owner")
+        async def update_owner(req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._update_owner(data)
+
+        # --- Agent Avatar (fetch) ---
+
+        @app.get("/api/agents/{agent_id}/avatar")
+        async def get_agent_avatar(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_agent_avatar(agent_id)
+
+        # --- Agent Config ---
+
+        @app.get("/api/agents/{agent_id}/config")
+        async def get_agent_config(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_agent_config(agent_id)
+
+        # --- Agent Wallet ---
+
+        @app.get("/api/agents/{agent_id}/wallet")
+        async def get_agent_wallet(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_agent_wallet(agent_id)
+
+        @app.put("/api/agents/{agent_id}/wallet")
+        async def save_agent_wallet(agent_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._save_agent_wallet(agent_id, data)
+
+        # --- Agent Vault ---
+
+        @app.get("/api/agents/{agent_id}/vault")
+        async def get_agent_vault(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_agent_vault(agent_id)
+
+        @app.delete("/api/agents/{agent_id}/vault")
+        async def delete_agent_vault(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._delete_agent_vault(agent_id)
+
+        # --- Pane Widgets ---
+
+        @app.get("/api/agents/{agent_id}/pane")
+        async def get_pane_widgets(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_pane_widgets(agent_id)
+
+        @app.delete("/api/agents/{agent_id}/pane")
+        async def clear_pane_widgets(agent_id: str, tab: str = None, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._clear_pane_widgets(agent_id, tab)
+
+        # --- Finalize Onboarding ---
+
+        @app.post("/api/agents/{agent_id}/finalize-onboarding")
+        async def finalize_onboarding(agent_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            return adapter._finalize_onboarding(agent_id, data)
+
         # --- WebSocket ---
 
         @app.websocket("/ws/{session_id}")
@@ -2323,4 +2492,383 @@ class WebAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.debug("[web] Could not load analytics: %s", e)
             return {"error": str(e), "empty": True}
+
+    # --- Connections ---
+
+    def _list_connections(self) -> list:
+        try:
+            from vulti_cli.connection_registry import ConnectionRegistry
+            reg = ConnectionRegistry(self._get_vulti_home())
+            reg.load()
+            return [
+                {
+                    "name": c.name,
+                    "type": c.type,
+                    "description": c.description,
+                    "tags": c.tags or [],
+                    "enabled": True,
+                }
+                for c in reg.list_all()
+            ]
+        except Exception as e:
+            logger.debug("[web] Could not load connections: %s", e)
+            return []
+
+    def _add_connection(self, data: dict) -> dict:
+        from fastapi import HTTPException
+        from vulti_cli.connection_registry import ConnectionRegistry, ConnectionEntry
+        name = data.get("name", "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Connection name is required")
+        reg = ConnectionRegistry(self._get_vulti_home())
+        reg.load()
+        entry = ConnectionEntry(
+            name=name,
+            type=data.get("type", ""),
+            description=data.get("description", ""),
+            tags=data.get("tags"),
+            credentials=data.get("credentials"),
+        )
+        reg.add(name, entry)
+        return {"ok": True, "name": name}
+
+    def _update_connection(self, name: str, data: dict) -> dict:
+        from vulti_cli.connection_registry import ConnectionRegistry
+        reg = ConnectionRegistry(self._get_vulti_home())
+        reg.load()
+        existing = reg.get(name)
+        if not existing:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+        for field in ("type", "description", "tags", "credentials"):
+            if field in data:
+                setattr(existing, field, data[field])
+        reg.update(name, existing)
+        return {"ok": True, "name": name}
+
+    def _delete_connection(self, name: str) -> dict:
+        from vulti_cli.connection_registry import ConnectionRegistry
+        reg = ConnectionRegistry(self._get_vulti_home())
+        reg.load()
+        reg.remove(name)
+        return {"ok": True}
+
+    # --- Relationships ---
+
+    def _list_relationships(self) -> list:
+        registry = self._get_agent_registry()
+        data = registry._load()
+        return data.get("relationships", [])
+
+    def _create_relationship(self, data: dict) -> dict:
+        from fastapi import HTTPException
+        from_id = data.get("from_agent_id", "").strip()
+        to_id = data.get("to_agent_id", "").strip()
+        rel_type = data.get("type", "manages")
+        if not from_id or not to_id:
+            raise HTTPException(status_code=400, detail="from_agent_id and to_agent_id required")
+        registry = self._get_agent_registry()
+        reg_data = registry._load()
+        rels = reg_data.setdefault("relationships", [])
+        rel_id = uuid.uuid4().hex[:12]
+        new_rel = {
+            "id": rel_id,
+            "from_agent_id": from_id,
+            "to_agent_id": to_id,
+            "type": rel_type,
+        }
+        if data.get("matrix_room_id"):
+            new_rel["matrix_room_id"] = data["matrix_room_id"]
+        rels.append(new_rel)
+        registry._save()
+        return new_rel
+
+    def _update_relationship(self, rel_id: str, data: dict) -> dict:
+        from fastapi import HTTPException
+        registry = self._get_agent_registry()
+        reg_data = registry._load()
+        rels = reg_data.get("relationships", [])
+        for rel in rels:
+            if rel.get("id") == rel_id:
+                for k, v in data.items():
+                    rel[k] = v
+                registry._save()
+                return rel
+        raise HTTPException(status_code=404, detail=f"Relationship '{rel_id}' not found")
+
+    def _delete_relationship(self, rel_id: str) -> dict:
+        registry = self._get_agent_registry()
+        reg_data = registry._load()
+        reg_data["relationships"] = [r for r in reg_data.get("relationships", []) if r.get("id") != rel_id]
+        registry._save()
+        return {"ok": True}
+
+    # --- Skills ---
+
+    def _list_available_skills(self) -> list:
+        try:
+            skills_dir = self._get_vulti_home() / "skills"
+            if not skills_dir.exists():
+                return []
+            result = []
+            for d in skills_dir.iterdir():
+                if d.is_dir():
+                    skill_file = d / "SKILL.md"
+                    meta = {"name": d.name, "description": "", "category": ""}
+                    if skill_file.exists():
+                        content = skill_file.read_text(encoding="utf-8")
+                        for line in content.splitlines():
+                            if line.startswith("# "):
+                                meta["name"] = line[2:].strip()
+                            elif line.lower().startswith("category:"):
+                                meta["category"] = line.split(":", 1)[1].strip()
+                            elif not meta["description"] and line.strip() and not line.startswith("#"):
+                                meta["description"] = line.strip()
+                    result.append(meta)
+            return result
+        except Exception as e:
+            logger.debug("[web] Could not list skills: %s", e)
+            return []
+
+    def _list_agent_skills(self, agent_id: str) -> list:
+        registry = self._get_agent_registry()
+        skills_dir = registry.agent_skills_dir(agent_id)
+        if not skills_dir.exists():
+            return []
+        result = []
+        for d in skills_dir.iterdir():
+            if d.is_dir() or d.is_symlink():
+                meta = {"name": d.name, "description": "", "category": ""}
+                skill_file = d / "SKILL.md" if d.is_dir() else (d.resolve() / "SKILL.md" if d.is_symlink() else None)
+                if skill_file and skill_file.exists():
+                    content = skill_file.read_text(encoding="utf-8")
+                    for line in content.splitlines():
+                        if line.startswith("# "):
+                            meta["name"] = line[2:].strip()
+                        elif not meta["description"] and line.strip() and not line.startswith("#"):
+                            meta["description"] = line.strip()
+                result.append(meta)
+        return result
+
+    def _install_agent_skill(self, agent_id: str, skill_name: str) -> dict:
+        from fastapi import HTTPException
+        if not skill_name:
+            raise HTTPException(status_code=400, detail="Skill name is required")
+        registry = self._get_agent_registry()
+        source = self._get_vulti_home() / "skills" / skill_name
+        if not source.exists():
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+        dest = registry.agent_skills_dir(agent_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        link = dest / skill_name
+        if link.exists() or link.is_symlink():
+            return {"ok": True, "name": skill_name, "already_installed": True}
+        link.symlink_to(source)
+        return {"ok": True, "name": skill_name}
+
+    def _remove_agent_skill(self, agent_id: str, skill_name: str) -> dict:
+        registry = self._get_agent_registry()
+        link = registry.agent_skills_dir(agent_id) / skill_name
+        if link.exists() or link.is_symlink():
+            if link.is_symlink():
+                link.unlink()
+            else:
+                import shutil
+                shutil.rmtree(link)
+        return {"ok": True}
+
+    # --- Audit ---
+
+    def _list_audit_events(self, n: int = 50, agent_id: str = None, trace_id: str = None, event_type: str = None) -> list:
+        try:
+            from orchestrator.audit import tail
+            return tail(n=n, agent_id=agent_id, trace_id=trace_id, event_type=event_type)
+        except Exception as e:
+            logger.debug("[web] Could not load audit events: %s", e)
+            return []
+
+    # --- Permissions ---
+
+    def _list_permissions(self, agent_id: str = None) -> list:
+        try:
+            from orchestrator.permissions import list_pending
+            return list_pending(agent_id=agent_id)
+        except Exception as e:
+            logger.debug("[web] Could not load permissions: %s", e)
+            return []
+
+    def _resolve_permission(self, request_id: str, approved: bool) -> dict:
+        try:
+            from orchestrator.permissions import approve, deny
+            if approved:
+                approve(request_id)
+            else:
+                deny(request_id)
+            return {"ok": True, "request_id": request_id, "approved": approved}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # --- Owner ---
+
+    def _get_owner(self) -> dict:
+        home = self._get_vulti_home()
+        owner_file = home / "owner.json"
+        if owner_file.exists():
+            try:
+                return json.loads(owner_file.read_text())
+            except Exception:
+                pass
+        return {"name": "", "about": ""}
+
+    def _update_owner(self, data: dict) -> dict:
+        home = self._get_vulti_home()
+        owner_file = home / "owner.json"
+        current = {}
+        if owner_file.exists():
+            try:
+                current = json.loads(owner_file.read_text())
+            except Exception:
+                pass
+        for field in ("name", "about", "avatar"):
+            if field in data:
+                current[field] = data[field]
+        owner_file.write_text(json.dumps(current, indent=2))
+        return current
+
+    # --- Agent Avatar (fetch) ---
+
+    def _get_agent_avatar(self, agent_id: str) -> dict:
+        import base64
+        registry = self._get_agent_registry()
+        avatar_path = registry.agent_home(agent_id) / "avatar.png"
+        if avatar_path.exists():
+            data = avatar_path.read_bytes()
+            return {"avatar": base64.b64encode(data).decode(), "format": "png"}
+        meta = registry.get_agent(agent_id)
+        if meta and meta.avatar:
+            return {"avatar": meta.avatar, "format": "emoji"}
+        return {"avatar": None}
+
+    # --- Agent Config ---
+
+    def _get_agent_config(self, agent_id: str) -> dict:
+        registry = self._get_agent_registry()
+        config_path = registry.agent_config_path(agent_id)
+        if config_path.exists():
+            try:
+                import yaml
+                return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                pass
+        return {}
+
+    # --- Agent Wallet ---
+
+    def _get_agent_wallet(self, agent_id: str) -> dict:
+        registry = self._get_agent_registry()
+        wallet_path = registry.agent_home(agent_id) / "wallet.json"
+        if wallet_path.exists():
+            try:
+                return json.loads(wallet_path.read_text())
+            except Exception:
+                pass
+        return {}
+
+    def _save_agent_wallet(self, agent_id: str, data: dict) -> dict:
+        registry = self._get_agent_registry()
+        wallet_path = registry.agent_home(agent_id) / "wallet.json"
+        wallet_path.parent.mkdir(parents=True, exist_ok=True)
+        # Merge with existing
+        current = {}
+        if wallet_path.exists():
+            try:
+                current = json.loads(wallet_path.read_text())
+            except Exception:
+                pass
+        current.update(data)
+        wallet_path.write_text(json.dumps(current, indent=2))
+        return {"ok": True}
+
+    # --- Agent Vault ---
+
+    def _get_agent_vault(self, agent_id: str) -> dict:
+        registry = self._get_agent_registry()
+        agent_home = registry.agent_home(agent_id)
+        # Look for .vult files
+        for f in agent_home.iterdir():
+            if f.suffix == ".vult":
+                try:
+                    data = json.loads(f.read_text())
+                    return {"vault_id": data.get("vault_id", f.stem), "name": data.get("name", f.stem), **data}
+                except Exception:
+                    return {"vault_id": f.stem, "name": f.stem}
+        return {}
+
+    def _delete_agent_vault(self, agent_id: str) -> dict:
+        registry = self._get_agent_registry()
+        agent_home = registry.agent_home(agent_id)
+        deleted = False
+        for f in agent_home.iterdir():
+            if f.suffix == ".vult":
+                f.unlink()
+                deleted = True
+        # Also clear crypto wallet from wallet.json
+        wallet_path = agent_home / "wallet.json"
+        if wallet_path.exists():
+            try:
+                w = json.loads(wallet_path.read_text())
+                if "crypto" in w:
+                    del w["crypto"]
+                    wallet_path.write_text(json.dumps(w, indent=2))
+            except Exception:
+                pass
+        return {"ok": True, "deleted": deleted}
+
+    # --- Pane Widgets ---
+
+    def _get_pane_widgets(self, agent_id: str) -> dict:
+        registry = self._get_agent_registry()
+        pane_path = registry.agent_home(agent_id) / "pane_widgets.json"
+        if pane_path.exists():
+            try:
+                return json.loads(pane_path.read_text())
+            except Exception:
+                pass
+        return {"version": 1, "tabs": {}}
+
+    def _clear_pane_widgets(self, agent_id: str, tab: str = None) -> dict:
+        registry = self._get_agent_registry()
+        pane_path = registry.agent_home(agent_id) / "pane_widgets.json"
+        if tab:
+            if pane_path.exists():
+                try:
+                    data = json.loads(pane_path.read_text())
+                    tabs = data.get("tabs", {})
+                    if tab in tabs:
+                        del tabs[tab]
+                    data["tabs"] = tabs
+                    pane_path.write_text(json.dumps(data, indent=2))
+                except Exception:
+                    pass
+        else:
+            if pane_path.exists():
+                pane_path.unlink()
+        return {"ok": True}
+
+    # --- Finalize Onboarding ---
+
+    def _finalize_onboarding(self, agent_id: str, data: dict) -> dict:
+        registry = self._get_agent_registry()
+        meta = registry.get_agent(agent_id)
+        if not meta:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+        # Update role from onboarding data if provided
+        updates = {}
+        if data.get("role"):
+            updates["role"] = data["role"]
+        updates["status"] = "active"
+        if updates:
+            meta = registry.update_agent(agent_id, **updates)
+        return {"ok": True, "role": meta.role, "agent": {"id": meta.id, "name": meta.name, "role": meta.role}}
 

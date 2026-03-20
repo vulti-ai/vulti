@@ -894,341 +894,226 @@ struct ConnectionsSettingsView: View {
 }
 
 /// Create agent wizard — tabbed form: Identity, Model, Communication, Permissions.
+/// Create agent — matches Tauri CreateAgentView.svelte exactly.
+/// Single form: Name + Model picker (grouped by provider) + inline API key addition.
+/// After create → transitions to onboarding wizard.
 struct CreateAgentView: View {
     @Environment(AppState.self) private var app
 
-    enum WizardTab: String, CaseIterable {
-        case identity = "Identity"
-        case model = "Model"
-        case communication = "Communication"
-        case permissions = "Permissions"
-    }
-
-    @State private var currentTab: WizardTab = .identity
-
-    // Identity
     @State private var name = ""
-    @State private var role = ""
-    @State private var personality = ""
-
-    // Model
-    @State private var model = ""
-    @State private var availableProviders: [GatewayClient.ProviderResponse] = []
-
-    // Communication — selected connection names
-    @State private var selectedConnections: Set<String> = []
-    @State private var connections: [GatewayClient.ConnectionResponse] = []
-
-    // Permissions
-    @State private var readFiles = true
-    @State private var readWeb = true
-    @State private var writeFiles = false
-    @State private var writeCode = false
-    @State private var toolAccess = false
-
+    @State private var selectedModel = ""
+    @State private var providers: [GatewayClient.ProviderResponse] = []
+    @State private var isCreating = false
     @State private var error: String?
 
-    /// Messaging-type connections for the Communication tab.
-    private var messagingConnections: [GatewayClient.ConnectionResponse] {
-        let messagingTypes: Set<String> = ["telegram", "discord", "slack", "matrix", "whatsapp", "signal", "email"]
-        return connections.filter { conn in
-            if let type = conn.type?.lowercased(), messagingTypes.contains(type) { return true }
-            // Also match by name if type is missing
-            let lower = conn.name.lowercased()
-            return messagingTypes.contains(where: { lower.contains($0) })
-        }
+    // Inline API key addition
+    @State private var showAddKey = false
+    @State private var newKeyName = "OPENROUTER_API_KEY"
+    @State private var newKeyValue = ""
+    @State private var isAddingKey = false
+
+    private static let keyOptions: [(label: String, key: String)] = [
+        ("OpenRouter", "OPENROUTER_API_KEY"),
+        ("Anthropic", "ANTHROPIC_API_KEY"),
+        ("OpenAI", "OPENAI_API_KEY"),
+        ("DeepSeek", "DEEPSEEK_API_KEY"),
+        ("Google AI", "GOOGLE_API_KEY"),
+    ]
+
+    private var authenticatedProviders: [GatewayClient.ProviderResponse] {
+        providers.filter(\.authenticated)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Tab bar
-            HStack(spacing: 0) {
-                ForEach(WizardTab.allCases, id: \.self) { tab in
-                    Button {
-                        currentTab = tab
-                    } label: {
-                        Text(tab.rawValue)
-                            .font(.system(size: 13, weight: .medium))
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 16)
-                            .overlay(alignment: .bottom) {
-                                if currentTab == tab {
-                                    Rectangle().fill(.tint).frame(height: 2)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+
+                // ── Name ──
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Name")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                    TextField("e.g. Hector, WorkBot, Researcher", text: $name)
+                        .textFieldStyle(.vulti)
+                        .onSubmit { if canCreate { create() } }
+                }
+
+                // ── Model ──
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Model")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(VultiTheme.inkSoft)
+
+                    if authenticatedProviders.isEmpty {
+                        // No providers warning
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                            Text("No API keys configured. Add one to get started.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(VultiTheme.inkDim)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    } else {
+                        // Model list grouped by provider
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(authenticatedProviders, id: \.id) { provider in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(provider.name)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(VultiTheme.inkDim)
+                                        .textCase(.uppercase)
+
+                                    ForEach(provider.models ?? [], id: \.self) { m in
+                                        HStack(spacing: 8) {
+                                            Image(systemName: selectedModel == m ? "circle.inset.filled" : "circle")
+                                                .font(.system(size: 13))
+                                                .foregroundStyle(selectedModel == m ? VultiTheme.primary : VultiTheme.inkDim)
+                                            Text(m)
+                                                .font(.system(size: 12, design: .monospaced))
+                                                .foregroundStyle(selectedModel == m ? VultiTheme.inkSoft : VultiTheme.inkDim)
+                                        }
+                                        .padding(.vertical, 4)
+                                        .padding(.horizontal, 8)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(
+                                            selectedModel == m
+                                                ? VultiTheme.primary.opacity(0.08)
+                                                : Color.clear,
+                                            in: RoundedRectangle(cornerRadius: 6)
+                                        )
+                                        .contentShape(Rectangle())
+                                        .onTapGesture { selectedModel = m }
+                                    }
                                 }
                             }
-                            .foregroundStyle(currentTab == tab ? VultiTheme.inkSoft : VultiTheme.inkDim)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, maxHeight: 192, alignment: .topLeading)
+                        .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
                     }
-                    .buttonStyle(.plain)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 8)
 
-            Divider()
+                    // Inline API key addition
+                    if showAddKey {
+                        HStack(spacing: 8) {
+                            Picker("", selection: $newKeyName) {
+                                ForEach(Self.keyOptions, id: \.key) { opt in
+                                    Text(opt.label).tag(opt.key)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 130)
 
-            // Tab content
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    switch currentTab {
-                    case .identity:
-                        identityTab
-                    case .model:
-                        modelTab
-                    case .communication:
-                        communicationTab
-                    case .permissions:
-                        permissionsTab
+                            SecureField("Paste API key", text: $newKeyValue)
+                                .textFieldStyle(.vulti)
+
+                            Button(isAddingKey ? "Saving..." : "Save") {
+                                addKey()
+                            }
+                            .buttonStyle(.vultiPrimary)
+                            .font(.system(size: 11, weight: .medium))
+                            .disabled(isAddingKey || newKeyValue.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                            Button("Cancel") {
+                                showAddKey = false
+                                newKeyValue = ""
+                            }
+                            .font(.system(size: 11))
+                            .foregroundStyle(VultiTheme.inkMuted)
+                            .buttonStyle(.plain)
+                        }
+                    } else {
+                        Button("+ Add API key") {
+                            showAddKey = true
+                        }
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.primary)
+                        .buttonStyle(.plain)
                     }
                 }
-                .padding(24)
-            }
 
-            Divider()
-
-            // Bottom buttons
-            HStack {
-                Button("Cancel") { app.closePanel() }
-                Spacer()
+                // ── Error ──
                 if let error {
                     Text(error)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(.red)
-                        .lineLimit(2)
                 }
-                Button("Create") { create() }
-                    .buttonStyle(.vultiPrimary)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 12)
-        }
-        .frame(maxWidth: 448)
-        .task {
-            do { connections = try await app.client.listConnections() } catch {}
-            do { availableProviders = try await app.client.listProviders() } catch {}
-        }
-    }
 
-    // MARK: - Identity Tab
-
-    private var identityTab: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Name").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
-                TextField("e.g. Hector, WorkBot, Researcher", text: $name)
-                    .textFieldStyle(.vulti)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Role").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
-                TextField("e.g. Research Assistant, Community Manager", text: $role)
-                    .textFieldStyle(.vulti)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Personality / SOUL.md").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
-                TextEditor(text: $personality)
-                    .frame(minHeight: 120)
-                    .font(.system(size: 13))
-                    .foregroundStyle(VultiTheme.inkSoft)
-                    .scrollContentBackground(.hidden)
-                    .padding(4)
-                    .background(VultiTheme.paperDeep, in: RoundedRectangle(cornerRadius: 6))
-                Text("Describe the agent's personality, style, and initial instructions.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(VultiTheme.inkMuted)
-            }
-        }
-    }
-
-    // MARK: - Model Tab
-
-    private var modelTab: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("MODEL").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-
-            let providers = availableProviders.filter(\.authenticated)
-            ForEach(providers, id: \.id) { provider in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(provider.name)
-                        .font(.system(size: 12, weight: .medium))
-                    ForEach(provider.models ?? [], id: \.self) { m in
-                        HStack {
-                            Image(systemName: model == m ? "circle.inset.filled" : "circle")
-                                .font(.system(size: 12))
-                                .foregroundStyle(model == m ? AnyShapeStyle(.tint) : AnyShapeStyle(VultiTheme.inkDim))
-                            Text(m)
-                                .font(.system(size: 12))
-                                .monospaced()
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture { model = m }
-                    }
-                }
-                .padding(.leading, 4)
-            }
-
-            if providers.isEmpty {
-                Text("No providers configured. Add an API key in Settings.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(VultiTheme.inkDim)
-            }
-        }
-    }
-
-    // MARK: - Communication Tab
-
-    private var communicationTab: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("MESSAGING PLATFORMS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-            Text("Enable connections this agent can use to send and receive messages.")
-                .font(.system(size: 11))
-                .foregroundStyle(VultiTheme.inkDim)
-
-            if messagingConnections.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("No messaging connections found.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(VultiTheme.inkDim)
-                    Text("Add connections in Settings > Connections first.")
-                        .font(.system(size: 11))
+                // ── Buttons ──
+                HStack {
+                    Button("Cancel") { app.closePanel() }
+                        .font(.system(size: 13))
                         .foregroundStyle(VultiTheme.inkMuted)
-                }
-                .padding(.top, 4)
-            } else {
-                ForEach(messagingConnections, id: \.name) { conn in
-                    HStack {
-                        Toggle(isOn: Binding(
-                            get: { selectedConnections.contains(conn.name) },
-                            set: { enabled in
-                                if enabled {
-                                    selectedConnections.insert(conn.name)
-                                } else {
-                                    selectedConnections.remove(conn.name)
-                                }
-                            }
-                        )) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(conn.name)
-                                    .font(.system(size: 13, weight: .medium))
-                                if let type = conn.type {
-                                    Text(type)
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(VultiTheme.inkDim)
-                                }
-                            }
-                        }
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                    }
-                }
-            }
+                        .buttonStyle(.plain)
 
-            // Also show non-messaging connections if any
-            let otherConnections = connections.filter { conn in
-                !messagingConnections.contains(where: { $0.name == conn.name })
-            }
-            if !otherConnections.isEmpty {
-                Divider().padding(.vertical, 4)
-                Text("OTHER CONNECTIONS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-                ForEach(otherConnections, id: \.name) { conn in
-                    HStack {
-                        Toggle(isOn: Binding(
-                            get: { selectedConnections.contains(conn.name) },
-                            set: { enabled in
-                                if enabled {
-                                    selectedConnections.insert(conn.name)
-                                } else {
-                                    selectedConnections.remove(conn.name)
-                                }
-                            }
-                        )) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(conn.name)
-                                    .font(.system(size: 13, weight: .medium))
-                                if let type = conn.type {
-                                    Text(type)
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(VultiTheme.inkDim)
-                                }
-                            }
-                        }
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                    }
+                    Spacer()
+
+                    Button(isCreating ? "Creating..." : "Create") { create() }
+                        .buttonStyle(.vultiPrimary)
+                        .disabled(!canCreate)
                 }
             }
+            .padding(32)
+            .frame(maxWidth: 448)
+        }
+        .task { await loadProviders() }
+    }
+
+    // MARK: - Helpers
+
+    private var canCreate: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+            && !selectedModel.isEmpty
+            && !isCreating
+    }
+
+    private func loadProviders() async {
+        providers = (try? await app.client.listProviders()) ?? []
+        // Auto-select first model from first authenticated provider
+        if selectedModel.isEmpty,
+           let first = authenticatedProviders.first,
+           let firstModel = first.models?.first {
+            selectedModel = firstModel
         }
     }
 
-    // MARK: - Permissions Tab
-
-    private var permissionsTab: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("PERMISSIONS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-            Text("Control what this agent is allowed to do.")
-                .font(.system(size: 11))
-                .foregroundStyle(VultiTheme.inkDim)
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Read Access").font(.system(size: 12, weight: .medium))
-                Toggle("Files — read local files and directories", isOn: $readFiles)
-                    .toggleStyle(.switch).controlSize(.small)
-                Toggle("Web — fetch URLs and search the web", isOn: $readWeb)
-                    .toggleStyle(.switch).controlSize(.small)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Write Access").font(.system(size: 12, weight: .medium))
-                Toggle("Files — create and modify files", isOn: $writeFiles)
-                    .toggleStyle(.switch).controlSize(.small)
-                Toggle("Code — execute code and scripts", isOn: $writeCode)
-                    .toggleStyle(.switch).controlSize(.small)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Tool Access").font(.system(size: 12, weight: .medium))
-                Toggle("Tools — use external tools and integrations", isOn: $toolAccess)
-                    .toggleStyle(.switch).controlSize(.small)
-            }
+    private func addKey() {
+        let value = newKeyValue.trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty else { return }
+        isAddingKey = true
+        Task {
+            try? await app.client.addSecret(key: newKeyName, value: value)
+            newKeyValue = ""
+            showAddKey = false
+            isAddingKey = false
+            await loadProviders()
         }
     }
-
-    // MARK: - Create
 
     private func create() {
         error = nil
+        isCreating = true
         Task {
             do {
                 let agent = try await app.client.createAgent(
-                    name: name,
-                    role: role.isEmpty ? nil : role,
-                    personality: personality.isEmpty ? nil : personality,
-                    model: model.isEmpty ? nil : model
+                    name: name.trimmingCharacters(in: .whitespaces),
+                    model: selectedModel
                 )
 
-                // Set allowed connections via updateAgent
-                if !selectedConnections.isEmpty {
-                    let updates: [String: String] = [
-                        "allowedConnections": Array(selectedConnections).joined(separator: ",")
-                    ]
-                    _ = try await app.client.updateAgent(agent.id, updates: updates)
-                }
-
                 await app.refreshAgents()
+
+                // Matrix onboarding (fire-and-forget)
+                Task { try? await app.client.onboardAgentToMatrix(agentId: agent.id) }
+
                 await MainActor.run {
-                    app.openAgent(agent.id)
+                    app.openOnboarding(agent.id)
                 }
             } catch {
                 self.error = error.localizedDescription
+                isCreating = false
             }
         }
     }
 }
-
-// OnboardingView moved to OnboardingWizard.swift
-// AuditView moved to AuditTab.swift
