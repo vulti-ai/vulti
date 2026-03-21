@@ -282,6 +282,14 @@ struct ScratchPadView: View {
         return nil
     }
 
+    /// Detect if a KV widget contains vault details (by title or entry keys)
+    static func looksLikeVault(_ widget: PaneWidget) -> Bool {
+        let title = (widget.title ?? "").lowercased()
+        if title.contains("vault") { return true }
+        let keys = Set((widget.data.entries ?? []).map { $0.key.lowercased() })
+        return keys.contains("vault id") || keys.contains("party id") || (keys.contains("name") && keys.contains("security"))
+    }
+
     /// Merged card — two widgets rendered side by side inside a single card container.
     private func mergedWidgetCard(_ row: [PaneWidget]) -> some View {
         let leftWidget = row[0]
@@ -580,9 +588,11 @@ struct ScratchPadView: View {
         case .markdown:
             MarkdownWidgetContent(data: widget.data)
         case .kv:
-            // Special rendering for wallet widget with card/vault data
             if widget.data.cardLast4 != nil || widget.data.vaultId != nil {
                 WalletWidgetContent(data: widget.data)
+            } else if Self.looksLikeVault(widget) {
+                // Render vault KV entries as the green VaultVisual card
+                VaultVisualFromKV(entries: widget.data.entries ?? [])
             } else {
                 KvWidgetContent(data: widget.data)
             }
@@ -1037,6 +1047,109 @@ struct VaultVisual: View {
     private func truncate(_ id: String) -> String {
         guard id.count > 16 else { return id }
         return String(id.prefix(8)) + "..." + String(id.suffix(6))
+    }
+}
+
+/// Renders KV entries as a green vault card — extracts Name, ID, Type, Security, Party ID from entries.
+struct VaultVisualFromKV: View {
+    let entries: [KvEntry]
+
+    private func value(for key: String) -> String {
+        entries.first { $0.key.lowercased() == key.lowercased() }?.value ?? ""
+    }
+
+    var body: some View {
+        let name = value(for: "Name")
+        let vaultId = value(for: "ID")
+        let type = value(for: "Type")
+        let security = value(for: "Security")
+        let partyId = value(for: "Party ID")
+        let created = value(for: "Created")
+
+        VStack(alignment: .leading, spacing: 0) {
+            // Top: shield + VAULT label
+            HStack {
+                Image(systemName: "shield.checkered")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.green)
+                Spacer()
+                Text("VAULT")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+
+            Spacer(minLength: 8)
+
+            // Vault name
+            if !name.isEmpty {
+                Text(name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+            }
+
+            // Vault ID
+            if !vaultId.isEmpty {
+                Text(vaultId)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+                    .padding(.top, 2)
+            }
+
+            Spacer(minLength: 6)
+
+            // Details
+            VStack(alignment: .leading, spacing: 4) {
+                if !type.isEmpty {
+                    kvRow("Type", type)
+                }
+                if !security.isEmpty {
+                    kvRow("Security", security)
+                }
+                if !partyId.isEmpty {
+                    kvRow("Party ID", partyId)
+                }
+                if !created.isEmpty {
+                    kvRow("Created", created)
+                }
+            }
+
+            Spacer(minLength: 6)
+
+            // Bottom: status
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 6, height: 6)
+                Text("CONNECTED")
+                    .font(.system(size: 7, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                Spacer()
+            }
+        }
+        .padding(14)
+        .background(
+            LinearGradient(
+                colors: [Color(red: 0.08, green: 0.18, blue: 0.12), Color(red: 0.12, green: 0.25, blue: 0.15)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+    }
+
+    private func kvRow(_ key: String, _ value: String) -> some View {
+        HStack {
+            Text(key)
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.4))
+            Spacer()
+            Text(value)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(1)
+        }
     }
 }
 
