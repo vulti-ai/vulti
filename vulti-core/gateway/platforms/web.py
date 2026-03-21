@@ -251,7 +251,12 @@ class WebAdapter(BasePlatformAdapter):
         async def create_agent(req: Request, authorization: str = Header("")):
             await get_current_user(authorization)
             data = await req.json()
-            return adapter._create_agent(data)
+            result = adapter._create_agent(data)
+            # Register on Matrix and create owner DM in background
+            asyncio.create_task(
+                adapter._setup_agent_matrix(result["id"], result["name"])
+            )
+            return result
 
         @app.get("/api/agents/{agent_id}")
         async def get_agent(agent_id: str, authorization: str = Header("")):
@@ -1771,6 +1776,40 @@ class WebAdapter(BasePlatformAdapter):
             "createdAt": meta.created_at,
             "createdFrom": meta.created_from,
         }
+
+    async def _setup_agent_matrix(self, agent_id: str, agent_name: str) -> None:
+        """Register a new agent on Matrix and create an owner DM room."""
+        try:
+            from gateway.matrix_agents import (
+                ensure_agent_matrix_user,
+                create_owner_relationship,
+            )
+            from gateway.continuwuity import _get_or_create_registration_token
+
+            homeserver_url = os.getenv("MATRIX_HOMESERVER_URL", "http://127.0.0.1:6167")
+            server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+            registration_token = _get_or_create_registration_token()
+
+            matrix_id = await ensure_agent_matrix_user(
+                agent_id=agent_id,
+                agent_name=agent_name,
+                homeserver_url=homeserver_url,
+                server_name=server_name,
+                registration_token=registration_token,
+            )
+            if not matrix_id:
+                logger.warning("[web] Failed to register %s on Matrix", agent_id)
+                return
+
+            await create_owner_relationship(
+                homeserver_url=homeserver_url,
+                server_name=server_name,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            )
+            logger.info("[web] Matrix setup complete for %s: %s", agent_id, matrix_id)
+        except Exception as e:
+            logger.warning("[web] Matrix setup failed for %s: %s", agent_id, e)
 
     def _update_agent(self, agent_id: str, data: dict) -> dict:
         """Update an agent's metadata."""

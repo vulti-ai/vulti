@@ -30,8 +30,9 @@ struct SquadCanvas: View {
     // Measured node sizes — reported by AgentNode via onNodeSize callback
     @State private var nodeSizes: [String: CGSize] = [:]
 
-    // Matrix server name fetched from gateway integrations
+    // Matrix server name and integrations fetched from gateway
     @State private var matrixServerName: String?
+    @State private var integrations: [GatewayClient.IntegrationResponse] = []
 
     // Outward padding from edge for handle position
     private let handlePad: CGFloat = 4
@@ -258,14 +259,16 @@ struct SquadCanvas: View {
                     fitView(layout: layout, size: geo.size)
                     didFitView = true
                 }
-                // Fetch Matrix server name
+                // Fetch integrations and Matrix server name
                 Task {
-                    if let integrations = try? await app.client.listIntegrations(),
-                       let matrix = integrations.first(where: { $0.id == "matrix" }),
-                       let details = matrix.details,
-                       let serverName = details["server_name"]?.value as? String,
-                       !serverName.isEmpty, serverName != "localhost" {
-                        matrixServerName = serverName
+                    if let fetched = try? await app.client.listIntegrations() {
+                        integrations = fetched
+                        if let matrix = fetched.first(where: { $0.id == "matrix" }),
+                           let details = matrix.details,
+                           let serverName = details["server_name"]?.value as? String,
+                           !serverName.isEmpty, serverName != "localhost" {
+                            matrixServerName = serverName
+                        }
                     }
                 }
             }
@@ -354,27 +357,28 @@ struct SquadCanvas: View {
 
             // Label centered on top edge
             if hasLabel {
-                Text(labelText)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(VultiTheme.inkMuted)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(VultiTheme.paper.opacity(0.9))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(
-                                boundaryGradient.opacity(0.5),
-                                style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])
-                            )
-                    )
-                    .help("Connect here: https://matrix.org/ecosystem/clients/")
-                    .onTapGesture {
-                        NSWorkspace.shared.open(URL(string: "https://matrix.org/ecosystem/clients/")!)
-                    }
+                MatrixLabel(serverName: labelText)
+                    .fixedSize()
                     .position(x: rect.midX, y: rect.minY)
+            }
+
+            // Connection circles along the bottom edge (exclude matrix — first-class)
+            let connections = integrations.filter { $0.id != "matrix" }
+            if !connections.isEmpty {
+                let circleSize: CGFloat = 36
+                let spacing: CGFloat = 12
+                let count = CGFloat(connections.count)
+                let itemWidth = circleSize + spacing
+                let totalWidth = count * itemWidth - spacing
+
+                ForEach(Array(connections.enumerated()), id: \.element.id) { index, integration in
+                    let x = rect.midX - totalWidth / 2 + CGFloat(index) * itemWidth + circleSize / 2
+                    let y = rect.maxY
+
+                    ConnectionCircle(integration: integration, size: circleSize)
+                        .fixedSize()
+                        .position(x: x, y: y)
+                }
             }
         }
     }
@@ -575,6 +579,146 @@ struct SquadCanvas: View {
                     .position(handlePos)
             }
         }
+    }
+}
+
+// MARK: - Connection circle (integration badge on boundary)
+
+/// Matrix server label at top of boundary — click to show tooltip.
+struct MatrixLabel: View {
+    let serverName: String
+    @State private var showTip = false
+
+    private var boundaryGradient: AngularGradient {
+        AngularGradient(
+            colors: [
+                Color(hex: "#E8607A"), Color(hex: "#F28B6D"), Color(hex: "#F0A84A"),
+                Color(hex: "#4AC6B7"), Color(hex: "#6B8BEB"), Color(hex: "#9D7AEA"),
+                Color(hex: "#E8607A"),
+            ],
+            center: .center
+        )
+    }
+
+    var body: some View {
+        Text(serverName)
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundStyle(VultiTheme.inkMuted)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 8).fill(VultiTheme.paper.opacity(0.9)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.green.opacity(0.4), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .highPriorityGesture(
+                TapGesture().onEnded { showTip.toggle() }
+            )
+            .popover(isPresented: $showTip, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Chat with your agents via Matrix Chat")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Download a client:")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Text("matrix.org/ecosystem/clients")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.blue)
+                        .onTapGesture {
+                            NSWorkspace.shared.open(URL(string: "https://matrix.org/ecosystem/clients/")!)
+                        }
+                }
+                .padding(12)
+            }
+    }
+}
+
+struct ConnectionCircle: View {
+    let integration: GatewayClient.IntegrationResponse
+    let size: CGFloat
+    @State private var isHovered = false
+    @State private var showTip = false
+
+    private var statusColor: Color {
+        switch integration.status {
+        case "connected": .green
+        case "degraded": .yellow
+        case "configured": .blue
+        default: .gray
+        }
+    }
+
+    private var iconName: String {
+        switch integration.id {
+        case "telegram": "paperplane.fill"
+        case "discord": "bubble.left.and.text.bubble.right.fill"
+        case "whatsapp": "phone.fill"
+        case "slack": "number"
+        case "signal": "lock.shield.fill"
+        case "email": "envelope.fill"
+        case "homeassistant": "house.fill"
+        default: "circle.grid.2x2.fill"
+        }
+    }
+
+    private var statusLabel: String {
+        switch integration.status {
+        case "connected": "connected"
+        case "degraded": "degraded"
+        case "configured": "configured but not active"
+        default: "not connected"
+        }
+    }
+
+    private var tooltip: String {
+        switch integration.id {
+        case "telegram": "Message agents via Telegram bot"
+        case "discord": "Talk to agents in Discord channels"
+        case "whatsapp": "Chat with agents over WhatsApp"
+        case "slack": "Interact with agents in Slack"
+        case "signal": "Private encrypted messaging with agents"
+        case "email": "Agents send and receive email"
+        case "homeassistant": "Agents control your smart home"
+        case "twilio": "Phone calls and SMS via agents"
+        case "firecrawl": "Web crawling and content extraction"
+        case "openrouter": "Multi-model AI routing"
+        case "fal", "fal.ai": "Image and media generation"
+        case "bland", "bland.ai": "AI-powered phone calls"
+        default: integration.name
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(VultiTheme.paper.opacity(0.95))
+                .frame(width: size, height: size)
+            Circle()
+                .stroke(statusColor.opacity(isHovered ? 0.8 : 0.5), lineWidth: 1.5)
+                .frame(width: size, height: size)
+            Image(systemName: iconName)
+                .font(.system(size: size * 0.35))
+                .foregroundStyle(VultiTheme.inkDim)
+            Text(integration.name)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(VultiTheme.inkMuted)
+                .lineLimit(1)
+                .offset(y: size / 2 + 8)
+        }
+        .contentShape(Circle())
+        .highPriorityGesture(
+            TapGesture().onEnded { showTip.toggle() }
+        )
+        .popover(isPresented: $showTip, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(tooltip)
+                    .font(.system(size: 12, weight: .medium))
+                Text(statusLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(statusColor)
+            }
+            .padding(10)
+        }
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isHovered)
     }
 }
 
