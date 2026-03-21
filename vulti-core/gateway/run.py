@@ -4951,6 +4951,7 @@ class GatewayRunner:
                     or web_adapter._ws_tool_callbacks.get(chat_id)
                     or web_adapter._ws_tool_callbacks.get(session_id)
                 )
+                print(f"[web-tools] lookup: ws_session_id={ws_session_id}, chat_id={chat_id}, session_id={session_id}, found={_web_tool_callback is not None}, keys={list(web_adapter._ws_tool_callbacks.keys())[:5]}", flush=True)
         
         # Queue for progress messages (thread-safe)
         progress_queue = queue.Queue() if tool_progress_enabled else None

@@ -1251,8 +1251,9 @@ class WebAdapter(BasePlatformAdapter):
     # --- Tool progress for WebSocket clients ---
 
     def _setup_tool_progress_ws(self, session_id: str):
-        """Install a tool_progress_callback that emits tool_use events over WebSocket.
-
+        """Install a tool_progress_callback that emits tool_use events over WebSocket."""
+        print(f"[web] Setting up tool progress WS callback for session={session_id}", flush=True)
+        """
         This runs in-band during the agent's tool execution. The callback is stored
         on the adapter so the gateway's progress_callback can find it for web sessions.
         """
@@ -1273,7 +1274,7 @@ class WebAdapter(BasePlatformAdapter):
                 "emoji": emoji,
                 "preview": (preview[:80] + "...") if preview and len(preview) > 80 else (preview or ""),
             }
-            logger.info("[web] tool_use event: %s (session=%s)", tool_name, session_id)
+            print(f"[web] tool_use event: {tool_name} (session={session_id})", flush=True)
             current_ws = self._connections.get(session_id)
             if current_ws:
                 try:

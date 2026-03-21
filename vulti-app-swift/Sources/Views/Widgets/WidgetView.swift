@@ -547,18 +547,15 @@ struct LiveWalletWidget: View {
             if !loaded {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 40)
-            } else if hasCard && hasVault {
-                HStack(alignment: .top, spacing: 12) {
-                    CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
-                        .frame(maxWidth: .infinity)
-                    VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "", portfolioValue: portfolioValue, chainCount: chainCount)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if hasCard || hasVault {
+                VStack(spacing: 12) {
+                    if hasCard {
+                        CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
+                    }
+                    if hasVault {
+                        VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "", portfolioValue: portfolioValue, chainCount: chainCount)
+                    }
                 }
-                .fixedSize(horizontal: false, vertical: true)
-            } else if hasCard {
-                CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
-            } else if hasVault {
-                VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "", portfolioValue: portfolioValue, chainCount: chainCount)
             } else {
                 HStack {
                     Image(systemName: "creditcard")
