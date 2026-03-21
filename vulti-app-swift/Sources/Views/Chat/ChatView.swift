@@ -461,6 +461,13 @@ struct ChatView: View {
         guard !text.isEmpty else { return }
         input = ""
 
+        // If agent is streaming, interrupt it — discard partial response and send immediately
+        if ws.isStreaming {
+            ws.isStreaming = false
+            ws.streamingContent = ""
+        }
+        ws.isTyping = false
+
         // Optimistic user message
         ws.messages.append(ChatMessage(
             messageId: UUID().uuidString,

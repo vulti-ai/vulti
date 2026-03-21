@@ -35,8 +35,10 @@ struct ScratchPadView: View {
     @State private var pollTimer: Timer?
     @State private var deletedIds: Set<String> = []
     @State private var suppressPoll = false
-    @State private var draggingWidget: PaneWidget?
+    @State private var draggingRowId: String?
     @State private var refreshTick: Int = 0
+    /// Cached rows — rebuilt when widgets change, reorderable by drag
+    @State private var rows: [WidgetRow] = []
 
     private var widgets: [PaneWidget] {
         activeTab == .chat ? chatWidgets : homeWidgets
@@ -62,10 +64,26 @@ struct ScratchPadView: View {
             stopPolling()
         }
         .onChange(of: sessionId) {
-            // Session changed — reset chat widgets and reload
             chatWidgets = []
             deletedIds.removeAll()
             Task { await loadWidgetsForced() }
+        }
+        .onChange(of: homeWidgets.map(\.id)) { rebuildRows() }
+        .onChange(of: chatWidgets.map(\.id)) { rebuildRows() }
+        .onChange(of: activeTab) { rebuildRows() }
+    }
+
+    /// Rebuild rows only when the SET of widgets changes (added/removed).
+    /// Preserves user's manual row order on reorder or tab switch.
+    private func rebuildRows() {
+        guard draggingRowId == nil else { return } // never during drag
+
+        let currentWidgetIds = Set(rows.flatMap { $0.widgets.map(\.id) })
+        let newWidgetIds = Set(widgets.map(\.id))
+
+        // Only rebuild if widgets were added or removed
+        if currentWidgetIds != newWidgetIds {
+            rows = buildRows(from: widgets)
         }
     }
 
@@ -139,7 +157,7 @@ struct ScratchPadView: View {
         ["wallet", "crypto"],
     ]
 
-    private func buildRows(from list: [PaneWidget]) -> [[PaneWidget]] {
+    private func buildRows(from list: [PaneWidget]) -> [WidgetRow] {
         // Index widgets by drill key
         var byKey: [String: PaneWidget] = [:]
         var unmatched: [PaneWidget] = []
@@ -152,18 +170,18 @@ struct ScratchPadView: View {
             }
         }
 
-        var rows: [[PaneWidget]] = []
+        var rawRows: [[PaneWidget]] = []
 
         // Build paired rows in canonical order
         for pair in Self.rowPairs {
             let left = byKey.removeValue(forKey: pair[0])
             let right = byKey.removeValue(forKey: pair[1])
             if let l = left, let r = right {
-                rows.append([l, r])
+                rawRows.append([l, r])
             } else if let l = left {
-                rows.append([l])
+                rawRows.append([l])
             } else if let r = right {
-                rows.append([r])
+                rawRows.append([r])
             }
         }
 
@@ -172,7 +190,7 @@ struct ScratchPadView: View {
         var pending: [PaneWidget] = []
         for w in remaining {
             pending.append(w)
-            if pending.count == 2 { rows.append(pending); pending = [] }
+            if pending.count == 2 { rawRows.append(pending); pending = [] }
         }
 
         // Unmatched widgets (no drill key) — pair as half-width or full
@@ -180,15 +198,15 @@ struct ScratchPadView: View {
             let sz = w.data.size ?? "large"
             if sz == "half" {
                 pending.append(w)
-                if pending.count == 2 { rows.append(pending); pending = [] }
+                if pending.count == 2 { rawRows.append(pending); pending = [] }
             } else {
-                if !pending.isEmpty { rows.append(pending); pending = [] }
-                rows.append([w])
+                if !pending.isEmpty { rawRows.append(pending); pending = [] }
+                rawRows.append([w])
             }
         }
-        if !pending.isEmpty { rows.append(pending) }
+        if !pending.isEmpty { rawRows.append(pending) }
 
-        return rows
+        return rawRows.map { WidgetRow(id: $0.first!.id, widgets: $0) }
     }
 
     private var widgetList: some View {
@@ -207,33 +225,31 @@ struct ScratchPadView: View {
                 .frame(maxWidth: .infinity, minHeight: 200)
                 .padding(.top, 40)
             } else {
-                let rows = buildRows(from: widgets)
                 LazyVStack(spacing: 10) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        let anchor = row.first!
+                    ForEach(rows) { row in
                         Group {
-                            if row.count > 1 {
-                                mergedWidgetCard(row)
+                            if row.widgets.count > 1 {
+                                mergedWidgetCard(row.widgets)
                             } else {
-                                widgetCard(anchor)
+                                widgetCard(row.widgets[0])
                             }
                         }
-                        .opacity(draggingWidget?.id == anchor.id ? 0.4 : 1.0)
+                        .opacity(draggingRowId == row.id ? 0.4 : 1.0)
                         .onDrag {
-                            draggingWidget = anchor
+                            draggingRowId = row.id
                             suppressPoll = true
-                            return NSItemProvider(object: anchor.id as NSString)
+                            return NSItemProvider(object: row.id as NSString)
                         }
-                        .onDrop(of: [.text], delegate: WidgetDropDelegate(
-                            targetWidget: anchor,
-                            widgets: activeTab == .chat ? $chatWidgets : $homeWidgets,
-                            draggingWidget: $draggingWidget,
-                            onReorder: saveOrder
+                        .onDrop(of: [.text], delegate: RowDropDelegate(
+                            targetRow: row,
+                            rows: $rows,
+                            draggingRowId: $draggingRowId,
+                            onReorder: saveRowOrder
                         ))
                     }
                 }
                 .padding(16)
-                .animation(.spring(duration: 0.25), value: widgets.map(\.id))
+                .animation(.spring(duration: 0.25), value: rows.map(\.id))
             }
         }
     }
@@ -493,7 +509,25 @@ struct ScratchPadView: View {
             try? await Task.sleep(for: .milliseconds(200))
             await loadWidgetsForced()
             suppressPoll = false
-            draggingWidget = nil
+        }
+    }
+
+    /// Save row order — persists reordered rows to backend
+    private func saveRowOrder() {
+        let ids = rows.flatMap { $0.widgets.map(\.id) }
+        suppressPoll = true
+        Task {
+            try? await app.client.reorderPaneWidgets(agentId: agentId, widgetIds: ids)
+            // Sync the flat arrays to match new order (without triggering rebuild)
+            let reordered = ids.compactMap { id in widgets.first { $0.id == id } }
+            if activeTab == .chat {
+                chatWidgets = reordered
+            } else {
+                homeWidgets = reordered
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            suppressPoll = false
+            draggingRowId = nil
         }
     }
 
@@ -712,27 +746,37 @@ struct ScratchPadView: View {
 
 // MARK: - Drop Delegate for Drag Reorder
 
-struct WidgetDropDelegate: DropDelegate {
-    let targetWidget: PaneWidget
-    @Binding var widgets: [PaneWidget]
-    @Binding var draggingWidget: PaneWidget?
+/// A row of 1-2 widgets, used as the unit for drag-reorder.
+struct WidgetRow: Identifiable, Equatable {
+    let id: String // first widget's ID
+    var widgets: [PaneWidget]
+
+    static func == (lhs: WidgetRow, rhs: WidgetRow) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+struct RowDropDelegate: DropDelegate {
+    let targetRow: WidgetRow
+    @Binding var rows: [WidgetRow]
+    @Binding var draggingRowId: String?
     let onReorder: () -> Void
 
     func performDrop(info: DropInfo) -> Bool {
-        draggingWidget = nil
         onReorder()
+        draggingRowId = nil
         return true
     }
 
     func dropEntered(info: DropInfo) {
-        guard let dragging = draggingWidget,
-              dragging.id != targetWidget.id,
-              let fromIndex = widgets.firstIndex(where: { $0.id == dragging.id }),
-              let toIndex = widgets.firstIndex(where: { $0.id == targetWidget.id })
+        guard let draggingId = draggingRowId,
+              draggingId != targetRow.id,
+              let fromIndex = rows.firstIndex(where: { $0.id == draggingId }),
+              let toIndex = rows.firstIndex(where: { $0.id == targetRow.id })
         else { return }
 
         withAnimation(.spring(duration: 0.2)) {
-            widgets.move(fromOffsets: IndexSet(integer: fromIndex), toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex)
+            rows.move(fromOffsets: IndexSet(integer: fromIndex), toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex)
         }
     }
 

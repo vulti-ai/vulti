@@ -5224,7 +5224,8 @@ class GatewayRunner:
 
             _no_stream = getattr(source, '_no_streaming', False)
             # Disable streaming for Matrix — no message edit support, creates duplicate messages
-            if source.platform == Platform.MATRIX:
+            # Disable streaming for Telegram — partial edits cause broken message rendering
+            if source.platform in (Platform.MATRIX, Platform.TELEGRAM):
                 _no_stream = True
             if _scfg.enabled and _scfg.transport != "off" and not _no_stream:
                 try:
@@ -5358,7 +5359,7 @@ class GatewayRunner:
                         _audit_agent = get_default_agent_id()
                     except Exception:
                         _audit_agent = "default"
-                _audit_platform = platform_key if platform_key != "web" else "app"
+                _audit_platform = "app" if platform_key in ("web", "matrix") else platform_key
                 _audit_emit("message_received", agent_id=_audit_agent, details={
                     "platform": _audit_platform,
                     "message_preview": message[:200],
