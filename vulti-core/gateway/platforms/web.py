@@ -3121,8 +3121,13 @@ class WebAdapter(BasePlatformAdapter):
             )
             if result.returncode == 0:
                 data = json.loads(result.stdout)
+                # Normalize for comparison: lowercase, strip hyphens/spaces
+                def _norm(s: str) -> str:
+                    return s.lower().replace("-", "").replace("_", "").replace(" ", "")
+                norm_name = _norm(vault_name)
                 for v in data.get("data", {}).get("vaults", []):
-                    if v.get("name") == vault_name:
+                    cli_name = v.get("name", "")
+                    if _norm(cli_name) == norm_name or cli_name == vault_name:
                         return {
                             "vault_id": v.get("id", ""),
                             "name": v.get("name", vault_name),

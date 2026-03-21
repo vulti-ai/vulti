@@ -225,10 +225,10 @@ final class AgentStore {
             try FileManager.default.removeItem(at: f)
         }
 
-        // Clear crypto from wallet
-        if var w = wallet(for: id) {
-            w.crypto = nil
-            try VultiHome.atomicWriteJSON(w, to: VultiHome.agentWallet(id))
+        // Clear crypto wallet file if it exists
+        let walletFile = VultiHome.agentWallet(id)
+        if FileManager.default.fileExists(atPath: walletFile.path) {
+            try? FileManager.default.removeItem(at: walletFile)
         }
     }
 

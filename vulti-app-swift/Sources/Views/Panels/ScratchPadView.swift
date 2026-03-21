@@ -972,6 +972,7 @@ struct VaultVisual: View {
     let vaultId: String
     var portfolioValue: String? = nil
     var chainCount: Int = 0
+    var vaultType: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -990,7 +991,7 @@ struct VaultVisual: View {
 
             // Vault name
             Text(name)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(1)
 
@@ -1003,16 +1004,27 @@ struct VaultVisual: View {
                     .padding(.top, 1)
             }
 
-            Spacer(minLength: 6)
+            Spacer(minLength: 4)
 
-            // Portfolio value
-            if let value = portfolioValue {
-                Text("$\(value)")
-                    .font(.system(size: 20, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.9))
+            // Type + security
+            HStack(spacing: 12) {
+                if let type = vaultType, !type.isEmpty {
+                    vaultDetail("Type", type)
+                } else {
+                    vaultDetail("Type", "Fast Vault")
+                }
+                vaultDetail("Security", "2-of-2 MPC")
             }
 
             Spacer(minLength: 4)
+
+            // Portfolio value
+            if let value = portfolioValue, !value.isEmpty {
+                Text("$\(value)")
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9))
+                Spacer(minLength: 4)
+            }
 
             // Bottom: status + chain count
             HStack {
@@ -1033,7 +1045,7 @@ struct VaultVisual: View {
             }
         }
         .padding(14)
-        .frame(height: 140)
+        .frame(minHeight: 140)
         .background(
             LinearGradient(
                 colors: [Color(red: 0.08, green: 0.18, blue: 0.12), Color(red: 0.12, green: 0.25, blue: 0.15)],
@@ -1042,6 +1054,17 @@ struct VaultVisual: View {
             ),
             in: RoundedRectangle(cornerRadius: 12)
         )
+    }
+
+    private func vaultDetail(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 7, weight: .medium))
+                .foregroundStyle(.white.opacity(0.4))
+            Text(value)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.7))
+        }
     }
 
     private func truncate(_ id: String) -> String {

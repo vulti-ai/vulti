@@ -547,15 +547,17 @@ struct LiveWalletWidget: View {
             if !loaded {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 40)
-            } else if hasCard || hasVault {
-                VStack(spacing: 12) {
-                    if hasCard {
-                        CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
-                    }
-                    if hasVault {
-                        VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "", portfolioValue: portfolioValue, chainCount: chainCount)
-                    }
+            } else if hasCard && hasVault {
+                HStack(alignment: .top, spacing: 12) {
+                    CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
+                        .frame(maxWidth: .infinity)
+                    VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "", portfolioValue: portfolioValue, chainCount: chainCount)
+                        .frame(maxWidth: .infinity)
                 }
+            } else if hasCard {
+                CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
+            } else if hasVault {
+                VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "", portfolioValue: portfolioValue, chainCount: chainCount)
             } else {
                 HStack {
                     Image(systemName: "creditcard")
@@ -579,17 +581,25 @@ struct LiveWalletWidget: View {
                     cardExpiry = cc["expiry"] as? String
                 }
             }
-            // Fetch vault (CLI-backed — only returns data if .vult keyshare exists)
-            if let vault = try? await app.client.getVault(agentId: agentId),
-               let name = vault.name, !name.isEmpty {
-                vaultId = vault.vaultId
-                vaultName = name
-                chainCount = vault.chains ?? 0
-                // Fetch portfolio value
-                if let portfolio = try? await app.client.getVaultPortfolio(agentId: agentId) {
-                    portfolioValue = portfolio.data?.portfolio?.totalValue?.amount
+            // Fetch vault
+            do {
+                let vault = try await app.client.getVault(agentId: agentId)
+                print("[LiveWallet] vault for \(agentId): name=\(vault.name ?? "nil") id=\(vault.vaultId ?? "nil")")
+                if let name = vault.name, !name.isEmpty {
+                    vaultId = vault.vaultId
+                    vaultName = name
+                    chainCount = vault.chains ?? 0
+                    if let portfolio = try? await app.client.getVaultPortfolio(agentId: agentId) {
+                        portfolioValue = portfolio.data?.portfolio?.totalValue?.amount
+                    }
+                } else {
+                    vaultId = nil
+                    vaultName = nil
+                    portfolioValue = nil
+                    chainCount = 0
                 }
-            } else {
+            } catch {
+                print("[LiveWallet] vault fetch failed for \(agentId): \(error)")
                 vaultId = nil
                 vaultName = nil
                 portfolioValue = nil
