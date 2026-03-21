@@ -712,6 +712,17 @@ class MatrixAdapter(BasePlatformAdapter):
             except ImportError:
                 pass
 
+            # Thread support: if metadata contains a thread_id, attach
+            # m.relates_to so the reply lands in the correct thread.
+            thread_id = (metadata or {}).get("thread_id")
+            if thread_id:
+                msg_content["m.relates_to"] = {
+                    "rel_type": "m.thread",
+                    "event_id": thread_id,
+                    "is_falling_back": True,
+                    "m.in_reply_to": {"event_id": reply_to or thread_id},
+                }
+
             resp = await client.room_send(
                 room_id=chat_id,
                 message_type="m.room.message",
@@ -785,6 +796,15 @@ class MatrixAdapter(BasePlatformAdapter):
                 "info": {"mimetype": "image/jpeg", "size": len(image_data)},
             }
 
+            thread_id = (metadata or {}).get("thread_id")
+            if thread_id:
+                content["m.relates_to"] = {
+                    "rel_type": "m.thread",
+                    "event_id": thread_id,
+                    "is_falling_back": True,
+                    "m.in_reply_to": {"event_id": thread_id},
+                }
+
             send_resp = await client.room_send(
                 room_id=chat_id, message_type="m.room.message", content=content,
             )
@@ -833,6 +853,16 @@ class MatrixAdapter(BasePlatformAdapter):
                 "filename": fname,
                 "info": {"mimetype": mime_type, "size": len(file_data)},
             }
+
+            metadata = kwargs.get("metadata")
+            thread_id = (metadata or {}).get("thread_id")
+            if thread_id:
+                content["m.relates_to"] = {
+                    "rel_type": "m.thread",
+                    "event_id": thread_id,
+                    "is_falling_back": True,
+                    "m.in_reply_to": {"event_id": thread_id},
+                }
 
             send_resp = await client.room_send(
                 room_id=chat_id, message_type="m.room.message", content=content,

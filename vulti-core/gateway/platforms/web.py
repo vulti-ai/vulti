@@ -1489,6 +1489,7 @@ class WebAdapter(BasePlatformAdapter):
                 "description": a.description,
                 "createdAt": a.created_at,
                 "createdFrom": a.created_from,
+                "allowed_connections": a.allowed_connections or [],
             } for a in agents]
         except Exception as e:
             logger.error("[web] Failed to list agents: %s", e)
@@ -1510,6 +1511,7 @@ class WebAdapter(BasePlatformAdapter):
             "description": agent.description,
             "createdAt": agent.created_at,
             "createdFrom": agent.created_from,
+            "allowed_connections": agent.allowed_connections or [],
         }
 
     def _create_agent(self, data: dict) -> dict:
@@ -1590,6 +1592,14 @@ class WebAdapter(BasePlatformAdapter):
         for field in ("name", "role", "status", "avatar", "description"):
             if field in data:
                 updates[field] = data[field]
+
+        # Handle allowed_connections — can come as list or comma-separated string
+        if "allowedConnections" in data or "allowed_connections" in data:
+            raw = data.get("allowedConnections", data.get("allowed_connections", []))
+            if isinstance(raw, str):
+                updates["allowed_connections"] = [c.strip() for c in raw.split(",") if c.strip()]
+            elif isinstance(raw, list):
+                updates["allowed_connections"] = raw
 
         try:
             meta = registry.update_agent(agent_id, **updates) if updates else registry.get_agent(agent_id)
@@ -1992,15 +2002,21 @@ class WebAdapter(BasePlatformAdapter):
                 if jobs_file.exists():
                     data = json.loads(jobs_file.read_text())
                     jobs = data.get("jobs", [])
-                    return [{
-                        "id": j.get("id", ""),
-                        "name": j.get("name", ""),
-                        "prompt": j.get("prompt", ""),
-                        "schedule": j.get("schedule_display", j.get("schedule", "")),
-                        "status": j.get("state", "active" if j.get("enabled", True) else "paused"),
-                        "last_run": j.get("last_run_at"),
-                        "last_output": j.get("last_output"),
-                    } for j in jobs]
+                    result = []
+                    for j in jobs:
+                        sched = j.get("schedule", "")
+                        if isinstance(sched, dict):
+                            sched = sched.get("display", sched.get("expr", str(sched)))
+                        result.append({
+                            "id": j.get("id", ""),
+                            "name": j.get("name", ""),
+                            "prompt": j.get("prompt", ""),
+                            "schedule": sched,
+                            "status": j.get("state", "active" if j.get("enabled", True) else "paused"),
+                            "last_run": j.get("last_run_at"),
+                            "last_output": j.get("last_output"),
+                        })
+                    return result
                 return []
 
             # Global: use scheduler singleton
@@ -2638,17 +2654,17 @@ class WebAdapter(BasePlatformAdapter):
     # --- Connections ---
 
     def _list_connections(self) -> list:
+        """List all global connections from connections.yaml."""
         try:
             from vulti_cli.connection_registry import ConnectionRegistry
             reg = ConnectionRegistry(self._get_vulti_home())
-            reg.load()
             return [
                 {
                     "name": c.name,
                     "type": c.type,
                     "description": c.description,
                     "tags": c.tags or [],
-                    "enabled": True,
+                    "enabled": c.enabled,
                 }
                 for c in reg.list_all()
             ]
@@ -3095,117 +3111,75 @@ class WebAdapter(BasePlatformAdapter):
             },
         })
 
-        # 2. Connections — compact status summary (from registry + .env API keys)
-        connected_names = []
-        try:
-            from vulti_cli.connection_registry import ConnectionRegistry
-            from vulti_cli.config import get_vulti_home
-            _vhome = get_vulti_home()
-            creg = ConnectionRegistry(_vhome)
-            all_conns = creg.list_all()
-            if all_conns:
-                connected_names = [c.name for c in all_conns]
-        except Exception:
-            pass
-        # Also count configured API keys from .env as connections
-        try:
-            from vulti_cli.config import get_vulti_home
-            _vhome = get_vulti_home()
-            env_file = _vhome / ".env"
-            if env_file.exists():
-                _key_map = {
-                    "TELEGRAM_BOT_TOKEN": "Telegram",
-                    "DISCORD_BOT_TOKEN": "Discord",
-                    "SLACK_BOT_TOKEN": "Slack",
-                    "MATRIX_SERVER_NAME": "Matrix",
-                    "GMAIL_CREDENTIALS": "Gmail",
-                    "FIRECRAWL_API_KEY": "Firecrawl",
-                    "BROWSERBASE_API_KEY": "Browserbase",
-                    "OPENROUTER_API_KEY": "OpenRouter",
-                    "HONCHO_API_KEY": "Honcho",
-                    "WANDB_API_KEY": "W&B",
-                }
-                for line in env_file.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key = line.split("=", 1)[0].strip()
-                        if key in _key_map:
-                            name = _key_map[key]
-                            if name not in connected_names:
-                                connected_names.append(name)
-        except Exception:
-            pass
-        conn_count = len(connected_names)
-        conn_label = f"{conn_count} connected" if conn_count else "None configured"
-        conn_preview = ", ".join(connected_names[:4])
-        if len(connected_names) > 4:
-            conn_preview += f" +{len(connected_names) - 4}"
+        # 2. Connections — from connections.yaml, filtered by agent allow list
+        all_connections = self._list_connections()
+        allowed = set(meta.allowed_connections) if meta and meta.allowed_connections else set()
+        conn_entries = []
+        for c in all_connections:
+            is_allowed = c["name"] in allowed
+            conn_entries.append({"key": c["name"], "value": "\u2713" if is_allowed else "\u2014"})
+        connected_names = [c["name"] for c in all_connections if c["name"] in allowed]
         widgets.append({
             "id": "default_connections",
-            "type": "status",
-            "title": "\U0001f50c Connections",
+            "type": "kv",
+            "title": "\U0001f50c Connections" + (f" ({len(connected_names)})" if connected_names else ""),
             "data": {
-                "label": conn_label,
-                "variant": "success" if conn_count else "info",
-                "detail": conn_preview,
+                "entries": conn_entries if conn_entries else [{"key": "\u2014", "value": "None configured"}],
                 "drill": "connections",
             },
         })
 
-        # 3. Jobs — compact status summary
-        active_jobs = 0
-        paused_jobs = 0
+        # 3. Jobs — list with name + schedule
+        job_entries = []
         try:
             cron_file = agent_home / "cron" / "jobs.json"
             if cron_file.exists():
-                jobs = json.loads(cron_file.read_text(encoding="utf-8"))
-                if isinstance(jobs, list):
-                    for j in jobs:
-                        if j.get("enabled", True):
-                            active_jobs += 1
-                        else:
-                            paused_jobs += 1
+                jobs_data = json.loads(cron_file.read_text(encoding="utf-8"))
+                job_list = jobs_data if isinstance(jobs_data, list) else jobs_data.get("jobs", [])
+                for j in job_list:
+                    name = j.get("name", j.get("id", "unnamed"))
+                    sched = j.get("schedule", "")
+                    if isinstance(sched, dict):
+                        sched = sched.get("display", sched.get("expr", ""))
+                    status = "\u2713" if j.get("enabled", True) else "\u23f8"
+                    job_entries.append({"key": name, "value": f"{sched}  {status}"})
         except Exception:
             pass
-        job_label = f"{active_jobs} active" if active_jobs else "None scheduled"
-        job_detail = f"{paused_jobs} paused" if paused_jobs else ""
         widgets.append({
             "id": "default_jobs",
-            "type": "status",
-            "title": "\u23f0 Jobs",
+            "type": "kv",
+            "title": "\u23f0 Jobs" + (f" ({len(job_entries)})" if job_entries else ""),
             "data": {
-                "label": job_label,
-                "variant": "success" if active_jobs else "info",
-                "detail": job_detail,
-                "drill": "actions",
+                "entries": job_entries if job_entries else [{"key": "\u2014", "value": "None scheduled"}],
+                "drill": "jobs",
                 "size": "half",
             },
         })
 
-        # 4. Rules — compact status summary
-        active_rules = 0
+        # 4. Rules — list with name + condition
+        rule_entries = []
         try:
             from vulti_cli.config import get_vulti_home
             rules_file = get_vulti_home() / "rules" / "rules.json"
             if rules_file.exists():
                 rules_data = json.loads(rules_file.read_text(encoding="utf-8"))
-                if isinstance(rules_data, list):
-                    for r in rules_data:
-                        r_agent = r.get("agent_id", "")
-                        if r_agent and r_agent != agent_id:
-                            continue
-                        if r.get("enabled", True):
-                            active_rules += 1
+                rule_list = rules_data if isinstance(rules_data, list) else rules_data.get("rules", [])
+                for r in rule_list:
+                    r_agent = r.get("agent_id", r.get("agent", ""))
+                    if r_agent and r_agent != agent_id:
+                        continue
+                    name = r.get("name", r.get("id", "unnamed"))
+                    status = "\u2713" if r.get("enabled", True) else "\u23f8"
+                    rule_entries.append({"key": name, "value": status})
         except Exception:
             pass
         widgets.append({
             "id": "default_rules",
-            "type": "status",
-            "title": "\U0001f4d0 Rules",
+            "type": "kv",
+            "title": "\U0001f4d0 Rules" + (f" ({len(rule_entries)})" if rule_entries else ""),
             "data": {
-                "label": f"{active_rules} active" if active_rules else "None configured",
-                "variant": "success" if active_rules else "info",
-                "drill": "actions",
+                "entries": rule_entries if rule_entries else [{"key": "\u2014", "value": "None configured"}],
+                "drill": "rules",
                 "size": "half",
             },
         })

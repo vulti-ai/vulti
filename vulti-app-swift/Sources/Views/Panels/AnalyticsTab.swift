@@ -62,9 +62,9 @@ struct AgentAnalyticsTab: View {
                     HStack {
                         Text(m.model).font(.system(size: 12, design: .monospaced))
                         Spacer()
-                        Text("\(m.sessions) sessions").font(.system(size: 11)).foregroundStyle(VultiTheme.inkDim)
-                        Text(formatNumber(m.totalTokens) + " tokens").font(.system(size: 11)).foregroundStyle(VultiTheme.inkDim)
-                        Text("$\(String(format: "%.2f", m.cost))").font(.system(size: 11))
+                        Text("\(m.sessions ?? 0) sessions").font(.system(size: 11)).foregroundStyle(VultiTheme.inkDim)
+                        Text(formatNumber(m.totalTokens ?? 0) + " tokens").font(.system(size: 11)).foregroundStyle(VultiTheme.inkDim)
+                        Text("$\(String(format: "%.2f", m.cost ?? 0))").font(.system(size: 11))
                     }
                     Divider()
                 }
@@ -79,7 +79,7 @@ struct AgentAnalyticsTab: View {
                     ForEach(platforms, id: \.platform) { p in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(p.platform.capitalized).font(.system(size: 12, weight: .medium))
-                            Text("\(p.sessions) sessions / \(p.messages) msgs")
+                            Text("\(p.sessions ?? 0) sessions / \(p.messages ?? 0) msgs")
                                 .font(.system(size: 10)).foregroundStyle(VultiTheme.inkDim)
                         }
                         .padding(10)
@@ -94,17 +94,17 @@ struct AgentAnalyticsTab: View {
         if let tools = data.tools, !tools.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("TOP TOOLS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-                let maxCalls = tools.map(\.callCount).max() ?? 1
+                let maxCalls = tools.compactMap(\.callCount).max() ?? 1
                 ForEach(tools, id: \.toolName) { t in
                     HStack(spacing: 8) {
                         Text(t.toolName).font(.system(size: 11, design: .monospaced)).frame(width: 120, alignment: .trailing)
                         GeometryReader { geo in
                             RoundedRectangle(cornerRadius: 3)
                                 .fill(.tint)
-                                .frame(width: max(4, geo.size.width * CGFloat(t.callCount) / CGFloat(maxCalls)))
+                                .frame(width: max(4, geo.size.width * CGFloat((t.callCount ?? 0)) / CGFloat(maxCalls)))
                         }
                         .frame(height: 16)
-                        Text("\(t.callCount)").font(.system(size: 10)).foregroundStyle(VultiTheme.inkDim)
+                        Text("\((t.callCount ?? 0))").font(.system(size: 10)).foregroundStyle(VultiTheme.inkDim)
                     }
                 }
             }
@@ -246,9 +246,9 @@ struct AnalyticsOverview: Codable {
 
 struct ModelStats: Codable {
     var model: String
-    var sessions: Int
-    var totalTokens: Int
-    var cost: Double
+    var sessions: Int?
+    var totalTokens: Int?
+    var cost: Double?
     enum CodingKeys: String, CodingKey {
         case model, sessions, cost
         case totalTokens = "total_tokens"
@@ -257,9 +257,9 @@ struct ModelStats: Codable {
 
 struct PlatformStats: Codable {
     var platform: String
-    var sessions: Int
-    var messages: Int
-    var totalTokens: Int
+    var sessions: Int?
+    var messages: Int?
+    var totalTokens: Int?
     enum CodingKeys: String, CodingKey {
         case platform, sessions, messages
         case totalTokens = "total_tokens"
@@ -268,7 +268,7 @@ struct PlatformStats: Codable {
 
 struct ToolStats: Codable {
     var toolName: String
-    var callCount: Int
+    var callCount: Int?
     var sessions: Int?
     var percentage: Double?
     enum CodingKeys: String, CodingKey {

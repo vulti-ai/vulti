@@ -170,6 +170,60 @@ struct StatusWidgetContent: View {
     }
 }
 
+/// Live analytics widget — fetches real data from the analytics API instead of using static widget data.
+struct LiveAnalyticsWidget: View {
+    let agentId: String
+    @Environment(AppState.self) private var app
+    @State private var overview: AnalyticsOverview?
+
+    private func formatNumber(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
+    }
+
+    var body: some View {
+        Group {
+            if let o = overview {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                    CompactStat(label: "Sessions", value: "\(o.totalSessions ?? 0)")
+                    CompactStat(label: "Messages", value: formatNumber(o.totalMessages ?? 0))
+                    CompactStat(label: "Tokens", value: formatNumber(o.totalTokens ?? 0))
+                    CompactStat(label: "Cost", value: "$\(String(format: "%.2f", o.estimatedCost ?? 0))")
+                    CompactStat(label: "Tools", value: formatNumber(o.totalToolCalls ?? 0))
+                    CompactStat(label: "Hours", value: String(format: "%.1f", o.totalHours ?? 0))
+                }
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 40)
+            }
+        }
+        .task {
+            let data = try? await app.client.getAnalyticsData(days: 7, agentId: agentId)
+            overview = data?.overview
+        }
+    }
+}
+
+/// Compact stat for half-width analytics widget
+private struct CompactStat: View {
+    let label: String
+    let value: String
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(VultiTheme.inkSoft)
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundStyle(VultiTheme.inkDim)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(VultiTheme.paperDeep, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 struct StatGridWidgetContent: View {
     let data: WidgetData
     var body: some View {

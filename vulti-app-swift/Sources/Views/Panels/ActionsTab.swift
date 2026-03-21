@@ -3,6 +3,7 @@ import SwiftUI
 /// Actions tab: Cron Jobs + Rules (matches original with full CRUD).
 struct AgentActionsTab: View {
     let agentId: String
+    var initialSubtab: String = "Jobs"
     @State private var subtab = "Jobs"
 
     var body: some View {
@@ -15,6 +16,7 @@ struct AgentActionsTab: View {
                 RulesListView(agentId: agentId)
             }
         }
+        .onAppear { subtab = initialSubtab }
     }
 }
 

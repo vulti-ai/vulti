@@ -110,6 +110,8 @@ struct EdgeBorder: Shape {
 
 struct AgentHomeTab: View {
     let agentId: String
+    /// Called when a widget with a drill target is tapped (e.g. rules, wallet, crypto)
+    var onDrill: ((DrillTarget) -> Void)?
     @Environment(AppState.self) private var app
     @State private var widgets: [GatewayClient.PaneWidget] = []
 
@@ -146,13 +148,45 @@ struct AgentHomeTab: View {
                     }
                     ForEach(widgets) { widget in
                         if let converted = widget.toPaneWidget() {
-                            WidgetView(widget: converted)
+                            homeWidgetCard(converted)
                         }
                     }
                 }
             }
         }
         .task { await loadWidgets() }
+    }
+
+    /// Widget card with drill-down navigation support
+    @ViewBuilder
+    private func homeWidgetCard(_ widget: PaneWidget) -> some View {
+        let drillTarget = ScratchPadView.inferDrillTarget(for: widget)
+
+        VStack(alignment: .leading, spacing: 8) {
+            if let title = widget.title, !title.isEmpty {
+                HStack {
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                    Spacer()
+                    if drillTarget != nil {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11))
+                            .foregroundStyle(VultiTheme.inkMuted)
+                    }
+                }
+            }
+            WidgetView(widget: widget)
+        }
+        .padding(12)
+        .background(VultiTheme.paperDeep.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(VultiTheme.border.opacity(0.3)))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let target = drillTarget {
+                onDrill?(target)
+            }
+        }
     }
 
     private func loadWidgets() async {
@@ -346,94 +380,9 @@ struct AgentConnectionsTab: View {
     @Environment(AppState.self) private var app
     @State private var allConnections: [GatewayClient.ConnectionResponse] = []
     @State private var allowedNames: Set<String> = []
-    @State private var providers: [GatewayClient.ProviderResponse] = []
-    @State private var configModel = ""
-    @State private var expandedProvider: String?
-    @State private var isSavingModel = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            // ── Model / Provider ──
-            Section {
-                if providers.isEmpty {
-                    Text("No providers configured. Add an API key in Settings.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(VultiTheme.inkDim)
-                } else {
-                    ForEach(providers, id: \.id) { provider in
-                        VStack(alignment: .leading, spacing: 0) {
-                            // Provider row — click to expand model list
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    expandedProvider = expandedProvider == provider.id ? nil : provider.id
-                                }
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Circle()
-                                        .fill(provider.authenticated ? .green : VultiTheme.inkDim)
-                                        .frame(width: 8, height: 8)
-                                    Text(provider.name)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(VultiTheme.inkSoft)
-                                    Spacer()
-                                    if provider.authenticated {
-                                        // Show current model if this provider is active
-                                        if configModel.hasPrefix(provider.id + "/") || configModel.hasPrefix(provider.id + ":") {
-                                            Text(configModel.split(separator: "/").last.map(String.init) ?? configModel)
-                                                .font(.system(size: 10, design: .monospaced))
-                                                .foregroundStyle(VultiTheme.inkMuted)
-                                                .lineLimit(1)
-                                        }
-                                        Image(systemName: expandedProvider == provider.id ? "chevron.up" : "chevron.down")
-                                            .font(.system(size: 9))
-                                            .foregroundStyle(VultiTheme.inkMuted)
-                                        Text("Connected")
-                                            .font(.system(size: 10))
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(.green.opacity(0.1), in: Capsule())
-                                            .foregroundStyle(.green)
-                                    } else {
-                                        Text("No key")
-                                            .font(.system(size: 10))
-                                            .foregroundStyle(VultiTheme.inkMuted)
-                                    }
-                                }
-                                .padding(.vertical, 6)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!provider.authenticated)
-                            .opacity(provider.authenticated ? 1.0 : 0.5)
-
-                            // Expanded model list
-                            if expandedProvider == provider.id, provider.authenticated {
-                                modelList(for: provider)
-                                    .transition(.opacity.combined(with: .move(edge: .top)))
-                            }
-                        }
-                    }
-
-                    // Active model display
-                    if !configModel.isEmpty {
-                        HStack(spacing: 6) {
-                            Text("Active:")
-                                .font(.system(size: 11))
-                                .foregroundStyle(VultiTheme.inkDim)
-                            Text(configModel)
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .foregroundStyle(VultiTheme.primary)
-                        }
-                        .padding(.top, 4)
-                    }
-                }
-            } header: {
-                Text("MODEL PROVIDER")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(VultiTheme.inkMuted)
-            }
-
-            Divider()
-
             // ── Allowed Connections ──
             Section {
                 if !allowedNames.isEmpty {
@@ -510,23 +459,6 @@ struct AgentConnectionsTab: View {
            let allowed = agent.allowedConnections {
             allowedNames = Set(allowed)
         }
-        if let list = try? await app.client.listProviders() {
-            providers = list
-        }
-        if let cfg = try? await app.client.getAgentConfig(agentId: agentId),
-           let modelVal = cfg["model"]?.value {
-            if let s = modelVal as? String, !s.isEmpty {
-                configModel = s
-            } else if let dict = modelVal as? [String: Any],
-                      let defaultModel = dict["default"] as? String, !defaultModel.isEmpty {
-                let provider = dict["provider"] as? String ?? ""
-                if !provider.isEmpty && !defaultModel.contains("/") {
-                    configModel = "\(provider)/\(defaultModel)"
-                } else {
-                    configModel = defaultModel
-                }
-            }
-        }
     }
 
     private func saveAllowed() {
@@ -536,65 +468,6 @@ struct AgentConnectionsTab: View {
             ]
             _ = try? await app.client.updateAgent(agentId, updates: updates)
             await app.refreshAgents()
-        }
-    }
-
-    // MARK: Model picker
-
-    @ViewBuilder
-    private func modelList(for provider: GatewayClient.ProviderResponse) -> some View {
-        let models = provider.models ?? []
-        VStack(alignment: .leading, spacing: 0) {
-            if models.isEmpty {
-                Text("No models available")
-                    .font(.system(size: 11))
-                    .foregroundStyle(VultiTheme.inkMuted)
-                    .padding(.vertical, 8)
-                    .padding(.leading, 16)
-            } else {
-                ForEach(models, id: \.self) { rawModel in
-                    let model = stripProviderPrefix(rawModel)
-                    let isActive = configModel == model
-                    Button {
-                        saveModel(model)
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 12))
-                                .foregroundStyle(isActive ? VultiTheme.primary : VultiTheme.inkMuted)
-                            Text(model)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(isActive ? VultiTheme.inkSoft : VultiTheme.inkDim)
-                                .lineLimit(1)
-                            Spacer()
-                        }
-                        .padding(.vertical, 5)
-                        .padding(.horizontal, 16)
-                        .background(isActive ? VultiTheme.primary.opacity(0.06) : .clear)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-        .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    private func stripProviderPrefix(_ model: String) -> String {
-        let prefixes = ["openrouter/", "openai/openai/", "anthropic/anthropic/"]
-        for prefix in prefixes {
-            if model.hasPrefix(prefix) { return String(model.dropFirst(prefix.count)) }
-        }
-        return model
-    }
-
-    private func saveModel(_ model: String) {
-        guard !isSavingModel else { return }
-        isSavingModel = true
-        configModel = model
-        Task {
-            _ = try? await app.client.updateAgent(agentId, updates: ["model": model])
-            isSavingModel = false
         }
     }
 }
@@ -708,6 +581,7 @@ struct AgentSkillsTab: View {
 
 struct AgentWalletTab: View {
     let agentId: String
+    var initialSubtab: String = "Card"
     @Environment(AppState.self) private var app
     @State private var subtab = "Card"
 
@@ -722,6 +596,7 @@ struct AgentWalletTab: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { subtab = initialSubtab }
     }
 }
 

@@ -2546,8 +2546,11 @@ class GatewayRunner:
                 # Universal pane instruction — two tabs: chat (per-session) and home (persistent)
                 context_prompt += (
                     "\n\n[System: IMPORTANT — You have a modify_pane tool with two tabs:\n"
-                    "  - tab='chat' (default during conversations) — per-session widgets the user sees RIGHT NOW.\n"
-                    "  - tab='home' — persistent default dashboard (updated during onboarding).\n\n"
+                    "  - tab='chat' — per-session widgets the user sees RIGHT NOW. This is YOUR workspace.\n"
+                    "  - tab='home' — persistent dashboard curated by the USER. You CANNOT modify this.\n\n"
+                    "ABSOLUTE RULE: You may ONLY write to tab='chat'. NEVER use tab='home'.\n"
+                    "The home tab is the user's personal dashboard — they control it, not you.\n"
+                    "Always use: modify_pane(tab='chat', ...)\n\n"
                     "CHAT WIDGET RULE: Whenever your response contains useful, structured information — "
                     "user profile data, account details, lookup results, summaries, lists, credentials, "
                     "settings, or ANY data the user would want to see at a glance — you MUST immediately "
@@ -2560,9 +2563,6 @@ class GatewayRunner:
                     "  - You return any structured data → appropriate widget type\n\n"
                     "The chat view starts blank and fills up as you provide useful information. "
                     "Think of it as a live workspace that captures the highlights of the conversation.\n\n"
-                    "HOME WIDGET RULE: During onboarding, update default_* widgets on tab='home'. "
-                    "The home tab has 9 persistent widgets: default_soul, default_user, default_memories, "
-                    "default_connections, default_jobs, default_rules, default_skills, default_wallet, default_analytics.\n\n"
                     "Widget types: kv (key-value pairs), markdown (rich text), stat_grid (metrics), "
                     "action_list (items with status), status (colored indicator), table (data grid).\n"
                     "NEVER create empty widgets. Every widget MUST show real data.]"

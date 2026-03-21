@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Known detail views a widget can drill into via the "drill" field in WidgetData.
 enum DrillTarget: String {
-    case role, soul, user, memories, connections, skills, actions, wallet, analytics
+    case role, soul, user, memories, connections, skills, actions, jobs, rules, wallet, crypto, analytics
 
     var contextLabel: String { rawValue }
 }
@@ -111,25 +111,82 @@ struct ScratchPadView: View {
 
     // MARK: - Widget List
 
-    /// Group widgets into rows based on their size field.
-    /// "half" widgets pair into 2-column rows; everything else gets its own row.
+    /// Canonical drill target for a widget (explicit or inferred).
+    private func drillKey(_ w: PaneWidget) -> String {
+        if let d = w.data.drill { return d }
+        if w.type == .profile { return "profile" }
+        let title = (w.title ?? "").lowercased()
+        if title.contains("analytic") || title.contains("usage") { return "analytics" }
+        if title.contains("connection") || title.contains("integration") { return "connections" }
+        if title.contains("skill") { return "skills" }
+        if title.contains("job") || title.contains("cron") { return "jobs" }
+        if title.contains("rule") { return "rules" }
+        if title.contains("wallet") || title.contains("card") || title.contains("credit") { return "wallet" }
+        if title.contains("vault") || title.contains("crypto") { return "crypto" }
+        return ""
+    }
+
+    /// Fixed row pairings: [left, right] drill keys.
+    /// Row 1: Profile + Analytics
+    /// Row 2: Connections + Skills
+    /// Row 3: Jobs + Rules
+    /// Row 4: Wallet (card) + Crypto (vault)
+    private static let rowPairs: [[String]] = [
+        ["profile", "analytics"],
+        ["connections", "skills"],
+        ["jobs", "rules"],
+        ["wallet", "crypto"],
+    ]
+
     private func buildRows(from list: [PaneWidget]) -> [[PaneWidget]] {
-        var rows: [[PaneWidget]] = []
-        var pending: [PaneWidget] = [] // accumulates half-width widgets
+        // Index widgets by drill key
+        var byKey: [String: PaneWidget] = [:]
+        var unmatched: [PaneWidget] = []
         for w in list {
+            let key = drillKey(w)
+            if !key.isEmpty {
+                byKey[key] = w
+            } else {
+                unmatched.append(w)
+            }
+        }
+
+        var rows: [[PaneWidget]] = []
+
+        // Build paired rows in canonical order
+        for pair in Self.rowPairs {
+            let left = byKey.removeValue(forKey: pair[0])
+            let right = byKey.removeValue(forKey: pair[1])
+            if let l = left, let r = right {
+                rows.append([l, r])
+            } else if let l = left {
+                rows.append([l])
+            } else if let r = right {
+                rows.append([r])
+            }
+        }
+
+        // Any remaining keyed widgets not in canonical pairs
+        let remaining = byKey.values.sorted { ($0.title ?? "") < ($1.title ?? "") }
+        var pending: [PaneWidget] = []
+        for w in remaining {
+            pending.append(w)
+            if pending.count == 2 { rows.append(pending); pending = [] }
+        }
+
+        // Unmatched widgets (no drill key) — pair as half-width or full
+        for w in unmatched {
             let sz = w.data.size ?? "large"
             if sz == "half" {
                 pending.append(w)
-                if pending.count == 2 {
-                    rows.append(pending)
-                    pending = []
-                }
+                if pending.count == 2 { rows.append(pending); pending = [] }
             } else {
                 if !pending.isEmpty { rows.append(pending); pending = [] }
                 rows.append([w])
             }
         }
         if !pending.isEmpty { rows.append(pending) }
+
         return rows
     }
 
@@ -153,24 +210,8 @@ struct ScratchPadView: View {
                 LazyVStack(spacing: 10) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                         if row.count > 1 {
-                            HStack(spacing: 10) {
-                                ForEach(row) { widget in
-                                    widgetCard(widget)
-                                        .frame(maxWidth: .infinity)
-                                        .opacity(draggingWidget?.id == widget.id ? 0.4 : 1.0)
-                                        .onDrag {
-                                            draggingWidget = widget
-                                            suppressPoll = true
-                                            return NSItemProvider(object: widget.id as NSString)
-                                        }
-                                        .onDrop(of: [.text], delegate: WidgetDropDelegate(
-                                            targetWidget: widget,
-                                            widgets: activeTab == .chat ? $chatWidgets : $homeWidgets,
-                                            draggingWidget: $draggingWidget,
-                                            onReorder: saveOrder
-                                        ))
-                                }
-                            }
+                            // Merged card — both widgets inside one card, side by side
+                            mergedWidgetCard(row)
                         } else if let widget = row.first {
                             widgetCard(widget)
                                 .opacity(draggingWidget?.id == widget.id ? 0.4 : 1.0)
@@ -196,8 +237,107 @@ struct ScratchPadView: View {
 
     // MARK: - Widget Card
 
+    /// Infer drill target from widget title/content when `drill` field isn't set
+    static func inferDrillTarget(for widget: PaneWidget) -> DrillTarget? {
+        // Explicit drill field takes priority
+        if let drill = widget.data.drill, let target = DrillTarget(rawValue: drill) {
+            return target
+        }
+        // Auto-detect from title
+        let title = (widget.title ?? "").lowercased()
+        if title.contains("vault") || title.contains("crypto") || title.contains("bitcoin")
+            || title.contains("ethereum") || title.contains("token") || title.contains("chain") {
+            return .crypto
+        }
+        if title.contains("card") || title.contains("credit") || title.contains("debit")
+            || title.contains("payment") {
+            return .wallet
+        }
+        if title.contains("rule") { return .rules }
+        if title.contains("job") || title.contains("cron") || title.contains("schedule") { return .jobs }
+        if title.contains("skill") { return .skills }
+        if title.contains("connection") || title.contains("integration") { return .connections }
+        if title.contains("analytic") || title.contains("usage") { return .analytics }
+        if title.contains("soul") || title.contains("personality") { return .soul }
+        if title.contains("memor") { return .memories }
+        return nil
+    }
+
+    /// Merged card — two widgets rendered side by side inside a single card container.
+    private func mergedWidgetCard(_ row: [PaneWidget]) -> some View {
+        let leftWidget = row[0]
+        let rightWidget = row[1]
+        let leftDrill = Self.inferDrillTarget(for: leftWidget)
+        let rightDrill = Self.inferDrillTarget(for: rightWidget)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            // Content: two columns side by side
+            HStack(alignment: .top, spacing: 0) {
+                // Left column
+                VStack(alignment: .leading, spacing: 8) {
+                    // Title row with drill chevron
+                    if let title = leftWidget.title, !title.isEmpty {
+                        HStack(spacing: 6) {
+                            Text(title)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(VultiTheme.inkSoft)
+                            Spacer()
+                            if leftDrill != nil {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(VultiTheme.inkMuted)
+                            }
+                        }
+                    }
+                    widgetBody(leftWidget)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(14)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if let drill = leftDrill {
+                        withAnimation(.easeInOut(duration: 0.2)) { expandedWidget = drill }
+                    }
+                }
+
+                // Divider between columns
+                Rectangle()
+                    .fill(VultiTheme.border)
+                    .frame(width: 1)
+
+                // Right column
+                VStack(alignment: .leading, spacing: 8) {
+                    if let title = rightWidget.title, !title.isEmpty {
+                        HStack(spacing: 6) {
+                            Text(title)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(VultiTheme.inkSoft)
+                            Spacer()
+                            if rightDrill != nil {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(VultiTheme.inkMuted)
+                            }
+                        }
+                    }
+                    widgetBody(rightWidget)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(14)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if let drill = rightDrill {
+                        withAnimation(.easeInOut(duration: 0.2)) { expandedWidget = drill }
+                    }
+                }
+            }
+        }
+        .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(VultiTheme.border.opacity(0.5)))
+    }
+
     private func widgetCard(_ widget: PaneWidget) -> some View {
-        let drillTarget = widget.data.drill.flatMap { DrillTarget(rawValue: $0) }
+        let drillTarget = Self.inferDrillTarget(for: widget)
 
         return VStack(alignment: .leading, spacing: 0) {
             // Top bar: drag handle (left) + close button (right)
@@ -337,7 +477,11 @@ struct ScratchPadView: View {
         case .status:
             StatusWidgetContent(data: widget.data)
         case .statGrid:
-            StatGridWidgetContent(data: widget.data)
+            if widget.data.drill == "analytics" {
+                LiveAnalyticsWidget(agentId: agentId)
+            } else {
+                StatGridWidgetContent(data: widget.data)
+            }
         case .barChart:
             BarChartWidgetContent(data: widget.data)
         case .progress:
@@ -405,10 +549,14 @@ struct ScratchPadView: View {
             AgentConnectionsTab(agentId: agentId)
         case .skills:
             AgentSkillsTab(agentId: agentId)
-        case .actions:
-            AgentActionsTab(agentId: agentId)
+        case .actions, .jobs:
+            AgentActionsTab(agentId: agentId, initialSubtab: "Jobs")
+        case .rules:
+            AgentActionsTab(agentId: agentId, initialSubtab: "Rules")
         case .wallet:
             AgentWalletTab(agentId: agentId)
+        case .crypto:
+            AgentWalletTab(agentId: agentId, initialSubtab: "Crypto")
         case .analytics:
             AgentAnalyticsTab(agentId: agentId)
         }
@@ -675,29 +823,66 @@ struct CreditCardVisual: View {
 struct VaultVisual: View {
     let name: String
     let vaultId: String
+    var addresses: [String: String] = [:]
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "shield.checkered")
-                .font(.system(size: 24))
-                .foregroundStyle(.green)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(name)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(VultiTheme.inkSoft)
-                Text(truncate(vaultId))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(VultiTheme.inkMuted)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: 0) {
+            // Top: shield icon + VAULT label
+            HStack {
+                Image(systemName: "shield.checkered")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.green)
+                Spacer()
+                Text("VAULT")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
             }
+
             Spacer()
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.system(size: 16))
+
+            // Vault name
+            Text(name)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(1)
+
+            // Vault ID
+            Text(truncate(vaultId))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+                .padding(.top, 2)
+
+            Spacer()
+
+            // Bottom: status + chain count
+            HStack {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 6, height: 6)
+                    Text("CONNECTED")
+                        .font(.system(size: 7, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                Spacer()
+                if !addresses.isEmpty {
+                    Text("\(addresses.count) chains")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+            }
         }
-        .padding(12)
-        .background(VultiTheme.paperDeep.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
+        .padding(16)
+        .frame(height: 140)
+        .background(
+            LinearGradient(
+                colors: [Color(red: 0.08, green: 0.18, blue: 0.12), Color(red: 0.12, green: 0.25, blue: 0.15)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
     }
 
     private func truncate(_ id: String) -> String {
@@ -711,31 +896,47 @@ struct VaultVisual: View {
 struct WalletWidgetContent: View {
     let data: WidgetData
 
+    private var hasCard: Bool { data.cardLast4 != nil && !(data.cardLast4?.isEmpty ?? true) }
+    private var hasVault: Bool { data.vaultId != nil && !(data.vaultId?.isEmpty ?? true) }
+
     var body: some View {
-        VStack(spacing: 12) {
-            if let last4 = data.cardLast4, !last4.isEmpty {
+        if hasCard && hasVault {
+            // 2-column: card left, vault right, matched height
+            HStack(alignment: .top, spacing: 12) {
                 CreditCardVisual(
                     name: data.cardName ?? "",
-                    last4: last4,
+                    last4: data.cardLast4 ?? "",
                     expiry: data.cardExpiry ?? ""
                 )
-            }
-            if let vid = data.vaultId, !vid.isEmpty {
+                .frame(maxWidth: .infinity)
+
                 VaultVisual(
                     name: data.vaultName ?? "Vault",
-                    vaultId: vid
+                    vaultId: data.vaultId ?? ""
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if data.cardLast4 == nil && data.vaultId == nil {
-                HStack {
-                    Image(systemName: "creditcard")
-                        .font(.system(size: 20))
-                        .foregroundStyle(VultiTheme.inkMuted.opacity(0.4))
-                    Text("No card or vault set up")
-                        .font(.system(size: 12))
-                        .foregroundStyle(VultiTheme.inkDim)
-                    Spacer()
-                }
+            .fixedSize(horizontal: false, vertical: true)
+        } else if hasCard {
+            CreditCardVisual(
+                name: data.cardName ?? "",
+                last4: data.cardLast4 ?? "",
+                expiry: data.cardExpiry ?? ""
+            )
+        } else if hasVault {
+            VaultVisual(
+                name: data.vaultName ?? "Vault",
+                vaultId: data.vaultId ?? ""
+            )
+        } else {
+            HStack {
+                Image(systemName: "creditcard")
+                    .font(.system(size: 20))
+                    .foregroundStyle(VultiTheme.inkMuted.opacity(0.4))
+                Text("No card or vault set up")
+                    .font(.system(size: 12))
+                    .foregroundStyle(VultiTheme.inkDim)
+                Spacer()
             }
         }
     }
