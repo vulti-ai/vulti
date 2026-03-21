@@ -22,6 +22,9 @@ struct MainView: View {
                     ToolbarButton(icon: "clock.arrow.circlepath", tooltip: "Audit Log") {
                         app.openAudit()
                     }
+                    ToolbarButton(icon: "arrow.clockwise", tooltip: "Refresh") {
+                        Task { await app.refreshAgents() }
+                    }
                     Spacer()
                 }
                 .padding(.leading, 20)

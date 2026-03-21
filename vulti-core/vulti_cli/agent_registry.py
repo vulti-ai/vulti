@@ -66,7 +66,7 @@ class AgentMeta:
     id: str
     name: str
     role: str = ""  # assistant | therapist | researcher | engineer | writer | analyst | coach | creative | ops
-    status: str = "active"  # active | stopped | error
+    status: str = "active"  # onboarding | active | stopped | error
     created_at: str = ""
     created_from: Optional[str] = None
     avatar: Optional[str] = None
@@ -165,7 +165,7 @@ class AgentRegistry:
             id=agent_id,
             name=name,
             role=role,
-            status="active",
+            status="onboarding",
             created_at=now,
             created_from=clone_from,
             avatar=avatar,

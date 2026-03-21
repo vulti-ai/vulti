@@ -89,76 +89,88 @@ struct SquadCanvas: View {
         }
     }
 
-    /// All source handles for a node type
+    /// Source (output) handles — where arrows DEPART from.
+    /// Human: 6, 3, 9 o'clock. Agent: 6, 3, 9 o'clock (same as manager role).
     private func sourceHandles(for type: CanvasLayout.LayoutNode.NodeType) -> [HandlePosition] {
-        type == .owner ? [.bottom, .left, .right] : [.bottom, .right]
+        [.bottom, .left, .right]  // 6, 9, 3 o'clock
     }
 
-    /// All target handles for a node type
+    /// Target (input) handles — where arrows ARRIVE at.
+    /// Agent: 12, 9, 3 o'clock. Human: none (owner is never managed).
     private func targetHandles(for type: CanvasLayout.LayoutNode.NodeType) -> [HandlePosition] {
-        type == .owner ? [] : [.top, .left] // owner has no target handles
+        type == .owner ? [] : [.top, .left, .right]  // 12, 9, 3 o'clock
     }
 
-    /// Edge anchors — picks the nearest source/target handle pair so arrows
-    /// always snap to the closest port handle on each node.
+    /// Edge anchors with directional preference:
+    /// - Normal (target below source): source bottom (6) → target top (12)
+    /// - Same level or target above: use left/right (3/9) handles
     private func edgeAnchors(
         fromId: String, toId: String,
         from sourcePos: CGPoint, to targetPos: CGPoint,
         fromType: CanvasLayout.LayoutNode.NodeType,
         toType: CanvasLayout.LayoutNode.NodeType
     ) -> (start: CGPoint, end: CGPoint, fromHandle: HandlePosition, toHandle: HandlePosition) {
-        let srcHandles = sourceHandles(for: fromType)
-        let tgtHandles = targetHandles(for: toType)
 
-        let defaultFrom = HandlePosition.bottom
-        let defaultTo = HandlePosition.top
-
-        var bestDist: CGFloat = .greatestFiniteMagnitude
-        var bestFrom = defaultFrom
-        var bestTo = defaultTo
-
-        for sh in srcHandles {
-            let sOff = handleOffset(for: sh, nodeId: fromId, nodeType: fromType)
-            let sPoint = CGPoint(x: sourcePos.x + sOff.x, y: sourcePos.y + sOff.y)
-
-            for th in tgtHandles {
-                let tOff = handleOffset(for: th, nodeId: toId, nodeType: toType)
-                let tPoint = CGPoint(x: targetPos.x + tOff.x, y: targetPos.y + tOff.y)
-
-                let dist = hypot(sPoint.x - tPoint.x, sPoint.y - tPoint.y)
-                if dist < bestDist {
-                    bestDist = dist
-                    bestFrom = sh
-                    bestTo = th
-                }
-            }
-        }
-
-        if tgtHandles.isEmpty {
-            let sOff = handleOffset(for: bestFrom, nodeId: fromId, nodeType: fromType)
+        // No target handles (owner) — just use source bottom → target center
+        if toType == .owner {
+            let sOff = handleOffset(for: .bottom, nodeId: fromId, nodeType: fromType)
             return (
                 CGPoint(x: sourcePos.x + sOff.x, y: sourcePos.y + sOff.y),
                 targetPos,
-                bestFrom, defaultTo
+                .bottom, .top
             )
         }
 
-        let fromOff = handleOffset(for: bestFrom, nodeId: fromId, nodeType: fromType)
-        let toOff = handleOffset(for: bestTo, nodeId: toId, nodeType: toType)
+        let dy = targetPos.y - sourcePos.y  // positive = target is below source
+
+        let fromHandle: HandlePosition
+        let toHandle: HandlePosition
+
+        if dy > 30 {
+            // Normal hierarchy: target is below source
+            // Depart bottom (6 o'clock), arrive top (12 o'clock)
+            fromHandle = .bottom
+            toHandle = .top
+        } else if dy < -30 {
+            // Target is ABOVE source (unusual — upward connection)
+            // Depart top via left/right, arrive bottom via left/right
+            // Pick side based on horizontal position
+            if targetPos.x > sourcePos.x {
+                fromHandle = .right
+                toHandle = .left
+            } else {
+                fromHandle = .left
+                toHandle = .right
+            }
+        } else {
+            // Same level — horizontal connection
+            if targetPos.x > sourcePos.x {
+                fromHandle = .right
+                toHandle = .left
+            } else {
+                fromHandle = .left
+                toHandle = .right
+            }
+        }
+
+        let fromOff = handleOffset(for: fromHandle, nodeId: fromId, nodeType: fromType)
+        let toOff = handleOffset(for: toHandle, nodeId: toId, nodeType: toType)
         return (
             CGPoint(x: sourcePos.x + fromOff.x, y: sourcePos.y + fromOff.y),
             CGPoint(x: targetPos.x + toOff.x, y: targetPos.y + toOff.y),
-            bestFrom, bestTo
+            fromHandle, toHandle
         )
     }
 
     /// Hit-test: find nearest node within 50px
     private func hitTestNode(at point: CGPoint, layout: LayoutResult, size: CGSize, excluding: String) -> String? {
+        // Use a generous hit zone — nodes are ~100-120px wide
+        let hitRadius: CGFloat = 80
         var closest: (id: String, dist: CGFloat)?
         for node in layout.nodes where node.id != excluding {
             let pos = nodePos(node.id, layout: layout, size: size)
             let dist = hypot(point.x - pos.x, point.y - pos.y)
-            if dist < 50, closest == nil || dist < closest!.dist {
+            if dist < hitRadius, closest == nil || dist < closest!.dist {
                 closest = (node.id, dist)
             }
         }
@@ -353,11 +365,12 @@ struct SquadCanvas: View {
             }
             .buttonStyle(.plain)
             .onHover { hovering in
-                // Keep delete button alive while cursor is over it
                 if hovering { hoveredEdgeId = edgeId }
+                else if hoveredEdgeId == edgeId { hoveredEdgeId = nil }
             }
             .position(mid)
             .transition(.scale.combined(with: .opacity))
+            .animation(.easeInOut(duration: 0.15), value: hoveredEdgeId)
         }
     }
 
@@ -500,12 +513,14 @@ struct SquadCanvas: View {
                                     size: size, excluding: sourceId
                                 ) else { return }
                                 guard targetId != CanvasLayout.ownerNodeId else { return }
+                                // Drop target = manager, dragged node = managed
+                                // "I dragged Test onto Flowwy" → Flowwy manages Test
                                 Task {
                                     _ = try? await app.client.createRelationship(
-                                        fromId: sourceId, toId: targetId
+                                        fromId: targetId, toId: sourceId
                                     )
                                     try? await app.client.createRelationshipRoom(
-                                        fromId: sourceId, toId: targetId
+                                        fromId: targetId, toId: sourceId
                                     )
                                     await app.refreshRelationships()
                                 }

@@ -23,7 +23,12 @@ struct ScratchPadView: View {
 
     @State private var widgets: [PaneWidget] = []
     @State private var pollTimer: Timer?
-    @State private var lastWidgetCount = 0
+    /// IDs of widgets the user deleted — polling ignores these until next full reload
+    @State private var deletedIds: Set<String> = []
+    /// Temporarily suppress polling during drag/delete operations
+    @State private var suppressPoll = false
+    /// The widget currently being dragged
+    @State private var draggingWidget: PaneWidget?
 
     var body: some View {
         Group {
@@ -44,77 +49,53 @@ struct ScratchPadView: View {
 
     // MARK: - Widget List
 
-    /// Widget size as a fraction of container width
-    private func widgetFraction(_ widget: PaneWidget) -> CGFloat {
-        switch widget.data.size {
-        case "small": return 1.0 / 3.0
-        case "medium": return 2.0 / 3.0
-        default: return 1.0 // "large" or nil = full width
-        }
-    }
-
-    /// Group widgets into rows based on their size fractions.
-    /// Widgets that fit together (sum <= 1.0) share a row.
-    private var widgetRows: [[PaneWidget]] {
-        var rows: [[PaneWidget]] = []
-        var currentRow: [PaneWidget] = []
-        var currentWidth: CGFloat = 0
-
-        for widget in widgets {
-            let fraction = widgetFraction(widget)
-            if currentWidth + fraction > 1.001 && !currentRow.isEmpty {
-                rows.append(currentRow)
-                currentRow = [widget]
-                currentWidth = fraction
-            } else {
-                currentRow.append(widget)
-                currentWidth += fraction
-            }
-            // Full-width widgets always get their own row
-            if fraction >= 1.0 {
-                rows.append(currentRow)
-                currentRow = []
-                currentWidth = 0
-            }
-        }
-        if !currentRow.isEmpty { rows.append(currentRow) }
-        return rows
-    }
-
     private var widgetList: some View {
-        GeometryReader { geo in
-            let totalWidth = geo.size.width - 32 // account for padding
-            ScrollView {
-                VStack(spacing: 10) {
-                    ForEach(Array(widgetRows.enumerated()), id: \.offset) { _, row in
-                        HStack(spacing: 10) {
-                            ForEach(row) { widget in
-                                let fraction = widgetFraction(widget)
-                                let cardWidth = fraction >= 1.0
-                                    ? totalWidth
-                                    : (totalWidth * fraction - (fraction < 1.0 ? 5 : 0))
-                                widgetCard(widget)
-                                    .frame(width: cardWidth)
-                                    .transition(
-                                        .asymmetric(
-                                            insertion: .move(edge: .trailing).combined(with: .opacity),
-                                            removal: .opacity
-                                        )
-                                    )
-                            }
+        ScrollView {
+            LazyVStack(spacing: 10) {
+                // Reset defaults button
+                HStack {
+                    Spacer()
+                    Button {
+                        resetDefaults()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.system(size: 10, weight: .medium))
+                            Text("Reset Defaults")
+                                .font(.system(size: 11, weight: .medium))
                         }
+                        .foregroundStyle(VultiTheme.inkMuted)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(VultiTheme.border.opacity(0.3), in: Capsule())
                     }
+                    .buttonStyle(.plain)
                 }
-                .padding(16)
-                .animation(.spring(duration: 0.3), value: widgets.count)
+                .padding(.bottom, 4)
+
+                ForEach(widgets) { widget in
+                    widgetCard(widget)
+                        .opacity(draggingWidget?.id == widget.id ? 0.4 : 1.0)
+                        .onDrag {
+                            draggingWidget = widget
+                            suppressPoll = true
+                            return NSItemProvider(object: widget.id as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: WidgetDropDelegate(
+                            targetWidget: widget,
+                            widgets: $widgets,
+                            draggingWidget: $draggingWidget,
+                            onReorder: saveOrder
+                        ))
+                }
             }
+            .padding(16)
+            .animation(.spring(duration: 0.25), value: widgets.map(\.id))
         }
     }
 
     // MARK: - Widget Card
 
-    /// Renders a widget card with drag handle (top-left) and close button (top-right).
-    /// Drill-target widgets get a chevron on the title row and tap handler.
     private func widgetCard(_ widget: PaneWidget) -> some View {
         let drillTarget = widget.data.drill.flatMap { DrillTarget(rawValue: $0) }
 
@@ -148,7 +129,6 @@ struct ScratchPadView: View {
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)
-            .padding(.bottom, 0)
 
             // Title row with optional drill chevron
             if let title = widget.title {
@@ -173,7 +153,6 @@ struct ScratchPadView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 14)
-                    .padding(.top, widget.title == nil ? 0 : 0)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -189,20 +168,63 @@ struct ScratchPadView: View {
         }
     }
 
-    /// Remove a widget: delete from backend then drop from local state.
+    // MARK: - Delete
+
     private func removeWidget(_ widget: PaneWidget) {
         let widgetId = widget.id
-        // Remove from backend first
-        Task {
-            try? await app.client.removePaneWidget(agentId: agentId, widgetId: widgetId)
-        }
-        // Remove from local state immediately
+        // Track as deleted so polling doesn't bring it back
+        deletedIds.insert(widgetId)
+        // Suppress polling briefly
+        suppressPoll = true
+        // Remove from local state
         withAnimation(.easeOut(duration: 0.2)) {
             widgets.removeAll { $0.id == widgetId }
         }
+        // Remove from backend
+        Task {
+            try? await app.client.removePaneWidget(agentId: agentId, widgetId: widgetId)
+            // Re-enable polling after backend confirms
+            try? await Task.sleep(for: .milliseconds(500))
+            suppressPoll = false
+        }
     }
 
-    /// Widget content without the title (used when we render title + chevron separately)
+    // MARK: - Reset Defaults
+
+    private func resetDefaults() {
+        suppressPoll = true
+        deletedIds.removeAll()
+        // Clear local widgets first so loadWidgetsForced sees a diff and does a full replace
+        withAnimation(.spring(duration: 0.3)) { widgets = [] }
+        Task {
+            do {
+                _ = try await app.client.resetDefaultWidgets(agentId: agentId)
+                try? await Task.sleep(for: .milliseconds(200))
+                await loadWidgetsForced()
+            } catch {
+                // Silently fail
+            }
+            suppressPoll = false
+        }
+    }
+
+    // MARK: - Reorder
+
+    private func saveOrder() {
+        let ids = widgets.map(\.id)
+        suppressPoll = true
+        Task {
+            try? await app.client.reorderPaneWidgets(agentId: agentId, widgetIds: ids)
+            // Re-fetch from backend to confirm the new order is persisted
+            try? await Task.sleep(for: .milliseconds(200))
+            await loadWidgetsForced()
+            suppressPoll = false
+            draggingWidget = nil
+        }
+    }
+
+    // MARK: - Widget Body
+
     @ViewBuilder
     private func widgetBody(_ widget: PaneWidget) -> some View {
         switch widget.type {
@@ -240,7 +262,6 @@ struct ScratchPadView: View {
     @ViewBuilder
     private func drillDownView(for target: DrillTarget) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Back button
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     expandedWidget = nil
@@ -260,7 +281,6 @@ struct ScratchPadView: View {
 
             Divider()
 
-            // Embedded detail view
             ScrollView {
                 drillDownContent(for: target)
                     .padding(24)
@@ -290,43 +310,52 @@ struct ScratchPadView: View {
 
     // MARK: - Data Loading
 
+    /// Fetch widgets from backend. Called by poll timer — skips if suppressed.
     private func loadWidgets() async {
+        guard !suppressPoll else { return }
+        await loadWidgetsForced()
+    }
+
+    /// Fetch widgets from backend unconditionally.
+    private func loadWidgetsForced() async {
         do {
             let pane = try await app.client.getPaneWidgets(agentId: agentId)
             var all: [GatewayClient.PaneWidget] = []
             if let tabs = pane.tabs {
-                // Flatten all tabs, preserving order
                 for (_, tabWidgets) in tabs.sorted(by: { $0.key < $1.key }) {
                     all.append(contentsOf: tabWidgets)
                 }
             }
-            let converted = all.compactMap { $0.toPaneWidget() }
+            var converted = all.compactMap { $0.toPaneWidget() }
 
-            // Only update if changed
-            if converted.count != widgets.count || !widgetsEqual(converted, widgets) {
+            // Filter out widgets the user deleted locally
+            if !deletedIds.isEmpty {
+                converted = converted.filter { !deletedIds.contains($0.id) }
+            }
+
+            // Check if the widget set changed (new/removed widgets) vs just reorder
+            let newIdSet = Set(converted.map(\.id))
+            let currentIdSet = Set(widgets.map(\.id))
+
+            if newIdSet != currentIdSet {
+                // Widgets added or removed — full replace
+                withAnimation(.spring(duration: 0.3)) {
+                    widgets = converted
+                }
+            } else if converted.map(\.id) != widgets.map(\.id) {
+                // Same widgets but different order from backend — accept backend order
                 withAnimation(.spring(duration: 0.3)) {
                     widgets = converted
                 }
             }
+            // If same IDs in same order — don't touch (preserves local state)
 
-            // Signal to parent that scratch pad has content
             if !converted.isEmpty && !hasContent {
                 hasContent = true
             }
         } catch {
-            // No widgets available yet — that's fine during onboarding
+            // No widgets available yet
         }
-    }
-
-    /// Simple equality check by count + titles to avoid unnecessary re-renders
-    private func widgetsEqual(_ a: [PaneWidget], _ b: [PaneWidget]) -> Bool {
-        guard a.count == b.count else { return false }
-        for i in a.indices {
-            if a[i].title != b[i].title || a[i].type != b[i].type {
-                return false
-            }
-        }
-        return true
     }
 
     // MARK: - Polling
@@ -344,17 +373,43 @@ struct ScratchPadView: View {
 
     // MARK: - Chat Integration
 
-    /// Send a message to the agent via the chat (used by interactive widgets)
     private func sendChatMessage(_ message: String) {
-        // Interactive widget messages go through the chat — the ChatView
-        // picks them up via its WebSocket. For now this is a no-op placeholder;
-        // the WidgetView onSendMessage callbacks are wired but need a shared
-        // message bus or NotificationCenter post to reach the ChatView.
         NotificationCenter.default.post(
             name: .scratchPadMessage,
             object: nil,
             userInfo: ["message": message, "agentId": agentId]
         )
+    }
+}
+
+// MARK: - Drop Delegate for Drag Reorder
+
+struct WidgetDropDelegate: DropDelegate {
+    let targetWidget: PaneWidget
+    @Binding var widgets: [PaneWidget]
+    @Binding var draggingWidget: PaneWidget?
+    let onReorder: () -> Void
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingWidget = nil
+        onReorder()
+        return true
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = draggingWidget,
+              dragging.id != targetWidget.id,
+              let fromIndex = widgets.firstIndex(where: { $0.id == dragging.id }),
+              let toIndex = widgets.firstIndex(where: { $0.id == targetWidget.id })
+        else { return }
+
+        withAnimation(.spring(duration: 0.2)) {
+            widgets.move(fromOffsets: IndexSet(integer: fromIndex), toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
     }
 }
 

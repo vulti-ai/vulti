@@ -708,6 +708,16 @@ class GatewayRunner:
         from vulti_cli.config import get_vulti_home
         lines = []
 
+        # Agent status from registry
+        _agent_status = "unknown"
+        try:
+            _meta = areg.get_agent(agent_id) if areg else None
+            if _meta:
+                _agent_status = _meta.status or "active"
+        except Exception:
+            pass
+        lines.append(f"- Status: {_agent_status}")
+
         # Soul / personality
         soul_content = ""
         if soul_path.exists():
@@ -917,9 +927,9 @@ class GatewayRunner:
             "Do NOT ask for keys that are already configured.\n"
             "For new connections the user wants, help them set it up — ask for API keys and use the secrets tool.\n"
             "You can also suggest skills from the available list that match the role.\n\n"
-            "CRITICAL: Every time a connection is enabled or a key is configured, IMMEDIATELY create or update "
-            "a widget using modify_pane. Use a 'kv' widget with drill='connections' showing each connection "
-            "name and its status (enabled/configured/pending). The user should see progress on the scratch pad in real-time.\n"
+            "CRITICAL: Every time a connection is enabled or a key is configured, IMMEDIATELY update "
+            "the default_connections widget using modify_pane(action='update', widget_id='default_connections', ...). "
+            "Use kv entries showing each connection name and its status (enabled/configured/pending).\n"
             "When the user is happy, tell them to click Next.]"
         )
 
@@ -1944,6 +1954,28 @@ class GatewayRunner:
         # Build the context prompt to inject
         context_prompt = build_session_context_prompt(context, redact_pii=_redact_pii)
 
+        # Inject current Home tab widget state so the agent knows what's on the dashboard
+        try:
+            from vulti_cli.agent_registry import AgentRegistry
+            _widget_reg = AgentRegistry()
+            _widget_reg.ensure_initialized()
+            _widget_path = _widget_reg.agent_home(_resolved_agent_id) / "pane_widgets.json"
+            if _widget_path.exists():
+                import json
+                _widgets_data = json.loads(_widget_path.read_text(encoding="utf-8"))
+                _home_widgets = (_widgets_data.get("tabs") or {}).get("home") or []
+                if _home_widgets:
+                    _widget_lines = ["\n## Current Home Tab Widgets",
+                                     "Your dashboard currently has these widgets (do NOT recreate them, use modify_pane action='update' to change):"]
+                    for _w in _home_widgets:
+                        _wtype = _w.get("type", "unknown")
+                        _wtitle = _w.get("data", {}).get("title", "untitled")
+                        _wid = _w.get("id", "?")
+                        _widget_lines.append(f"- [{_wtype}] \"{_wtitle}\" (id: {_wid})")
+                    context_prompt += "\n" + "\n".join(_widget_lines)
+        except Exception:
+            pass  # Widget injection is best-effort
+
         # Inject agent identity when running a non-primary agent
         # Lazy-init registry for identity injection
         if not hasattr(self, '_identity_agent_registry'):
@@ -2294,9 +2326,20 @@ class GatewayRunner:
                         + "YOUR JOB: Have a natural conversation to discover your identity, then BUILD your scratch pad "
                         "using the modify_pane tool.\n\n"
                         "ABSOLUTE RULE: The INSTANT you learn ANY piece of information — a role, a name, a preference, "
-                        "a connection, a memory, a cron job, a rule, ANYTHING — you MUST call modify_pane to create a widget "
-                        "for it in the SAME response. Do NOT batch information. Do NOT wait until the conversation progresses. "
-                        "One fact = one widget call, immediately. The user should see their agent taking shape in real-time.\n\n"
+                        "a connection, a memory, a cron job, a rule, ANYTHING — you MUST call modify_pane to UPDATE the "
+                        "corresponding default widget in the SAME response. Do NOT create new widgets — UPDATE the existing defaults.\n\n"
+                        "DEFAULT WIDGETS (already on the scratch pad with these IDs):\n"
+                        "  - default_personality (type: markdown, drill: soul) — your personality/soul\n"
+                        "  - default_memories (type: kv, drill: memories) — key facts about the job\n"
+                        "  - default_user (type: kv, drill: user) — what you know about the human\n"
+                        "  - default_connections (type: kv, drill: connections) — service connections\n"
+                        "  - default_jobs (type: action_list or kv, drill: actions) — scheduled cron jobs\n"
+                        "  - default_rules (type: action_list or kv, drill: actions) — conditional rules\n"
+                        "  - default_skills (type: kv, drill: skills) — installed skills\n"
+                        "  - default_wallet (type: kv, drill: wallet) — payment methods\n"
+                        "  - default_analytics (type: stat_grid, drill: analytics) — usage stats\n\n"
+                        "To update a default widget, use: modify_pane(action='update', widget_id='default_personality', ...)\n"
+                        "The user sees these widgets filling up in real-time as you learn things.\n\n"
                         "CONVERSATION FLOW — work through these naturally (not as rigid steps):\n"
                         "1. ROLE — What do you need me to help with? What's my job?\n"
                         "2. SOUL — How should I communicate? What's my style/personality?\n"
@@ -2305,33 +2348,12 @@ class GatewayRunner:
                         "5. ACTIONS — Any daily routines or rules to set up?\n"
                         "6. WALLET — Do I need payment capabilities?\n\n"
                         "Ask one or two questions at a time. Dig deeper. Don't rush.\n\n"
-                        "WIDGET CREATION — As you learn each thing, IMMEDIATELY use modify_pane to create an INFORMATIVE widget.\n"
-                        "CRITICAL RULES for widgets:\n"
-                        "  - NEVER create empty 'button' widgets with just a label. Every widget MUST show real information.\n"
-                        "  - Use 'kv' type (key-value pairs) for structured data — entries with key/value pairs.\n"
-                        "  - Use 'stat_grid' for numbers/metrics — stats with label/value/unit.\n"
-                        "  - Use 'status' for state indicators — label + variant (success/warning/info) + detail.\n"
-                        "  - Use 'markdown' for rich text content — paragraphs, lists, descriptions.\n"
-                        "  - Use 'action_list' for items with actions — each with title, subtitle, status.\n"
-                        "  - AVOID 'button' type — it's just a clickable label with no information.\n\n"
-                        "WHAT TO CREATE as you learn:\n"
-                        "  - Role learned → kv widget: entries like {key:'Role', value:'Personal Assistant'}, "
-                        "{key:'Focus', value:'Email & calendar management'} — add drill='role' to data\n"
-                        "  - Soul/personality → markdown widget with a summary of personality traits — add drill='soul'\n"
-                        "  - User info → kv widget: entries like {key:'Name', value:'...'}, {key:'Location', value:'...'} — add drill='user'\n"
-                        "  - Connections → kv widget showing each connection and its status — add drill='connections'\n"
-                        "  - Skills installed → kv widget listing each skill — add drill='skills'\n"
-                        "  - Actions set up → action_list with each job/rule, its schedule, and status — add drill='actions'\n"
-                        "  - Wallet → kv widget showing payment methods — add drill='wallet'\n\n"
-                        "The 'drill' field in widget data tells the frontend to show a chevron that opens a detail editor.\n"
-                        "Valid drill values: role, soul, user, memories, connections, skills, actions, wallet, analytics.\n\n"
-                        "WIDGET SIZING — add 'size' to widget data to control width:\n"
-                        "  - 'small' = 1/3 width (good for stat cards, status indicators)\n"
-                        "  - 'medium' = 2/3 width (good for kv pairs, short lists)\n"
-                        "  - 'large' or omit = full width (good for tables, markdown, detailed lists)\n"
-                        "Adjacent small/medium widgets will sit side by side in a row. Mix sizes for a dashboard feel.\n\n"
-                        "CREATE WIDGETS EARLY AND OFTEN. Don't wait — build incrementally. "
-                        "Update existing widgets (modify_pane action='update') as you learn more.\n\n"
+                        "WIDGET UPDATE RULES:\n"
+                        "  - ALWAYS use action='update' with the default widget IDs listed above.\n"
+                        "  - Use 'kv' type with entries [{key:'...', value:'...'}] for structured data.\n"
+                        "  - Use 'markdown' with content for rich text (personality, descriptions).\n"
+                        "  - Use 'action_list' with action_items [{title, subtitle, status}] for jobs/rules.\n"
+                        "  - NEVER create empty widgets. Every widget MUST show real information.\n\n"
                         "ALSO save your knowledge to files as you go:\n"
                         f"1. SOUL.md at {_soul_path} — YOUR personality, voice, expertise, principles.\n"
                         f"2. USER.md at {_mem_dir}/USER.md — what you know about the human.\n"
@@ -2343,20 +2365,17 @@ class GatewayRunner:
                     ),
                     "home": (
                         f"[System: The user is viewing the scratch pad / home dashboard for agent '{_aname}'. "
-                        "Use modify_pane to build an INFORMATIVE dashboard. Every widget MUST show real data.\n\n"
+                        "The scratch pad has 9 default widgets with stable IDs. UPDATE them with real data using "
+                        "modify_pane(action='update', widget_id='default_XXX', ...).\n\n"
+                        "Default widget IDs: default_personality, default_memories, default_user, default_connections, "
+                        "default_jobs, default_rules, default_skills, default_wallet, default_analytics.\n\n"
                         "QUALITY RULES:\n"
-                        "- NEVER create a widget that just shows a title. Every widget needs content.\n"
+                        "- Every widget MUST show real information, not placeholders.\n"
                         "- Use 'kv' with entries for structured info (each entry has key + value).\n"
                         "- Use 'stat_grid' for counts/metrics (stats with label + value).\n"
-                        "- Use 'status' for state (label + variant:success/warning/error + detail text).\n"
                         "- Use 'markdown' for rich descriptions.\n"
-                        "- Add drill='actions' (or role/soul/connections/skills/wallet/analytics) to widget data for drill-down.\n"
-                        "- Add size='small' (1/3), 'medium' (2/3), or omit for full width.\n\n"
-                        "Example good dashboard: a status widget with agent name + online state (size:small), "
-                        "a stat_grid showing jobs count + rules count + skills count (size:medium), "
-                        "a kv widget listing connections with their status, "
-                        "a kv widget showing owner profile details.\n\n"
-                        "ACT immediately — build the dashboard with REAL information, not placeholders.]"
+                        "- Use 'action_list' with action_items for jobs/rules.\n\n"
+                        "ACT immediately — update the default widgets with REAL information from your current state.]"
                     ),
                     "profile": (
                         f"[System: The user is on the PROFILE tab in the Hub dashboard for agent '{_aname}'. "
@@ -2406,20 +2425,16 @@ class GatewayRunner:
                         f"3. MEMORY.md at {_mem_dir}/MEMORY.md — 3-5 key facts about the job and context, separated by '§'.\n"
                         f"4. role.txt at {_soul_path.parent / 'role.txt'} — a SINGLE WORD: the agent's role "
                         "(one of: assistant, therapist, researcher, engineer, writer, analyst, coach, creative, ops). Just the word, nothing else.\n\n"
-                        "CRITICAL: As SOON as you learn ANYTHING — role, personality, user info, a connection, a skill, "
-                        "a cron job, a rule — IMMEDIATELY create a widget for it using modify_pane. Do NOT wait until "
-                        "the end. The user should see their agent taking shape in real-time on the scratch pad.\n\n"
-                        "Widget creation guide:\n"
-                        "  - Role learned → kv widget with entries like {key:'Role', value:'...'}, {key:'Focus', value:'...'} — add drill='role', size='medium'\n"
-                        "  - User info learned → kv widget: {key:'Name', value:'...'}, {key:'Preferences', value:'...'} — add drill='user', size='medium'\n"
-                        "  - Soul/personality → markdown widget summarizing traits and style — add drill='soul'\n"
-                        "  - Memory/fact learned → update existing kv widget or create new one — add drill='memories'\n"
-                        "  - Connection added → kv widget listing connections and status — add drill='connections', size='medium'\n"
-                        "  - Skill installed → kv widget listing skills — add drill='skills', size='medium'\n"
-                        "  - Cron job created → action_list widget with job name, schedule, status — add drill='actions'\n"
-                        "  - Rule created → action_list widget with rule name, condition, status — add drill='actions'\n"
-                        "Use modify_pane action='add' for new widgets, action='update' to enrich existing ones.\n"
-                        "Mix sizes (small/medium/large) for a dashboard feel.\n\n"
+                        "CRITICAL: As SOON as you learn ANYTHING, IMMEDIATELY UPDATE the corresponding default widget "
+                        "on the scratch pad using modify_pane(action='update', widget_id='default_XXX', ...).\n\n"
+                        "Default widget IDs to update:\n"
+                        "  - Role/job info → default_personality (markdown with your personality summary)\n"
+                        "  - User info → default_user (kv with entries like {key:'Name', value:'...'})\n"
+                        "  - Memory/facts → default_memories (kv with entries for each fact)\n"
+                        "  - Connections → default_connections (kv with connection name + status)\n"
+                        "  - Skills → default_skills (kv with skill name + description)\n"
+                        "  - Jobs → default_jobs (action_list with job title, schedule, status)\n"
+                        "  - Rules → default_rules (action_list with rule title, condition, status)\n\n"
                         "Do NOT ask for the role word directly — figure it out from what the user tells you.\n"
                         "When you feel you have a clear picture, write all the files and tell the user they can click Next.]"
                     ),
@@ -2438,9 +2453,9 @@ class GatewayRunner:
                         "Present your suggestions clearly: 'Based on your role, I'd recommend these skills:' followed by a list.\n"
                         "Use skill_manage(action='create') if the user wants a custom skill.\n"
                         "ACT immediately — install skills the user agrees to.\n\n"
-                        "CRITICAL: Every time a skill is installed, IMMEDIATELY create or update a widget using modify_pane. "
-                        "Use a 'kv' widget with drill='skills' listing each installed skill name and a brief description. "
-                        "The user should see their agent's capabilities growing on the scratch pad in real-time.\n"
+                        "CRITICAL: Every time a skill is installed, IMMEDIATELY update the default_skills widget "
+                        "using modify_pane(action='update', widget_id='default_skills', ...). "
+                        "Use kv entries listing each installed skill name and a brief description.\n"
                         "When done, tell the user to click Next.]"
                     ),
                     "onboard-actions": (
@@ -2456,9 +2471,10 @@ class GatewayRunner:
                         "Use the cronjob tool to create scheduled tasks.\n"
                         "Use the rule tool to create conditional rules (IF condition THEN action).\n"
                         "ACT immediately — create the jobs and rules as the user describes them.\n\n"
-                        "CRITICAL: Every time a cron job or rule is created, IMMEDIATELY create or update a widget using modify_pane. "
-                        "Use an 'action_list' widget with drill='actions' showing each job/rule with its title, "
-                        "schedule/condition as subtitle, and status. The user should see actions appearing on the scratch pad in real-time.\n"
+                        "CRITICAL: Every time a cron job is created, IMMEDIATELY update the default_jobs widget "
+                        "using modify_pane(action='update', widget_id='default_jobs', ...). Use action_items with title, schedule, status.\n"
+                        "Every time a rule is created, IMMEDIATELY update the default_rules widget "
+                        "using modify_pane(action='update', widget_id='default_rules', ...). Use action_items with title, condition, status.\n"
                         "Keep asking if there's more to set up. When done, tell the user to click Done.]"
                     ),
                     "wallet": (
@@ -2483,21 +2499,26 @@ class GatewayRunner:
                         + (f"Your owner's name is {_owner_name}. {_owner_about}\n"
                            "Use this knowledge naturally — never ask for info you already have.\n\n"
                            if _owner_name else "\n")
-                        + "INSTRUCTIONS FOR THIS GREETING:\n"
-                        "Examine your state above. Respond based on what you find:\n\n"
-                        "IF you have no soul/role (brand new): Your only priority is learning who you are.\n"
-                        "  Ask the user what role you should play and what they need help with.\n"
-                        "  Do NOT mention connections, skills, wallet, or anything else yet — identity first.\n"
-                        "  Keep it warm and brief — one or two questions max.\n\n"
-                        "IF you have a role but are missing things: Think about what you NEED vs what would be NICE.\n"
-                        "  NEED LIST — things required for your role. A personal assistant NEEDS calendar + email.\n"
-                        "    A researcher NEEDS web search. Ask for these directly.\n"
-                        "  WISH LIST — things that enhance your work but aren't required.\n"
-                        "    Mention casually: 'By the way, if I had image-gen access I could do more for you.'\n"
-                        "  Do NOT ask for things irrelevant to your role. A code assistant doesn't need a crypto wallet.\n"
-                        "  Prioritize the most impactful missing need — don't list everything at once.\n\n"
-                        "IF you are fully set up: Give a warm, brief greeting. Reference something recent or useful.\n"
-                        "  Don't enumerate what you have. Just be ready to help.\n\n"
+                        + "SELF-ASSESSMENT — Check your Status field above and decide your mode:\n\n"
+                        "STATUS = 'onboarding':\n"
+                        "  You are still being set up. Your ONLY job is to complete onboarding.\n"
+                        "  Do NOT accept work requests. If the user asks you to do a task, say:\n"
+                        "  'I'd love to help with that — let me finish getting set up first so I can do it properly.'\n"
+                        "  Then redirect to the next onboarding step you need.\n"
+                        "  Priority order: role → soul/personality → connections → skills → actions.\n"
+                        "  Only ask about the NEXT missing thing, not everything at once.\n\n"
+                        "STATUS = 'active' but MISSING ESSENTIALS:\n"
+                        "  Check what your role REQUIRES to function. Be honest with yourself:\n"
+                        "    - A personal assistant with no calendar/email connection is broken.\n"
+                        "    - A researcher with no web search is broken.\n"
+                        "    - An engineer with no github connection is limited.\n"
+                        "  If you are missing something ESSENTIAL for your role, say so directly:\n"
+                        "    'I need X to do my job — can we set that up?'\n"
+                        "  Do NOT grow an endless wish list. Ask for ONE critical thing at a time.\n"
+                        "  If nothing essential is missing, you are READY — just greet and work.\n\n"
+                        "STATUS = 'active' and FULLY SET UP:\n"
+                        "  Give a warm, brief greeting. Be ready to help. Don't enumerate what you have.\n"
+                        "  Reference something useful or recent if you can.\n\n"
                         "ALWAYS: As you learn things during conversation, save them immediately:\n"
                         f"  - SOUL.md at {_soul_path} — your personality, voice, role, principles\n"
                         f"  - USER.md at {_mem_dir}/USER.md — what you know about your owner\n"
@@ -2513,6 +2534,15 @@ class GatewayRunner:
                 _hub_prompt = _HUB_CHANNEL_PROMPTS.get(_hub_channel, "")
                 if _hub_prompt:
                     context_prompt += "\n\n" + _hub_prompt
+
+                # Onboarding gate — if agent is still onboarding, keep it focused
+                if _agent_meta and _agent_meta.status == "onboarding" and not _hub_channel.startswith("onboard"):
+                    context_prompt += (
+                        "\n\n[System: IMPORTANT — Your status is 'onboarding'. You are not fully set up yet. "
+                        "Do NOT start doing tasks or answering work questions. If the user asks you to do something, "
+                        "politely redirect: 'Let me finish getting set up first so I can help you properly.' "
+                        "Focus on completing your setup: role, personality, connections, skills, actions.]"
+                    )
 
                 # Universal pane instruction — widgets only go on the Home tab
                 context_prompt += (

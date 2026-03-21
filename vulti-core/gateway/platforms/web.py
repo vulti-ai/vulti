@@ -555,6 +555,63 @@ class WebAdapter(BasePlatformAdapter):
 
             return {"user_id": result["user_id"], "username": username}
 
+        @app.put("/api/matrix/credentials")
+        async def matrix_update_credentials(req: Request, authorization: str = Header("")):
+            """Update the owner's Matrix username and/or password."""
+            await get_current_user(authorization)
+            data = await req.json()
+            new_username = data.get("username", "").strip()
+            new_password = data.get("password", "").strip()
+
+            if not new_username and not new_password:
+                raise HTTPException(status_code=400, detail="Provide username and/or password")
+            if new_password and len(new_password) < 8:
+                raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+            from gateway.continuwuity import _continuwuity_dir
+            owner_creds_path = _continuwuity_dir() / "owner_credentials.json"
+            if not owner_creds_path.exists():
+                raise HTTPException(status_code=404, detail="No owner account found — register first")
+
+            creds = json.loads(owner_creds_path.read_text())
+            port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
+            homeserver_url = f"http://127.0.0.1:{port}"
+
+            # Change password on the Matrix server
+            if new_password and new_password != creds.get("password"):
+                import httpx
+                async with httpx.AsyncClient(timeout=15.0) as hc:
+                    resp = await hc.post(
+                        f"{homeserver_url}/_matrix/client/v3/account/password",
+                        headers={"Authorization": f"Bearer {creds['access_token']}"},
+                        json={
+                            "new_password": new_password,
+                            "logout_devices": False,
+                            "auth": {
+                                "type": "m.login.password",
+                                "identifier": {"type": "m.id.user", "user": creds.get("username", "")},
+                                "password": creds.get("password", ""),
+                            },
+                        },
+                    )
+                    if resp.status_code != 200:
+                        raise HTTPException(status_code=500, detail=f"Failed to change password: {resp.text[:200]}")
+                creds["password"] = new_password
+
+            if new_username:
+                creds["username"] = new_username
+
+            owner_creds_path.write_text(json.dumps(creds, indent=2))
+
+            # Also update the _owner.json token file
+            token_file = _continuwuity_dir() / "tokens" / "_owner.json"
+            if token_file.exists():
+                token_data = json.loads(token_file.read_text())
+                token_data["user_id"] = creds.get("user_id", token_data.get("user_id", ""))
+                token_file.write_text(json.dumps(token_data, indent=2))
+
+            return {"ok": True, "username": creds["username"]}
+
         @app.post("/api/matrix/relationship-room")
         async def create_relationship_room(req: Request, authorization: str = Header("")):
             """Create a private Matrix room for two agents to communicate."""
@@ -968,6 +1025,11 @@ class WebAdapter(BasePlatformAdapter):
             data = await req.json()
             widget_ids = data.get("widget_ids", [])
             return adapter._reorder_pane_widgets(agent_id, widget_ids)
+
+        @app.post("/api/agents/{agent_id}/pane/reset-defaults")
+        async def reset_default_widgets(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._reset_default_widgets(agent_id)
 
         # --- Finalize Onboarding ---
 
@@ -1525,6 +1587,22 @@ class WebAdapter(BasePlatformAdapter):
         if "personality" in data:
             soul_path = registry.agent_soul_path(agent_id)
             soul_path.write_text(data["personality"], encoding="utf-8")
+
+        # Update model in agent's config.yaml if provided
+        if data.get("model"):
+            try:
+                import yaml
+                config_path = registry.agent_config_path(agent_id)
+                if config_path.exists():
+                    with open(config_path, encoding="utf-8") as f:
+                        agent_cfg = yaml.safe_load(f) or {}
+                else:
+                    agent_cfg = {}
+                agent_cfg["model"] = data["model"]
+                with open(config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(agent_cfg, f, default_flow_style=False, allow_unicode=True)
+            except Exception as e:
+                logger.debug("Failed to write model to agent config: %s", e)
 
         return {
             "id": meta.id,
@@ -2961,6 +3039,251 @@ class WebAdapter(BasePlatformAdapter):
 
     # --- Pane Widgets ---
 
+    def _build_default_widgets(self, agent_id: str) -> list:
+        """Build the 9 default widgets from the agent's current state."""
+        registry = self._get_agent_registry()
+        agent_home = registry.agent_home(agent_id)
+        meta = registry.get_agent(agent_id)
+        mem_dir = registry.agent_memories_dir(agent_id)
+        soul_path = registry.agent_soul_path(agent_id)
+
+        widgets = []
+
+        # 1. Personality (soul)
+        soul_content = ""
+        if soul_path.exists():
+            soul_content = soul_path.read_text(encoding="utf-8").strip()
+        widgets.append({
+            "id": "default_personality",
+            "type": "markdown",
+            "title": "Personality",
+            "data": {
+                "content": soul_content if soul_content else "*No personality defined yet*",
+                "drill": "soul",
+                "size": "large",
+            },
+        })
+
+        # 2. Memories
+        memory_path = mem_dir / "MEMORY.md"
+        memory_entries = []
+        if memory_path.exists():
+            raw = memory_path.read_text(encoding="utf-8").strip()
+            if raw:
+                for entry in raw.split("§"):
+                    entry = entry.strip()
+                    if entry:
+                        memory_entries.append({"key": f"#{len(memory_entries)+1}", "value": entry})
+        widgets.append({
+            "id": "default_memories",
+            "type": "kv",
+            "title": "Memories",
+            "data": {
+                "entries": memory_entries if memory_entries else [{"key": "—", "value": "No memories yet"}],
+                "drill": "memories",
+                "size": "large",
+            },
+        })
+
+        # 3. User
+        user_path = mem_dir / "USER.md"
+        user_entries = []
+        if user_path.exists():
+            raw = user_path.read_text(encoding="utf-8").strip()
+            if raw:
+                for entry in raw.split("§"):
+                    entry = entry.strip()
+                    if entry:
+                        # Try to split on first colon for key/value
+                        if ":" in entry:
+                            k, _, v = entry.partition(":")
+                            user_entries.append({"key": k.strip(), "value": v.strip()})
+                        else:
+                            user_entries.append({"key": f"#{len(user_entries)+1}", "value": entry})
+        widgets.append({
+            "id": "default_user",
+            "type": "kv",
+            "title": "User",
+            "data": {
+                "entries": user_entries if user_entries else [{"key": "—", "value": "No user info yet"}],
+                "drill": "user",
+                "size": "medium",
+            },
+        })
+
+        # 4. Connections
+        conn_entries = []
+        try:
+            from vulti_cli.connection_registry import ConnectionRegistry
+            from vulti_cli.config import get_vulti_home
+            creg = ConnectionRegistry(get_vulti_home())
+            allowed = set()
+            try:
+                allowed = set(creg._get_agent_allowed(agent_id))
+            except Exception:
+                pass
+            for c in creg.list_all():
+                status = "allowed" if c.name in allowed else "available"
+                conn_entries.append({"key": c.name, "value": status})
+        except Exception:
+            pass
+        widgets.append({
+            "id": "default_connections",
+            "type": "kv",
+            "title": "Connections",
+            "data": {
+                "entries": conn_entries if conn_entries else [{"key": "—", "value": "No connections configured"}],
+                "drill": "connections",
+                "size": "medium",
+            },
+        })
+
+        # 5. Jobs (cron)
+        job_items = []
+        try:
+            cron_file = agent_home / "cron" / "jobs.json"
+            if cron_file.exists():
+                jobs = json.loads(cron_file.read_text(encoding="utf-8"))
+                if isinstance(jobs, list):
+                    for j in jobs:
+                        job_items.append({
+                            "title": j.get("name", j.get("id", "unnamed")),
+                            "subtitle": j.get("schedule", ""),
+                            "status": "active" if j.get("enabled", True) else "paused",
+                        })
+        except Exception:
+            pass
+        widgets.append({
+            "id": "default_jobs",
+            "type": "action_list" if job_items else "kv",
+            "title": "Jobs",
+            "data": {
+                **({"action_items": job_items} if job_items else {"entries": [{"key": "—", "value": "No scheduled jobs"}]}),
+                "drill": "actions",
+                "size": "medium",
+            },
+        })
+
+        # 6. Rules
+        rule_items = []
+        try:
+            from vulti_cli.config import get_vulti_home
+            rules_file = get_vulti_home() / "rules" / "rules.json"
+            if rules_file.exists():
+                rules_data = json.loads(rules_file.read_text(encoding="utf-8"))
+                if isinstance(rules_data, list):
+                    for r in rules_data:
+                        # Only show rules for this agent or global rules
+                        r_agent = r.get("agent_id", "")
+                        if r_agent and r_agent != agent_id:
+                            continue
+                        rule_items.append({
+                            "title": r.get("name", r.get("id", "unnamed")),
+                            "subtitle": r.get("condition", ""),
+                            "status": "active" if r.get("enabled", True) else "disabled",
+                        })
+        except Exception:
+            pass
+        widgets.append({
+            "id": "default_rules",
+            "type": "action_list" if rule_items else "kv",
+            "title": "Rules",
+            "data": {
+                **({"action_items": rule_items} if rule_items else {"entries": [{"key": "—", "value": "No rules configured"}]}),
+                "drill": "actions",
+                "size": "medium",
+            },
+        })
+
+        # 7. Skills
+        skill_entries = []
+        try:
+            skills_dir = agent_home / "skills"
+            if skills_dir.exists():
+                for d in sorted(skills_dir.iterdir()):
+                    if d.is_dir():
+                        skill_entries.append({"key": d.name, "value": "installed"})
+            # Also check global skills
+            if not skill_entries:
+                from vulti_cli.config import get_vulti_home
+                global_skills = get_vulti_home() / "skills"
+                if global_skills.exists():
+                    for d in sorted(global_skills.iterdir()):
+                        if d.is_dir():
+                            skill_entries.append({"key": d.name, "value": "available"})
+        except Exception:
+            pass
+        widgets.append({
+            "id": "default_skills",
+            "type": "kv",
+            "title": "Skills",
+            "data": {
+                "entries": skill_entries if skill_entries else [{"key": "—", "value": "No skills installed"}],
+                "drill": "skills",
+                "size": "medium",
+            },
+        })
+
+        # 8. Wallet
+        wallet_entries = []
+        try:
+            wallet_path = agent_home / "wallet.json"
+            if wallet_path.exists():
+                w = json.loads(wallet_path.read_text(encoding="utf-8"))
+                cc = w.get("credit_card", {})
+                if cc.get("number"):
+                    last4 = cc["number"][-4:]
+                    wallet_entries.append({"key": cc.get("cardholder_name", "Card"), "value": f"•••• {last4}", "masked": True})
+                crypto = w.get("crypto", {})
+                if crypto.get("vault_id"):
+                    wallet_entries.append({"key": "Vault", "value": crypto["vault_id"]})
+        except Exception:
+            pass
+        widgets.append({
+            "id": "default_wallet",
+            "type": "kv",
+            "title": "Wallet",
+            "data": {
+                "entries": wallet_entries if wallet_entries else [{"key": "—", "value": "No payment methods"}],
+                "drill": "wallet",
+                "size": "small",
+            },
+        })
+
+        # 9. Analytics
+        session_count = 0
+        try:
+            sessions_dir = agent_home / "sessions"
+            if sessions_dir.exists():
+                session_count = len([f for f in sessions_dir.iterdir() if f.is_file()])
+        except Exception:
+            pass
+        widgets.append({
+            "id": "default_analytics",
+            "type": "stat_grid",
+            "title": "Analytics",
+            "data": {
+                "stats": [
+                    {"label": "Sessions", "value": str(session_count)},
+                    {"label": "Status", "value": meta.status if meta else "unknown"},
+                    {"label": "Role", "value": meta.role if meta and meta.role else "—"},
+                ],
+                "drill": "analytics",
+                "size": "large",
+            },
+        })
+
+        return widgets
+
+    def _reset_default_widgets(self, agent_id: str) -> dict:
+        """Reset pane to default widgets built from agent's current state."""
+        registry = self._get_agent_registry()
+        pane_path = registry.agent_home(agent_id) / "pane_widgets.json"
+        widgets = self._build_default_widgets(agent_id)
+        data = {"version": 1, "tabs": {"home": widgets}}
+        pane_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return data
+
     def _get_pane_widgets(self, agent_id: str) -> dict:
         registry = self._get_agent_registry()
         pane_path = registry.agent_home(agent_id) / "pane_widgets.json"
@@ -2969,7 +3292,8 @@ class WebAdapter(BasePlatformAdapter):
                 return json.loads(pane_path.read_text())
             except Exception:
                 pass
-        return {"version": 1, "tabs": {}}
+        # No pane file — generate and persist defaults
+        return self._reset_default_widgets(agent_id)
 
     def _clear_pane_widgets(self, agent_id: str, tab: str = None) -> dict:
         registry = self._get_agent_registry()

@@ -503,8 +503,18 @@ struct AgentConnectionsTab: View {
             providers = list
         }
         if let cfg = try? await app.client.getAgentConfig(agentId: agentId),
-           let model = cfg["model"]?.value as? String {
-            configModel = model
+           let modelVal = cfg["model"]?.value {
+            if let s = modelVal as? String, !s.isEmpty {
+                configModel = s
+            } else if let dict = modelVal as? [String: Any],
+                      let defaultModel = dict["default"] as? String, !defaultModel.isEmpty {
+                let provider = dict["provider"] as? String ?? ""
+                if !provider.isEmpty && !defaultModel.contains("/") {
+                    configModel = "\(provider)/\(defaultModel)"
+                } else {
+                    configModel = defaultModel
+                }
+            }
         }
     }
 

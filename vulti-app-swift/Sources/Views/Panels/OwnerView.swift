@@ -16,6 +16,7 @@ struct OwnerView: View {
     @State private var isResettingRooms = false
     @State private var showResetConfirmation = false
     @State private var isGeneratingAvatar = false
+    @State private var isSavingMatrix = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -113,12 +114,37 @@ struct OwnerView: View {
                             .foregroundStyle(.green)
                             .font(.system(size: 13))
 
-                        Group {
-                            LabeledContent("Homeserver") { Text(matrixInfo["homeserver_url"] ?? "—").textSelection(.enabled) }
-                            LabeledContent("Username") { Text(matrixInfo["owner_username"] ?? "—").textSelection(.enabled) }
-                            LabeledContent("Password") { Text(matrixInfo["owner_password"] ?? "—").textSelection(.enabled) }
+                        Text("Connect from your phone or desktop:")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(VultiTheme.inkMuted)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            instructionRow(num: "1", text: "Download **Element X** from the App Store or Play Store")
+                            instructionRow(num: "2", text: "Tap **\"I already have an account\"**")
+                            instructionRow(num: "3", text: "Enter **\"Other\"** for the server, then type the address below")
+                            instructionRow(num: "4", text: "Sign in with your username and password")
                         }
-                        .font(.system(size: 12))
+
+                        LabeledContent("Homeserver") { Text(matrixInfo["homeserver_url"] ?? "—").textSelection(.enabled) }
+                            .font(.system(size: 12))
+
+                        TextField("Username", text: $matrixUsername)
+                            .textFieldStyle(.vulti)
+                        SecureField("Password", text: $matrixPassword)
+                            .textFieldStyle(.vulti)
+
+                        Button {
+                            saveMatrixCredentials()
+                        } label: {
+                            HStack(spacing: 6) {
+                                if isSavingMatrix {
+                                    ProgressView().controlSize(.small)
+                                }
+                                Text("Save")
+                            }
+                        }
+                        .buttonStyle(.vultiPrimary)
+                        .disabled(matrixUsername.isEmpty || matrixPassword.count < 8 || isSavingMatrix)
                     }
                     .padding(12)
                     .background(.green.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
@@ -231,6 +257,30 @@ struct OwnerView: View {
             for (k, v) in creds {
                 if let s = v as? String { matrixInfo[k] = s }
             }
+            // Map raw keys to display keys expected by the UI
+            if let u = creds["username"] as? String {
+                matrixInfo["owner_username"] = u
+                if matrixUsername.isEmpty { matrixUsername = u }
+            }
+            if let p = creds["password"] as? String {
+                matrixInfo["owner_password"] = p
+                if matrixPassword.isEmpty { matrixPassword = p }
+            }
+
+            // Read server_name from conduit.toml for the Tailscale URL
+            let configURL = VultiHome.continuwuityDir.appending(path: "conduit.toml")
+            if let toml = try? String(contentsOf: configURL, encoding: .utf8) {
+                for line in toml.components(separatedBy: "\n") {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("server_name") {
+                        let parts = trimmed.components(separatedBy: "=")
+                        if parts.count >= 2 {
+                            let name = parts[1].trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\"", with: "")
+                            matrixInfo["homeserver_url"] = "https://\(name)"
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -251,6 +301,37 @@ struct OwnerView: View {
                 matrixStatus = "Error: \(error.localizedDescription)"
             }
             isCreatingMatrix = false
+        }
+    }
+
+    private func saveMatrixCredentials() {
+        isSavingMatrix = true
+        matrixStatus = "Saving..."
+        Task {
+            do {
+                try await app.client.updateMatrixCredentials(
+                    username: matrixUsername,
+                    password: matrixPassword
+                )
+                matrixStatus = "Saved"
+                loadMatrixInfo()
+            } catch {
+                matrixStatus = "Error: \(error.localizedDescription)"
+            }
+            isSavingMatrix = false
+        }
+    }
+
+    @ViewBuilder
+    private func instructionRow(num: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("\(num).")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(VultiTheme.inkMuted)
+                .frame(width: 14, alignment: .trailing)
+            Text(.init(text))  // .init enables markdown
+                .font(.system(size: 11))
+                .foregroundStyle(VultiTheme.inkDim)
         }
     }
 

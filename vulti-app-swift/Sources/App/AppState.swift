@@ -75,10 +75,14 @@ final class AppState {
             try await Task.sleep(for: .milliseconds(500))
             if await client.checkHealth() {
                 isGatewayRunning = true
+                await refreshAgents()
                 return
             }
         }
         isGatewayRunning = await client.checkHealth()
+        if isGatewayRunning {
+            await refreshAgents()
+        }
     }
 
     func stopGateway() async {

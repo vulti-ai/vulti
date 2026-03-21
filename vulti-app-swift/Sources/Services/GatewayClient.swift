@@ -588,6 +588,12 @@ actor GatewayClient {
         _ = try await gw.putRaw(path: "agents/\(agentId)/pane/reorder", body: ["widget_ids": widgetIds])
     }
 
+    func resetDefaultWidgets(agentId: String) async throws -> PaneResponse {
+        let raw = try await gw.postRaw(path: "agents/\(agentId)/pane/reset-defaults", body: [String: String]())
+        let data = try JSONSerialization.data(withJSONObject: raw)
+        return try JSONDecoder().decode(PaneResponse.self, from: data)
+    }
+
     // MARK: - Integrations & Status
 
     struct IntegrationResponse: Codable {
@@ -645,6 +651,10 @@ actor GatewayClient {
 
     func registerMatrix(username: String, password: String) async throws {
         try await gw.registerMatrix(username: username, password: password)
+    }
+
+    func updateMatrixCredentials(username: String, password: String) async throws {
+        try await gw.updateMatrixCredentials(username: username, password: password)
     }
 
     func createRelationshipRoom(fromId: String, toId: String) async throws {

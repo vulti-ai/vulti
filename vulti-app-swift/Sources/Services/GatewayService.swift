@@ -226,6 +226,21 @@ actor GatewayService {
         _ = try await postRaw(path: "matrix/register", body: ["username": username, "password": password])
     }
 
+    /// PUT /api/matrix/credentials — update the owner's Matrix username/password.
+    func updateMatrixCredentials(username: String, password: String) async throws {
+        let url = baseURL.appending(path: "api/matrix/credentials")
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addAuth(&request)
+        let body: [String: String] = ["username": username, "password": password]
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw GatewayError.badStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+    }
+
     /// POST /api/matrix/relationship-room — create a Matrix room for a relationship between two agents.
     func createRelationshipRoom(fromId: String, toId: String) async throws {
         struct Body: Encodable {

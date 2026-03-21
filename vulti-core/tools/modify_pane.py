@@ -2,10 +2,13 @@
 Modify Pane Tool — dynamically update Hub UI widgets.
 
 Allows agents to add, remove, update, and replace widgets in the
-right-side content pane of the Vulti Hub. Widgets are scoped per-agent
-per-tab and persist across sessions.
+right-side content pane of the Vulti Hub.
 
-Storage: ``~/.vulti/agents/{agent_id}/pane_widgets.json``
+Two scopes:
+  - "home" tab: per-agent, persistent across sessions.
+    Storage: ``~/.vulti/agents/{agent_id}/pane_widgets.json``
+  - "chat" tab: per-session, tied to the current chat.
+    Storage: ``~/.vulti/web/sessions/{session_id}_widgets.json``
 """
 
 import json
@@ -19,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 _VULTI_HOME = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
 
-VALID_TABS = {"home"}
+VALID_TABS = {"home", "chat"}
 VALID_WIDGET_TYPES = {
     "markdown", "kv", "table", "image",
     "status", "stat_grid", "bar_chart", "progress",
@@ -27,12 +30,22 @@ VALID_WIDGET_TYPES = {
 }
 
 
-def _widgets_path(agent_id: str) -> Path:
+def _widgets_path(agent_id: str, tab: str = "home", session_id: str = "") -> Path:
+    if tab == "chat" and session_id:
+        return _VULTI_HOME / "web" / "sessions" / f"{session_id}_widgets.json"
     return _VULTI_HOME / "agents" / agent_id / "pane_widgets.json"
 
 
-def _load_widgets(agent_id: str) -> Dict[str, Any]:
-    path = _widgets_path(agent_id)
+def _session_id_from_env() -> str:
+    """Extract session_id from VULTI_SESSION_CHAT_ID (format: 'web:{session_id}')."""
+    chat_id = os.getenv("VULTI_SESSION_CHAT_ID", "")
+    if chat_id.startswith("web:"):
+        return chat_id[4:]
+    return chat_id
+
+
+def _load_widgets(agent_id: str, tab: str = "home", session_id: str = "") -> Dict[str, Any]:
+    path = _widgets_path(agent_id, tab, session_id)
     if not path.exists():
         return {"version": 1, "tabs": {}}
     try:
@@ -42,8 +55,8 @@ def _load_widgets(agent_id: str) -> Dict[str, Any]:
         return {"version": 1, "tabs": {}}
 
 
-def _save_widgets(agent_id: str, data: Dict[str, Any]) -> None:
-    path = _widgets_path(agent_id)
+def _save_widgets(agent_id: str, data: Dict[str, Any], tab: str = "home", session_id: str = "") -> None:
+    path = _widgets_path(agent_id, tab, session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(data, f, indent=2)

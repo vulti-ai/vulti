@@ -92,8 +92,11 @@ struct AgentPanelHeader: View {
         app.agent(byId: agentId)
     }
 
-    /// Short display name for the active model (e.g. "claude-opus-4.6" from "openrouter/anthropic/claude-opus-4.6")
+    @State private var didLoadConfig = false
+
+    /// Short display name for the active model
     private var modelShortName: String {
+        if !didLoadConfig { return "Loading…" }
         if configModel.isEmpty { return "No model" }
         return String(configModel.split(separator: "/").last ?? Substring(configModel))
     }
@@ -190,11 +193,31 @@ struct AgentPanelHeader: View {
                 }
             }
         }
-        .task {
-            if let cfg = try? await app.client.getAgentConfig(agentId: agentId),
-               let model = cfg["model"]?.value as? String {
-                configModel = model
+        .task(id: agentId) {
+            configModel = ""
+            didLoadConfig = false
+            // Load model from agent config — model can be a string or a dict with "default" key
+            do {
+                let cfg = try await app.client.getAgentConfig(agentId: agentId)
+                if let modelVal = cfg["model"]?.value {
+                    if let s = modelVal as? String, !s.isEmpty {
+                        configModel = s
+                    } else if let dict = modelVal as? [String: Any],
+                              let defaultModel = dict["default"] as? String, !defaultModel.isEmpty {
+                        // Nested format: model: { default: "provider/model", provider: "..." }
+                        let provider = dict["provider"] as? String ?? ""
+                        if !provider.isEmpty && !defaultModel.contains("/") {
+                            configModel = "\(provider)/\(defaultModel)"
+                        } else {
+                            configModel = defaultModel
+                        }
+                    }
+                }
+            } catch {
+                // Config may not exist for new agents
             }
+            didLoadConfig = true
+            // Load authenticated providers
             if let list = try? await app.client.listProviders() {
                 providers = list.filter(\.authenticated)
             }

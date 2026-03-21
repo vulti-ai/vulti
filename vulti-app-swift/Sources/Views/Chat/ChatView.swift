@@ -388,13 +388,23 @@ struct ChatView: View {
         return dateString
     }
 
-    /// Simulate an agent greeting with typing dots + streaming text.
+    /// Whether this agent is new (no role set yet) — determines hub_channel
+    private var isNewAgent: Bool {
+        (app.agent(byId: agentId)?.role ?? "").isEmpty
+    }
+
+    /// The hub_channel to send with messages — "onboard" for new agents, "introspect" for existing
+    private var hubChannel: String {
+        isNewAgent ? "onboard" : "introspect"
+    }
+
     /// Trigger introspection — creates a new session and sends a hidden trigger message.
     private func triggerIntrospect() {
         Task {
             let dateStr = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)
+            let sessionName = isNewAgent ? "Onboarding" : "Check-in: \(dateStr)"
             do {
-                let session = try await app.client.createSession(agentId: agentId, name: "Check-in: \(dateStr)")
+                let session = try await app.client.createSession(agentId: agentId, name: sessionName)
                 sessionId = session.id
                 ws.connect(sessionId: session.id)
                 try? await Task.sleep(for: .milliseconds(300))
@@ -410,11 +420,10 @@ struct ChatView: View {
                 "type": "message",
                 "content": "[status check]",
                 "agent_id": agentId,
-                "hub_channel": "introspect",
+                "hub_channel": hubChannel,
             ]
             if let data = try? JSONEncoder().encode(payload),
                let json = String(data: data, encoding: .utf8) {
-                // Add hidden trigger to messages (will be filtered from display)
                 ws.messages.append(ChatMessage(
                     messageId: UUID().uuidString,
                     type: "message",
@@ -479,6 +488,7 @@ struct ChatView: View {
                 "type": "message",
                 "content": text,
                 "agent_id": agentId,
+                "hub_channel": hubChannel,
             ]
             if let ctx = viewingContext {
                 payload["viewing_context"] = ctx
