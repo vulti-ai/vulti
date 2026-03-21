@@ -4024,6 +4024,7 @@ class AIAgent:
                 limit=function_args.get("limit", 3),
                 db=self._session_db,
                 current_session_id=self.session_id,
+                agent_id=self._agent_id,
             )
         elif function_name == "memory":
             target = function_args.get("target", "memory")

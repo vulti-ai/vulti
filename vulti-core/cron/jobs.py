@@ -46,8 +46,18 @@ except ImportError:
 
 VULTI_DIR = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
 CRON_DIR = VULTI_DIR / "cron"
-JOBS_FILE = CRON_DIR / "jobs.json"
+JOBS_FILE = CRON_DIR / "jobs.json"  # Legacy global path (unused for new writes)
 OUTPUT_DIR = CRON_DIR / "output"
+
+
+def _agent_jobs_file(agent_id: str) -> Path:
+    """Return the per-agent jobs file path."""
+    return VULTI_DIR / "agents" / agent_id / "cron" / "jobs.json"
+
+
+def _agent_output_dir(agent_id: str) -> Path:
+    """Return the per-agent cron output directory."""
+    return VULTI_DIR / "agents" / agent_id / "cron" / "output"
 
 
 def _normalize_skill_list(skill: Optional[str] = None, skills: Optional[Any] = None) -> List[str]:
@@ -268,37 +278,120 @@ def compute_next_run(schedule: Dict[str, Any], last_run_at: Optional[str] = None
 # Job CRUD Operations
 # =============================================================================
 
-def load_jobs() -> List[Dict[str, Any]]:
-    """Load all jobs from storage."""
-    ensure_dirs()
-    if not JOBS_FILE.exists():
+def load_jobs(agent_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Load jobs for a specific agent from per-agent storage.
+
+    If *agent_id* is ``None`` the current agent (from env / registry) is used.
+    """
+    agent_id = agent_id or _current_agent_id()
+    jobs_file = _agent_jobs_file(agent_id)
+    if not jobs_file.exists():
+        # Migration: check legacy global file for this agent's jobs
+        if JOBS_FILE.exists():
+            return _migrate_agent_jobs(agent_id)
         return []
-    
+
     try:
-        with open(JOBS_FILE, 'r', encoding='utf-8') as f:
+        with open(jobs_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
             return data.get("jobs", [])
     except (json.JSONDecodeError, IOError):
         return []
 
 
-def save_jobs(jobs: List[Dict[str, Any]]):
-    """Save all jobs to storage."""
-    ensure_dirs()
-    fd, tmp_path = tempfile.mkstemp(dir=str(JOBS_FILE.parent), suffix='.tmp', prefix='.jobs_')
+def load_all_jobs() -> List[Dict[str, Any]]:
+    """Load jobs from ALL agents.  Used by the scheduler to find due jobs."""
+    agents_dir = VULTI_DIR / "agents"
+    all_jobs: List[Dict[str, Any]] = []
+    if not agents_dir.is_dir():
+        return all_jobs
+    for agent_dir in agents_dir.iterdir():
+        if not agent_dir.is_dir():
+            continue
+        jobs_file = agent_dir / "cron" / "jobs.json"
+        if not jobs_file.exists():
+            continue
+        try:
+            with open(jobs_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for j in data.get("jobs", []):
+                    j.setdefault("agent", agent_dir.name)
+                    all_jobs.append(j)
+        except (json.JSONDecodeError, IOError):
+            continue
+
+    # Also check legacy global file for any un-migrated jobs
+    if JOBS_FILE.exists():
+        try:
+            with open(JOBS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                migrated_ids = {j["id"] for j in all_jobs}
+                for j in data.get("jobs", []):
+                    if j["id"] not in migrated_ids:
+                        all_jobs.append(j)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    return all_jobs
+
+
+def save_jobs(jobs: List[Dict[str, Any]], agent_id: Optional[str] = None):
+    """Save jobs to per-agent storage.
+
+    If *agent_id* is ``None`` the current agent (from env / registry) is used.
+    """
+    agent_id = agent_id or _current_agent_id()
+    jobs_file = _agent_jobs_file(agent_id)
+    jobs_file.parent.mkdir(parents=True, exist_ok=True)
+    _secure_dir(jobs_file.parent)
+
+    fd, tmp_path = tempfile.mkstemp(dir=str(jobs_file.parent), suffix='.tmp', prefix='.jobs_')
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump({"jobs": jobs, "updated_at": _vulti_now().isoformat()}, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, JOBS_FILE)
-        _secure_file(JOBS_FILE)
+        os.replace(tmp_path, jobs_file)
+        _secure_file(jobs_file)
     except BaseException:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+
+def _migrate_agent_jobs(agent_id: str) -> List[Dict[str, Any]]:
+    """One-time migration: pull jobs for *agent_id* out of the legacy global file
+    and write them into per-agent storage.  Returns the migrated jobs list."""
+    try:
+        with open(JOBS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+    all_jobs = data.get("jobs", [])
+    agent_jobs = [j for j in all_jobs if j.get("agent") == agent_id]
+    if not agent_jobs:
+        return []
+
+    # Write to per-agent path
+    save_jobs(agent_jobs, agent_id=agent_id)
+
+    # Remove from legacy global file
+    remaining = [j for j in all_jobs if j.get("agent") != agent_id]
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=str(JOBS_FILE.parent), suffix='.tmp', prefix='.jobs_')
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump({"jobs": remaining, "updated_at": _vulti_now().isoformat()}, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, JOBS_FILE)
+        _secure_file(JOBS_FILE)
+    except (OSError, IOError):
+        pass  # Migration cleanup is best-effort
+
+    return agent_jobs
 
 
 def create_job(
@@ -394,17 +487,45 @@ def create_job(
     return job
 
 
+def _find_job_agent(job_id: str) -> Optional[str]:
+    """Find which agent owns a job by scanning all agents.  Used by scheduler
+    functions that operate outside a specific agent context."""
+    agents_dir = VULTI_DIR / "agents"
+    if not agents_dir.is_dir():
+        return None
+    for agent_dir in agents_dir.iterdir():
+        if not agent_dir.is_dir():
+            continue
+        jobs_file = agent_dir / "cron" / "jobs.json"
+        if not jobs_file.exists():
+            continue
+        try:
+            with open(jobs_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for j in data.get("jobs", []):
+                    if j.get("id") == job_id:
+                        return agent_dir.name
+        except (json.JSONDecodeError, IOError):
+            continue
+    return None
+
+
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
-    """Get a job by ID."""
+    """Get a job by ID.  Searches the current agent first, then all agents."""
+    # Try current agent first
     jobs = load_jobs()
     for job in jobs:
+        if job["id"] == job_id:
+            return _apply_skill_fields(job)
+    # Fallback: search all agents (needed by scheduler / cross-agent calls)
+    for job in load_all_jobs():
         if job["id"] == job_id:
             return _apply_skill_fields(job)
     return None
 
 
 def list_jobs(include_disabled: bool = False) -> List[Dict[str, Any]]:
-    """List all jobs, optionally including disabled ones."""
+    """List jobs for the current agent, optionally including disabled ones."""
     jobs = [_apply_skill_fields(j) for j in load_jobs()]
     if not include_disabled:
         jobs = [j for j in jobs if j.get("enabled", True)]
@@ -413,7 +534,9 @@ def list_jobs(include_disabled: bool = False) -> List[Dict[str, Any]]:
 
 def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update a job by ID, refreshing derived schedule fields when needed."""
-    jobs = load_jobs()
+    # Find which agent owns this job
+    agent_id = _find_job_agent(job_id) or _current_agent_id()
+    jobs = load_jobs(agent_id)
     for i, job in enumerate(jobs):
         if job["id"] != job_id:
             continue
@@ -439,7 +562,7 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
             updated["next_run_at"] = compute_next_run(updated["schedule"])
 
         jobs[i] = updated
-        save_jobs(jobs)
+        save_jobs(jobs, agent_id)
         return _apply_skill_fields(jobs[i])
     return None
 
@@ -495,11 +618,12 @@ def trigger_job(job_id: str) -> Optional[Dict[str, Any]]:
 
 def remove_job(job_id: str) -> bool:
     """Remove a job by ID."""
-    jobs = load_jobs()
+    agent_id = _find_job_agent(job_id) or _current_agent_id()
+    jobs = load_jobs(agent_id)
     original_len = len(jobs)
     jobs = [j for j in jobs if j["id"] != job_id]
     if len(jobs) < original_len:
-        save_jobs(jobs)
+        save_jobs(jobs, agent_id)
         return True
     return False
 
@@ -507,31 +631,34 @@ def remove_job(job_id: str) -> bool:
 def mark_job_run(job_id: str, success: bool, error: Optional[str] = None):
     """
     Mark a job as having been run.
-    
+
     Updates last_run_at, last_status, increments completed count,
     computes next_run_at, and auto-deletes if repeat limit reached.
     """
-    jobs = load_jobs()
+    agent_id = _find_job_agent(job_id)
+    if not agent_id:
+        return
+    jobs = load_jobs(agent_id)
     for i, job in enumerate(jobs):
         if job["id"] == job_id:
             now = _vulti_now().isoformat()
             job["last_run_at"] = now
             job["last_status"] = "ok" if success else "error"
             job["last_error"] = error if not success else None
-            
+
             # Increment completed count
             if job.get("repeat"):
                 job["repeat"]["completed"] = job["repeat"].get("completed", 0) + 1
-                
+
                 # Check if we've hit the repeat limit
                 times = job["repeat"].get("times")
                 completed = job["repeat"]["completed"]
                 if times is not None and completed >= times:
                     # Remove the job (limit reached)
                     jobs.pop(i)
-                    save_jobs(jobs)
+                    save_jobs(jobs, agent_id)
                     return
-            
+
             # Compute next run
             job["next_run_at"] = compute_next_run(job["schedule"], now)
 
@@ -542,14 +669,12 @@ def mark_job_run(job_id: str, success: bool, error: Optional[str] = None):
             elif job.get("state") != "paused":
                 job["state"] = "scheduled"
 
-            save_jobs(jobs)
+            save_jobs(jobs, agent_id)
             return
-    
-    save_jobs(jobs)
 
 
 def get_due_jobs() -> List[Dict[str, Any]]:
-    """Get all jobs that are due to run now.
+    """Get all jobs across all agents that are due to run now.
 
     For recurring jobs (cron/interval), if the scheduled time is stale
     (more than one period in the past, e.g. because the gateway was down),
@@ -557,12 +682,12 @@ def get_due_jobs() -> List[Dict[str, Any]]:
     immediately.  This prevents a burst of missed jobs on gateway restart.
     """
     now = _vulti_now()
-    jobs = [_apply_skill_fields(j) for j in load_jobs()]
-    raw_jobs = load_jobs()  # For saving updates
+    all_jobs = [_apply_skill_fields(j) for j in load_all_jobs()]
     due = []
-    needs_save = False
+    # Track which agents need saves for fast-forward updates
+    dirty_agents: dict[str, bool] = {}
 
-    for job in jobs:
+    for job in all_jobs:
         if not job.get("enabled", True):
             continue
 
@@ -579,8 +704,6 @@ def get_due_jobs() -> List[Dict[str, Any]]:
             # (gateway was down and missed the window). Fast-forward to
             # the next future occurrence instead of firing a stale run.
             if kind in ("cron", "interval") and (now - next_run_dt).total_seconds() > 120:
-                # More than 2 minutes late — this is a missed run, not a current one.
-                # Recompute next_run_at to the next future occurrence.
                 new_next = compute_next_run(schedule, now.isoformat())
                 if new_next:
                     logger.info(
@@ -590,26 +713,25 @@ def get_due_jobs() -> List[Dict[str, Any]]:
                         next_run,
                         new_next,
                     )
-                    # Update the job in storage
-                    for rj in raw_jobs:
-                        if rj["id"] == job["id"]:
-                            rj["next_run_at"] = new_next
-                            needs_save = True
-                            break
+                    job["next_run_at"] = new_next
+                    agent = job.get("agent") or _current_agent_id()
+                    dirty_agents[agent] = True
                     continue  # Skip this run
 
             due.append(job)
 
-    if needs_save:
-        save_jobs(raw_jobs)
+    # Persist fast-forward updates per-agent
+    for agent in dirty_agents:
+        agent_jobs = [j for j in all_jobs if (j.get("agent") or _current_agent_id()) == agent]
+        save_jobs(agent_jobs, agent)
 
     return due
 
 
 def save_job_output(job_id: str, output: str):
-    """Save job output to file."""
-    ensure_dirs()
-    job_output_dir = OUTPUT_DIR / job_id
+    """Save job output to the owning agent's output directory."""
+    agent_id = _find_job_agent(job_id) or _current_agent_id()
+    job_output_dir = _agent_output_dir(agent_id) / job_id
     job_output_dir.mkdir(parents=True, exist_ok=True)
     _secure_dir(job_output_dir)
     

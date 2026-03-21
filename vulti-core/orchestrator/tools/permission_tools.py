@@ -9,7 +9,14 @@ when they discover they don't have access to a connection they need.
 import json
 import os
 
-from orchestrator.permissions import request_permission, list_pending
+from orchestrator.permissions import (
+    add_allowed_connection,
+    get_allowed_connections,
+    list_pending,
+    remove_allowed_connection,
+    request_permission,
+    set_allowed_connections,
+)
 
 
 def request_connection(args, **kw):
@@ -35,7 +42,7 @@ def request_connection(args, **kw):
             })
 
         # Check if already allowed
-        allowed = registry._get_agent_allowed(agent_id)
+        allowed = get_allowed_connections(agent_id)
         if connection_name in allowed:
             return json.dumps({
                 "success": True,
@@ -133,11 +140,9 @@ def manage_own_connections(args, **kw):
     try:
         from vulti_cli.config import get_vulti_home
         from vulti_cli.connection_registry import ConnectionRegistry
-        from vulti_cli.agent_registry import AgentRegistry
 
         vulti_home = get_vulti_home()
         creg = ConnectionRegistry(vulti_home)
-        areg = AgentRegistry(vulti_home)
 
         # Validate connections exist
         all_conns = {c.name for c in creg.list_all()}
@@ -148,11 +153,7 @@ def manage_own_connections(args, **kw):
                 "error": f"Unknown connections: {', '.join(invalid)}",
             })
 
-        meta = areg.get_agent(agent_id)
-        if meta is None:
-            return json.dumps({"success": False, "error": f"Agent '{agent_id}' not found"})
-
-        current = set(meta.allowed_connections)
+        current = set(get_allowed_connections(agent_id))
 
         if action == "add":
             current.update(connection_names)
@@ -161,7 +162,7 @@ def manage_own_connections(args, **kw):
         else:
             return json.dumps({"success": False, "error": f"Unknown action: {action}"})
 
-        areg.update_agent(agent_id, allowed_connections=sorted(current))
+        set_allowed_connections(agent_id, sorted(current))
 
         return json.dumps({
             "success": True,

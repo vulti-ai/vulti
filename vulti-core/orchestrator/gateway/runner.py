@@ -73,8 +73,9 @@ class VultiGatewayRunner:
         source = event.source
         platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
 
-        # If the adapter already resolved a target agent, use it
-        target_agent = getattr(event, "target_agent_id", "")
+        # If the adapter already resolved a target agent, use it.
+        # Matrix adapter sets target_agent_id; web adapter sets _agent_id.
+        target_agent = getattr(event, "target_agent_id", "") or getattr(event, "_agent_id", "")
         if target_agent:
             agent_id = target_agent
             clean_text = event.text or ""

@@ -12,6 +12,11 @@ from typing import Optional
 from vulti_cli.config import get_vulti_home, get_connections_path
 from vulti_cli.connection_registry import ConnectionEntry, ConnectionRegistry
 from vulti_cli.agent_registry import AgentRegistry
+from orchestrator.permissions import (
+    add_allowed_connection,
+    get_allowed_connections,
+    remove_allowed_connection,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +79,7 @@ def cmd_list() -> None:
         tag_part = f" ({tags_str})" if tags_str else ""
 
         # Which agents have this connection allowed?
-        users = [a.id for a in agents if conn.name in a.allowed_connections]
+        users = [a.id for a in agents if conn.name in get_allowed_connections(a.id)]
         users_str = ", ".join(users) if users else "none"
 
         print(f"  {conn.name} [{conn.type}]{tag_part} {status}")
@@ -166,7 +171,7 @@ def cmd_remove(name: str) -> None:
 
     # Warn if agents reference it
     agent_reg = _agent_registry()
-    users = [a.id for a in agent_reg.list_agents() if name in a.allowed_connections]
+    users = [a.id for a in agent_reg.list_agents() if name in get_allowed_connections(a.id)]
     if users:
         _print_warning(f"Warning: used by agents: {', '.join(users)}")
         confirm = input("  Remove anyway? [y/N]: ").strip().lower()
@@ -175,10 +180,7 @@ def cmd_remove(name: str) -> None:
             return
         # Clean up allow lists
         for agent_id in users:
-            meta = agent_reg.get_agent(agent_id)
-            if meta and name in meta.allowed_connections:
-                new_list = [c for c in meta.allowed_connections if c != name]
-                agent_reg.update_agent(agent_id, allowed_connections=new_list)
+            remove_allowed_connection(agent_id, name)
 
     reg.remove(name)
     _print_success(f"Connection '{name}' removed.")
@@ -220,12 +222,12 @@ def cmd_allow(agent_id: str, conn_name: str) -> None:
         _print_error(f"Agent '{agent_id}' not found.")
         return
 
-    if conn_name in meta.allowed_connections:
+    allowed = get_allowed_connections(agent_id)
+    if conn_name in allowed:
         _print_info(f"Agent '{agent_id}' already has access to '{conn_name}'.")
         return
 
-    new_list = list(meta.allowed_connections) + [conn_name]
-    agent_reg.update_agent(agent_id, allowed_connections=new_list)
+    add_allowed_connection(agent_id, conn_name)
     _print_success(f"Agent '{agent_id}' can now use connection '{conn_name}'.")
 
 
@@ -237,12 +239,12 @@ def cmd_revoke(agent_id: str, conn_name: str) -> None:
         _print_error(f"Agent '{agent_id}' not found.")
         return
 
-    if conn_name not in meta.allowed_connections:
+    allowed = get_allowed_connections(agent_id)
+    if conn_name not in allowed:
         _print_info(f"Agent '{agent_id}' doesn't have access to '{conn_name}'.")
         return
 
-    new_list = [c for c in meta.allowed_connections if c != conn_name]
-    agent_reg.update_agent(agent_id, allowed_connections=new_list)
+    remove_allowed_connection(agent_id, conn_name)
     _print_success(f"Revoked '{conn_name}' from agent '{agent_id}'.")
 
 
@@ -271,9 +273,10 @@ def cmd_audit() -> None:
     print("  " + "-" * (len(header) - 2))
 
     for agent in agents:
+        allowed = set(get_allowed_connections(agent.id))
         row = f"  {agent.id:<{max_agent_len}}"
         for cn in conn_names:
-            if cn in agent.allowed_connections:
+            if cn in allowed:
                 row += f" {'yes':>12}"
             else:
                 row += f" {'-':>12}"

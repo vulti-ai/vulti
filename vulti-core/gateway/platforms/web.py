@@ -228,6 +228,18 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return adapter._get_history(session_id)
 
+        @app.post("/api/sessions/{session_id}/generate-title")
+        async def generate_session_title(session_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            title = await adapter._generate_session_title(session_id)
+            if not title:
+                return {"ok": False, "error": "Could not generate title"}
+            meta = adapter._get_session_meta(session_id)
+            if meta:
+                meta["name"] = title
+                adapter._save_session_meta(session_id, meta)
+            return {"ok": True, "title": title}
+
         # --- Agent endpoints ---
 
         @app.get("/api/agents")
@@ -1509,6 +1521,77 @@ class WebAdapter(BasePlatformAdapter):
                     pass
         return messages
 
+    async def _generate_session_title(self, session_id: str) -> str | None:
+        """Ask a fast LLM to name the conversation based on its first messages."""
+        history = self._get_history(session_id)
+        if not history:
+            return None
+
+        # Take the first 4 messages
+        first_msgs = history[:4]
+        transcript = "\n".join(
+            f"{m.get('role', 'user')}: {m.get('content', '')[:200]}"
+            for m in first_msgs
+            if m.get("content")
+        )
+        if not transcript.strip():
+            return None
+
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            return None
+
+        try:
+            import urllib.request
+            import json as _json
+
+            body = _json.dumps({
+                "model": "google/gemini-2.0-flash-001",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Generate a short conversation title (max 50 chars). "
+                            "Return ONLY the title text, no quotes, no explanation."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Name this conversation:\n\n{transcript}",
+                    },
+                ],
+                "max_tokens": 30,
+            }).encode()
+
+            req = urllib.request.Request(
+                "https://openrouter.ai/api/v1/chat/completions",
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://vulti.ai",
+                },
+            )
+
+            import asyncio
+            loop = asyncio.get_running_loop()
+            def _fetch():
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return _json.loads(resp.read())
+
+            result = await loop.run_in_executor(None, _fetch)
+            title = (
+                result.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+                .strip('"\'')
+            )
+            return title[:60] if title else None
+        except Exception as e:
+            logger.debug("Session title generation failed: %s", e)
+            return None
+
     def _append_history(self, session_id: str, message: dict):
         """Append a message to session history."""
         d = self._get_data_dir() / "history"
@@ -1531,6 +1614,14 @@ class WebAdapter(BasePlatformAdapter):
         self._agent_registry._data = None
         return self._agent_registry
 
+    def _get_agent_allowed_connections(self, agent_id: str) -> list:
+        """Read allowed connections from the agent's per-agent permissions.json."""
+        try:
+            from orchestrator.permissions import get_allowed_connections
+            return get_allowed_connections(agent_id)
+        except Exception:
+            return []
+
     def _get_agents(self) -> list:
         """List all registered agents."""
         try:
@@ -1552,7 +1643,7 @@ class WebAdapter(BasePlatformAdapter):
                 "description": a.description,
                 "createdAt": a.created_at,
                 "createdFrom": a.created_from,
-                "allowed_connections": a.allowed_connections or [],
+                "allowed_connections": self._get_agent_allowed_connections(a.id),
             } for a in agents]
         except Exception as e:
             logger.error("[web] Failed to list agents: %s", e)
@@ -1574,7 +1665,7 @@ class WebAdapter(BasePlatformAdapter):
             "description": agent.description,
             "createdAt": agent.created_at,
             "createdFrom": agent.created_from,
-            "allowed_connections": agent.allowed_connections or [],
+            "allowed_connections": self._get_agent_allowed_connections(agent.id),
         }
 
     def _create_agent(self, data: dict) -> dict:
@@ -1656,13 +1747,17 @@ class WebAdapter(BasePlatformAdapter):
             if field in data:
                 updates[field] = data[field]
 
-        # Handle allowed_connections — can come as list or comma-separated string
+        # Handle allowed_connections — write to per-agent permissions.json
         if "allowedConnections" in data or "allowed_connections" in data:
             raw = data.get("allowedConnections", data.get("allowed_connections", []))
             if isinstance(raw, str):
-                updates["allowed_connections"] = [c.strip() for c in raw.split(",") if c.strip()]
+                new_conns = [c.strip() for c in raw.split(",") if c.strip()]
             elif isinstance(raw, list):
-                updates["allowed_connections"] = raw
+                new_conns = raw
+            else:
+                new_conns = []
+            from orchestrator.permissions import set_allowed_connections
+            set_allowed_connections(agent_id, new_conns)
 
         try:
             meta = registry.update_agent(agent_id, **updates) if updates else registry.get_agent(agent_id)
@@ -2067,7 +2162,7 @@ class WebAdapter(BasePlatformAdapter):
                     jobs = data.get("jobs", [])
                     result = []
                     for j in jobs:
-                        sched = j.get("schedule", "")
+                        sched = j.get("schedule_display") or j.get("schedule", "")
                         if isinstance(sched, dict):
                             sched = sched.get("display", sched.get("expr", str(sched)))
                         result.append({
@@ -2076,6 +2171,7 @@ class WebAdapter(BasePlatformAdapter):
                             "prompt": j.get("prompt", ""),
                             "schedule": sched,
                             "status": j.get("state", "active" if j.get("enabled", True) else "paused"),
+                            "enabled": j.get("enabled", True),
                             "last_run": j.get("last_run_at"),
                             "last_output": j.get("last_output"),
                         })
@@ -2140,11 +2236,8 @@ class WebAdapter(BasePlatformAdapter):
     def _get_rules(self, agent_id: str = None) -> list:
         """List rules, optionally filtered by agent."""
         try:
-            from rules.rules import list_rules
-            all_rules = list_rules(include_disabled=True)
-            rules = all_rules
-            if agent_id:
-                rules = [r for r in all_rules if r.get("agent", "default") == agent_id]
+            from rules.rules import load_rules, load_all_rules
+            rules = load_rules(agent_id) if agent_id else load_all_rules()
             return [{
                 "id": r.get("id", ""),
                 "name": r.get("name", ""),
@@ -3232,7 +3325,7 @@ class WebAdapter(BasePlatformAdapter):
 
         # 2. Connections — only show allowed connections for this agent
         all_connections = self._list_connections()
-        allowed = set(meta.allowed_connections) if meta and meta.allowed_connections else set()
+        allowed = set(self._get_agent_allowed_connections(agent_id))
         conn_entries = []
         for c in all_connections:
             if c["name"] in allowed:

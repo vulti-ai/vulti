@@ -185,6 +185,7 @@ def session_search(
     limit: int = 3,
     db=None,
     current_session_id: str = None,
+    agent_id: str = None,
 ) -> str:
     """
     Search past sessions and return focused summaries of matching conversations.
@@ -207,10 +208,11 @@ def session_search(
         if role_filter and role_filter.strip():
             role_list = [r.strip() for r in role_filter.split(",") if r.strip()]
 
-        # FTS5 search -- get matches ranked by relevance
+        # FTS5 search -- get matches ranked by relevance, scoped to this agent
         raw_results = db.search_messages(
             query=query,
             role_filter=role_list,
+            agent_id=agent_id,
             limit=50,  # Get more matches to find unique sessions
             offset=0,
         )

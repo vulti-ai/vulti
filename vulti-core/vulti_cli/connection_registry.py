@@ -168,14 +168,9 @@ class ConnectionRegistry:
     # -- Agent-scoped queries -----------------------------------------------
 
     def _get_agent_allowed(self, agent_id: str) -> list[str]:
-        """Return the allow list for an agent from the agent registry."""
-        from vulti_cli.agent_registry import AgentRegistry
-
-        reg = AgentRegistry(self._vulti_home)
-        meta = reg.get_agent(agent_id)
-        if meta is None:
-            return []
-        return meta.allowed_connections
+        """Return the allow list for an agent from its per-agent permissions.json."""
+        from orchestrator.permissions import get_allowed_connections
+        return get_allowed_connections(agent_id)
 
     def get_for_agent(self, agent_id: str) -> List[ConnectionEntry]:
         """Return only the connections this agent is allowed to use."""

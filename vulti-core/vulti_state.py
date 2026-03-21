@@ -630,6 +630,7 @@ class SessionDB:
         query: str,
         source_filter: List[str] = None,
         role_filter: List[str] = None,
+        agent_id: str = None,
         limit: int = 20,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
@@ -641,6 +642,8 @@ class SessionDB:
           - Phrases: '"exact phrase"'
           - Boolean: "docker OR kubernetes", "python NOT java"
           - Prefix: "deploy*"
+
+        When *agent_id* is provided, results are scoped to that agent's sessions only.
 
         Returns matching messages with session metadata, content snippet,
         and surrounding context (1 message before and after the match).
@@ -658,6 +661,10 @@ class SessionDB:
         # Build WHERE clauses dynamically
         where_clauses = ["messages_fts MATCH ?"]
         params: list = [query]
+
+        if agent_id:
+            where_clauses.append("s.agent_id = ?")
+            params.append(agent_id)
 
         source_placeholders = ",".join("?" for _ in source_filter)
         where_clauses.append(f"s.source IN ({source_placeholders})")

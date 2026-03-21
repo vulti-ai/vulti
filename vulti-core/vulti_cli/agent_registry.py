@@ -71,7 +71,6 @@ class AgentMeta:
     created_from: Optional[str] = None
     avatar: Optional[str] = None
     description: str = ""
-    allowed_connections: list[str] = field(default_factory=list)
     home_channels: dict = field(default_factory=dict)  # {"matrix": {"chat_id": "!...", "name": "..."}, ...}
 
     def to_dict(self) -> dict:
@@ -177,6 +176,18 @@ class AgentRegistry:
         for subdir in ("memories", "cron", "sessions", "skills"):
             (agent_home / subdir).mkdir(parents=True, exist_ok=True)
 
+        # Seed empty permissions file
+        perm_path = self.agent_permissions_path(agent_id)
+        if not perm_path.exists():
+            perm_path.write_text(
+                json.dumps({"allowed_connections": [], "pending_requests": []}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            try:
+                os.chmod(perm_path, 0o600)
+            except OSError:
+                pass
+
         if clone_from:
             self._clone_from(clone_from, agent_id)
         else:
@@ -222,7 +233,7 @@ class AgentRegistry:
         if agent_id not in data.get("agents", {}):
             raise ValueError(f"Agent '{agent_id}' not found")
 
-        allowed_fields = {"name", "role", "status", "avatar", "description", "allowed_connections", "home_channels"}
+        allowed_fields = {"name", "role", "status", "avatar", "description", "home_channels"}
         for key in updates:
             if key not in allowed_fields:
                 raise ValueError(f"Cannot update field '{key}' via registry")
@@ -268,6 +279,9 @@ class AgentRegistry:
 
     def agent_skills_dir(self, agent_id: str) -> Path:
         return self.agent_home(agent_id) / "skills"
+
+    def agent_permissions_path(self, agent_id: str) -> Path:
+        return self.agent_home(agent_id) / "permissions.json"
 
     def agent_gateway_path(self, agent_id: str) -> Path:
         return self.agent_home(agent_id) / "gateway.json"
@@ -391,6 +405,9 @@ class AgentRegistry:
 
         # Ensure janitor exists (covers migrations and upgrades)
         self._seed_janitor()
+
+        # Migrate allowed_connections from registry to per-agent permissions.json
+        self._migrate_permissions()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -555,3 +572,76 @@ class AgentRegistry:
             json.dumps({"jobs": jobs}, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+
+    def _migrate_permissions(self) -> None:
+        """Migrate allowed_connections from registry.json to per-agent permissions.json.
+
+        One-time migration: if any agent entry in registry.json still has
+        ``allowed_connections``, move it into the agent's own permissions file
+        and strip the field from the registry.
+        """
+        data = self._load()
+        agents = data.get("agents", {})
+        dirty = False
+
+        # Also migrate old global pending.json
+        old_pending_path = self._home / "permissions" / "pending.json"
+        old_pending = []
+        if old_pending_path.exists():
+            try:
+                with open(old_pending_path, encoding="utf-8") as f:
+                    old_pending = json.load(f)
+            except Exception:
+                old_pending = []
+
+        for agent_id, agent_data in agents.items():
+            old_allowed = agent_data.get("allowed_connections")
+            if old_allowed is None and not old_pending:
+                continue
+
+            perm_path = self.agent_permissions_path(agent_id)
+            if perm_path.exists():
+                # Already migrated — just clean registry field
+                if "allowed_connections" in agent_data:
+                    del agent_data["allowed_connections"]
+                    dirty = True
+                continue
+
+            # Collect pending requests for this agent
+            agent_pending = [
+                {k: v for k, v in req.items() if k != "agent_id"}
+                for req in old_pending
+                if req.get("agent_id") == agent_id
+            ]
+
+            perm_data = {
+                "allowed_connections": sorted(old_allowed or []),
+                "pending_requests": agent_pending,
+            }
+
+            perm_path.parent.mkdir(parents=True, exist_ok=True)
+            perm_path.write_text(
+                json.dumps(perm_data, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            try:
+                os.chmod(perm_path, 0o600)
+            except OSError:
+                pass
+
+            if "allowed_connections" in agent_data:
+                del agent_data["allowed_connections"]
+                dirty = True
+
+        if dirty:
+            self._save()
+
+        # Clean up old global pending file
+        if old_pending_path.exists():
+            try:
+                old_pending_path.unlink()
+                old_dir = old_pending_path.parent
+                if old_dir.exists() and not any(old_dir.iterdir()):
+                    old_dir.rmdir()
+            except OSError:
+                pass

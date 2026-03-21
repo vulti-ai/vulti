@@ -126,6 +126,12 @@ actor GatewayClient {
         _ = try await gw.patchRaw(path: "sessions/\(id)", body: ["name": name])
     }
 
+    /// Ask the gateway to generate a title from conversation context.
+    func generateSessionTitle(_ id: String) async throws -> String? {
+        let result = try await gw.postRaw(path: "sessions/\(id)/generate-title", body: [String: String]())
+        return result["title"] as? String
+    }
+
     func deleteSession(_ id: String) async throws {
         try await gw.delete(path: "sessions/\(id)")
     }

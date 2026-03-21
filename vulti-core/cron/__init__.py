@@ -19,6 +19,7 @@ from cron.jobs import (
     create_job,
     get_job,
     list_jobs,
+    load_all_jobs,
     remove_job,
     update_job,
     pause_job,
@@ -30,8 +31,9 @@ from cron.scheduler import tick
 
 __all__ = [
     "create_job",
-    "get_job", 
+    "get_job",
     "list_jobs",
+    "load_all_jobs",
     "remove_job",
     "update_job",
     "pause_job",

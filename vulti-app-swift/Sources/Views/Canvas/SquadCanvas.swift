@@ -198,6 +198,13 @@ struct SquadCanvas: View {
         )
     }
 
+    /// Tidy: clear all manual overrides so nodes snap back to computed hierarchy layout, then fit.
+    private func tidyCanvas(layout: LayoutResult, size: CGSize) {
+        nodeOverrides.removeAll()
+        dragNodeStart.removeAll()
+        fitView(layout: layout, size: size)
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -215,6 +222,8 @@ struct SquadCanvas: View {
                 canvasContent(layout: layout, size: geo.size)
                     .scaleEffect(scale)
                     .offset(x: offset.x, y: offset.y)
+
+
             }
             .gesture(
                 DragGesture()
@@ -253,7 +262,7 @@ struct SquadCanvas: View {
             .onChange(of: app.panelMode) { oldVal, newVal in
                 if oldVal != nil && newVal == nil {
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        fitView(layout: layout, size: geo.size)
+                        tidyCanvas(layout: layout, size: geo.size)
                     }
                 }
             }

@@ -49,12 +49,9 @@ struct ChatView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 8) {
-                            ForEach(ws.messages) { msg in
-                                // Hide introspect trigger messages
-                                if msg.content != "[status check]" {
-                                    MessageBubble(message: msg)
-                                        .id(msg.id)
-                                }
+                            ForEach(visibleMessages) { msg in
+                                MessageBubble(message: msg)
+                                    .id(msg.id)
                             }
 
                             // Streaming content (replace semantics)
@@ -82,17 +79,29 @@ struct ChatView: View {
                                 }
                                 .id("typing")
                             }
+
+                            // Invisible bottom anchor for reliable scroll-to-bottom
+                            Color.clear
+                                .frame(height: 1)
+                                .id("bottom-anchor")
                         }
                         .padding(12)
                     }
                     .onChange(of: ws.messages.count) {
                         withAnimation {
-                            proxy.scrollTo(ws.messages.last?.id ?? "streaming", anchor: .bottom)
+                            proxy.scrollTo("bottom-anchor", anchor: .bottom)
                         }
                         autoRenameIfNeeded()
                     }
                     .onChange(of: ws.streamingContent) {
-                        proxy.scrollTo("streaming", anchor: .bottom)
+                        proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                    }
+                    .onChange(of: ws.isTyping) {
+                        if ws.isTyping {
+                            withAnimation {
+                                proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                            }
+                        }
                     }
                 }
             }
@@ -317,58 +326,17 @@ struct ChatView: View {
 
     // MARK: - Helpers
 
-    /// Auto-rename session based on conversation content.
-    /// Renames after the 1st assistant reply and again around the 6th message.
+    /// Auto-rename session after 4 messages by asking the agent to name the conversation.
+    /// The initial name (first 60 chars of user message) is set at session creation.
     private func autoRenameIfNeeded() {
-        guard let sid = sessionId else { return }
-
-        let assistantMessages = ws.messages.filter { $0.role == "assistant" }
-        let totalMessages = ws.messages.count
-
-        // First rename: when we get the first assistant reply
-        // Second rename: after ~6 total messages for a better summary
-        let shouldRename: Bool
-        if renameCount == 0 && !assistantMessages.isEmpty {
-            shouldRename = true
-        } else if renameCount == 1 && totalMessages >= 6 {
-            shouldRename = true
-        } else {
-            shouldRename = false
-        }
-        guard shouldRename else { return }
-
-        // Build title from first user message + assistant context
-        let title: String
-        if renameCount == 0 {
-            // First rename: use the user's first message (what they asked)
-            if let firstUser = ws.messages.first(where: { $0.role == "user" }),
-               let content = firstUser.content, !content.isEmpty {
-                let cleaned = content
-                    .components(separatedBy: .newlines).first ?? content
-                title = String(cleaned.trimmingCharacters(in: .whitespaces).prefix(50))
-            } else {
-                return
-            }
-        } else {
-            // Second rename: use the latest assistant reply's first line for evolved context
-            guard let latest = assistantMessages.last,
-                  let content = latest.content, !content.isEmpty else { return }
-            let firstLine = content
-                .components(separatedBy: .newlines)
-                .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
-                ?? content
-            let cleaned = firstLine
-                .replacingOccurrences(of: #"^[#*>\-\s]+"#, with: "", options: .regularExpression)
-                .trimmingCharacters(in: .whitespaces)
-            title = String(cleaned.prefix(50))
-        }
-
-        guard !title.isEmpty else { return }
+        guard let sid = sessionId, renameCount == 0 else { return }
+        guard ws.messages.count >= 4 else { return }
 
         renameCount += 1
         Task {
-            try? await app.client.renameSession(sid, name: title)
-            loadSessions()
+            if let title = try? await app.client.generateSessionTitle(sid) {
+                loadSessions()
+            }
         }
     }
 

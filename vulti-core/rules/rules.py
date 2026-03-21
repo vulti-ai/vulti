@@ -39,7 +39,12 @@ from vulti_time import now as _vulti_now
 
 VULTI_DIR = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
 RULES_DIR = VULTI_DIR / "rules"
-RULES_FILE = RULES_DIR / "rules.json"
+RULES_FILE = RULES_DIR / "rules.json"  # Legacy global path
+
+
+def _agent_rules_file(agent_id: str) -> Path:
+    """Return the per-agent rules file path."""
+    return VULTI_DIR / "agents" / agent_id / "rules" / "rules.json"
 
 
 def _secure_dir(path: Path):
@@ -69,37 +74,119 @@ def ensure_dirs():
 # Rule CRUD Operations
 # =============================================================================
 
-def load_rules() -> List[Dict[str, Any]]:
-    """Load all rules from storage."""
-    ensure_dirs()
-    if not RULES_FILE.exists():
+def load_rules(agent_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Load rules for a specific agent from per-agent storage.
+
+    If *agent_id* is ``None`` the current agent (from env / registry) is used.
+    """
+    agent_id = agent_id or _current_agent_id()
+    rules_file = _agent_rules_file(agent_id)
+    if not rules_file.exists():
+        # Migration: check legacy global file for this agent's rules
+        if RULES_FILE.exists():
+            return _migrate_agent_rules(agent_id)
         return []
 
     try:
-        with open(RULES_FILE, 'r', encoding='utf-8') as f:
+        with open(rules_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
             return data.get("rules", [])
     except (json.JSONDecodeError, IOError):
         return []
 
 
-def save_rules(rules: List[Dict[str, Any]]):
-    """Save all rules to storage."""
-    ensure_dirs()
-    fd, tmp_path = tempfile.mkstemp(dir=str(RULES_FILE.parent), suffix='.tmp', prefix='.rules_')
+def load_all_rules() -> List[Dict[str, Any]]:
+    """Load rules from ALL agents."""
+    agents_dir = VULTI_DIR / "agents"
+    all_rules: List[Dict[str, Any]] = []
+    if not agents_dir.is_dir():
+        return all_rules
+    for agent_dir in agents_dir.iterdir():
+        if not agent_dir.is_dir():
+            continue
+        rules_file = agent_dir / "rules" / "rules.json"
+        if not rules_file.exists():
+            continue
+        try:
+            with open(rules_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for r in data.get("rules", []):
+                    r.setdefault("agent", agent_dir.name)
+                    all_rules.append(r)
+        except (json.JSONDecodeError, IOError):
+            continue
+
+    # Also check legacy global file for un-migrated rules
+    if RULES_FILE.exists():
+        try:
+            with open(RULES_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                migrated_ids = {r["id"] for r in all_rules}
+                for r in data.get("rules", []):
+                    if r["id"] not in migrated_ids:
+                        all_rules.append(r)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    return all_rules
+
+
+def save_rules(rules: List[Dict[str, Any]], agent_id: Optional[str] = None):
+    """Save rules to per-agent storage.
+
+    If *agent_id* is ``None`` the current agent (from env / registry) is used.
+    """
+    agent_id = agent_id or _current_agent_id()
+    rules_file = _agent_rules_file(agent_id)
+    rules_file.parent.mkdir(parents=True, exist_ok=True)
+    _secure_dir(rules_file.parent)
+
+    fd, tmp_path = tempfile.mkstemp(dir=str(rules_file.parent), suffix='.tmp', prefix='.rules_')
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump({"rules": rules, "updated_at": _vulti_now().isoformat()}, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, RULES_FILE)
-        _secure_file(RULES_FILE)
+        os.replace(tmp_path, rules_file)
+        _secure_file(rules_file)
     except BaseException:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+
+def _migrate_agent_rules(agent_id: str) -> List[Dict[str, Any]]:
+    """One-time migration: pull rules for *agent_id* out of the legacy global file."""
+    try:
+        with open(RULES_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+    all_rules = data.get("rules", [])
+    agent_rules = [r for r in all_rules if r.get("agent") == agent_id]
+    if not agent_rules:
+        return []
+
+    # Write to per-agent path
+    save_rules(agent_rules, agent_id=agent_id)
+
+    # Remove from legacy global file
+    remaining = [r for r in all_rules if r.get("agent") != agent_id]
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=str(RULES_FILE.parent), suffix='.tmp', prefix='.rules_')
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump({"rules": remaining, "updated_at": _vulti_now().isoformat()}, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, RULES_FILE)
+        _secure_file(RULES_FILE)
+    except (OSError, IOError):
+        pass
+
+    return agent_rules
 
 
 def create_rule(
@@ -154,17 +241,42 @@ def create_rule(
     return rule
 
 
+def _find_rule_agent(rule_id: str) -> Optional[str]:
+    """Find which agent owns a rule by scanning all agents."""
+    agents_dir = VULTI_DIR / "agents"
+    if not agents_dir.is_dir():
+        return None
+    for agent_dir in agents_dir.iterdir():
+        if not agent_dir.is_dir():
+            continue
+        rules_file = agent_dir / "rules" / "rules.json"
+        if not rules_file.exists():
+            continue
+        try:
+            with open(rules_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for r in data.get("rules", []):
+                    if r.get("id") == rule_id:
+                        return agent_dir.name
+        except (json.JSONDecodeError, IOError):
+            continue
+    return None
+
+
 def get_rule(rule_id: str) -> Optional[Dict[str, Any]]:
-    """Get a rule by ID."""
+    """Get a rule by ID.  Searches the current agent first, then all agents."""
     rules = load_rules()
     for rule in rules:
+        if rule["id"] == rule_id:
+            return rule
+    for rule in load_all_rules():
         if rule["id"] == rule_id:
             return rule
     return None
 
 
 def list_rules(include_disabled: bool = False) -> List[Dict[str, Any]]:
-    """List all rules, optionally including disabled ones."""
+    """List rules for the current agent, optionally including disabled ones."""
     rules = load_rules()
     if not include_disabled:
         rules = [r for r in rules if r.get("enabled", True)]
@@ -173,14 +285,15 @@ def list_rules(include_disabled: bool = False) -> List[Dict[str, Any]]:
 
 def update_rule(rule_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update a rule by ID."""
-    rules = load_rules()
+    agent_id = _find_rule_agent(rule_id) or _current_agent_id()
+    rules = load_rules(agent_id)
     for i, rule in enumerate(rules):
         if rule["id"] != rule_id:
             continue
 
         updated = {**rule, **updates}
         rules[i] = updated
-        save_rules(rules)
+        save_rules(rules, agent_id)
         return rules[i]
     return None
 
@@ -197,11 +310,12 @@ def disable_rule(rule_id: str) -> Optional[Dict[str, Any]]:
 
 def remove_rule(rule_id: str) -> bool:
     """Remove a rule by ID."""
-    rules = load_rules()
+    agent_id = _find_rule_agent(rule_id) or _current_agent_id()
+    rules = load_rules(agent_id)
     original_len = len(rules)
     rules = [r for r in rules if r["id"] != rule_id]
     if len(rules) < original_len:
-        save_rules(rules)
+        save_rules(rules, agent_id)
         return True
     return False
 
@@ -213,7 +327,8 @@ def record_trigger(rule_id: str) -> Optional[Dict[str, Any]]:
     Updates last_triggered_at, increments trigger_count,
     and auto-disables if max_triggers is reached.
     """
-    rules = load_rules()
+    agent_id = _find_rule_agent(rule_id) or _current_agent_id()
+    rules = load_rules(agent_id)
     for i, rule in enumerate(rules):
         if rule["id"] == rule_id:
             now = _vulti_now().isoformat()
@@ -226,7 +341,7 @@ def record_trigger(rule_id: str) -> Optional[Dict[str, Any]]:
                 rule["enabled"] = False
 
             rules[i] = rule
-            save_rules(rules)
+            save_rules(rules, agent_id)
             return rule
     return None
 
@@ -240,15 +355,11 @@ def get_active_rules(agent_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     now = _vulti_now()
     effective_agent = agent_id or _current_agent_id()
-    rules = load_rules()
+    rules = load_rules(effective_agent)
     active = []
 
     for rule in rules:
         if not rule.get("enabled", True):
-            continue
-
-        # Filter by agent
-        if rule.get("agent", "default") != effective_agent:
             continue
 
         # Check cooldown
