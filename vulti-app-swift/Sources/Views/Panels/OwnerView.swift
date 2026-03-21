@@ -15,6 +15,7 @@ struct OwnerView: View {
     @State private var isCreatingMatrix = false
     @State private var isResettingRooms = false
     @State private var showResetConfirmation = false
+    @State private var isGeneratingAvatar = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -39,11 +40,32 @@ struct OwnerView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("Avatar").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
-                    Text("Set via agent avatar generation or manually")
-                        .font(.system(size: 10))
-                        .foregroundStyle(VultiTheme.inkMuted)
+
+                    Button {
+                        isGeneratingAvatar = true
+                        Task {
+                            try? await app.client.generateOwnerAvatar()
+                            await app.refreshOwner()
+                            avatar = app.ownerInfo?.avatar ?? ""
+                            isGeneratingAvatar = false
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if isGeneratingAvatar {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: "wand.and.stars")
+                                    .font(.system(size: 11))
+                            }
+                            Text(isGeneratingAvatar ? "Generating..." : "Generate Avatar")
+                                .font(.system(size: 11))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(VultiTheme.primary)
+                    .disabled(isGeneratingAvatar || name.isEmpty)
                 }
             }
 
@@ -183,11 +205,20 @@ struct OwnerView: View {
     }
 
     private func save() {
+        let hadAvatar = !avatar.isEmpty
         Task {
             try? await app.client.updateOwner(
                 name: name.isEmpty ? "" : name,
                 about: about.isEmpty ? nil : about
             )
+            await app.refreshOwner()
+            // Auto-generate avatar on first save (when no avatar exists yet)
+            if !hadAvatar && !name.isEmpty {
+                Task {
+                    try? await app.client.generateOwnerAvatar()
+                    await app.refreshOwner()
+                }
+            }
         }
     }
 
@@ -967,25 +998,26 @@ struct CreateAgentView: View {
                                         .textCase(.uppercase)
 
                                     ForEach(provider.models ?? [], id: \.self) { m in
+                                        let modelId = stripProviderPrefix(m)
                                         HStack(spacing: 8) {
-                                            Image(systemName: selectedModel == m ? "circle.inset.filled" : "circle")
+                                            Image(systemName: selectedModel == modelId ? "circle.inset.filled" : "circle")
                                                 .font(.system(size: 13))
-                                                .foregroundStyle(selectedModel == m ? VultiTheme.primary : VultiTheme.inkDim)
-                                            Text(m)
+                                                .foregroundStyle(selectedModel == modelId ? VultiTheme.primary : VultiTheme.inkDim)
+                                            Text(modelId)
                                                 .font(.system(size: 12, design: .monospaced))
-                                                .foregroundStyle(selectedModel == m ? VultiTheme.inkSoft : VultiTheme.inkDim)
+                                                .foregroundStyle(selectedModel == modelId ? VultiTheme.inkSoft : VultiTheme.inkDim)
                                         }
                                         .padding(.vertical, 4)
                                         .padding(.horizontal, 8)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .background(
-                                            selectedModel == m
+                                            selectedModel == modelId
                                                 ? VultiTheme.primary.opacity(0.08)
                                                 : Color.clear,
                                             in: RoundedRectangle(cornerRadius: 6)
                                         )
                                         .contentShape(Rectangle())
-                                        .onTapGesture { selectedModel = m }
+                                        .onTapGesture { selectedModel = modelId }
                                     }
                                 }
                             }
@@ -1092,6 +1124,17 @@ struct CreateAgentView: View {
         }
     }
 
+    /// Strip provider routing prefix (e.g. "openrouter/anthropic/claude-opus-4" → "anthropic/claude-opus-4")
+    private func stripProviderPrefix(_ model: String) -> String {
+        let prefixes = ["openrouter/", "openai/openai/", "anthropic/anthropic/"]
+        for prefix in prefixes {
+            if model.hasPrefix(prefix) {
+                return String(model.dropFirst(prefix.count))
+            }
+        }
+        return model
+    }
+
     private func create() {
         error = nil
         isCreating = true
@@ -1108,7 +1151,7 @@ struct CreateAgentView: View {
                 Task { try? await app.client.onboardAgentToMatrix(agentId: agent.id) }
 
                 await MainActor.run {
-                    app.openOnboarding(agent.id)
+                    app.openAgent(agent.id)
                 }
             } catch {
                 self.error = error.localizedDescription

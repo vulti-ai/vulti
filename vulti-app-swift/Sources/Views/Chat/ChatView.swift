@@ -5,16 +5,18 @@ import SwiftUI
 /// virtual message window, session management.
 struct ChatView: View {
     let agentId: String
-    var channel: String = "main"
-    /// If provided, auto-send this message on first appear when there are no existing messages.
-    var initialMessage: String? = nil
+    /// When true, auto-resumes the latest session or triggers introspection on new sessions.
+    var autoIntrospect: Bool = false
+    /// Optional context label for what the user is viewing in the scratch pad (sent with messages)
+    var viewingContext: String? = nil
     @Environment(AppState.self) private var app
     @State private var ws = WebSocketManager()
     @State private var input = ""
     @State private var sessionId: String?
-    @State private var didSendInitial = false
+    @State private var didAutoIntrospect = false
     @State private var recentSessions: [GatewayClient.SessionResponse] = []
     @State private var isLoadingSessions = false
+    @State private var renameCount = 0  // tracks how many times we've auto-renamed
 
     // Chat context hints per tab (matches original)
     static let tabHints: [String: String] = [
@@ -34,7 +36,8 @@ struct ChatView: View {
             Divider()
 
             // Messages area
-            if ws.messages.isEmpty && !ws.isStreaming {
+            let visibleMessages = ws.messages.filter { $0.content != "[status check]" }
+            if visibleMessages.isEmpty && !ws.isStreaming {
                 Spacer()
                 Text("Start a conversation with \(agentId)")
                     .font(.system(size: 13))
@@ -47,21 +50,17 @@ struct ChatView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 8) {
                             ForEach(ws.messages) { msg in
-                                MessageBubble(message: msg)
-                                    .id(msg.id)
+                                // Hide introspect trigger messages
+                                if msg.content != "[status check]" {
+                                    MessageBubble(message: msg)
+                                        .id(msg.id)
+                                }
                             }
 
                             // Streaming content (replace semantics)
                             if ws.isStreaming && !ws.streamingContent.isEmpty {
                                 HStack(alignment: .top, spacing: 8) {
-                                    ZStack {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(VultiTheme.paperWarm)
-                                            .frame(width: 28, height: 28)
-                                        Image(systemName: "cpu")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(VultiTheme.inkDim)
-                                    }
+                                    ThinkingAvatar()
                                     MarkdownMessageView(
                                         content: ws.streamingContent,
                                         isUser: false
@@ -75,10 +74,13 @@ struct ChatView: View {
                                 .id("streaming")
                             }
 
-                            // Typing indicator (3 bouncing dots)
+                            // Typing indicator — agent avatar with spinning rainbow border
                             if ws.isTyping {
-                                TypingIndicator()
-                                    .id("typing")
+                                HStack {
+                                    ThinkingAvatar()
+                                    Spacer()
+                                }
+                                .id("typing")
                             }
                         }
                         .padding(12)
@@ -87,6 +89,7 @@ struct ChatView: View {
                         withAnimation {
                             proxy.scrollTo(ws.messages.last?.id ?? "streaming", anchor: .bottom)
                         }
+                        autoRenameIfNeeded()
                     }
                     .onChange(of: ws.streamingContent) {
                         proxy.scrollTo("streaming", anchor: .bottom)
@@ -121,9 +124,17 @@ struct ChatView: View {
         }
         .onAppear {
             loadSessions()
-            if let initialMessage, !didSendInitial, ws.messages.isEmpty {
-                didSendInitial = true
-                autoSend(initialMessage)
+            if autoIntrospect && !didAutoIntrospect {
+                didAutoIntrospect = true
+                Task {
+                    // Wait for sessions to load
+                    try? await Task.sleep(for: .milliseconds(400))
+                    if let latest = recentSessions.first, isSessionFresh(latest) {
+                        switchToSession(latest)
+                    } else {
+                        triggerIntrospect()
+                    }
+                }
             }
         }
     }
@@ -247,6 +258,7 @@ struct ChatView: View {
         ws.messages.removeAll()
         ws.streamingContent = ""
         sessionId = nil
+        renameCount = 0
         loadSessions()
     }
 
@@ -260,6 +272,7 @@ struct ChatView: View {
 
         // Set new session
         sessionId = session.id
+        renameCount = 2 // don't auto-rename existing sessions
 
         // Load messages from gateway
         Task {
@@ -294,6 +307,61 @@ struct ChatView: View {
 
     // MARK: - Helpers
 
+    /// Auto-rename session based on conversation content.
+    /// Renames after the 1st assistant reply and again around the 6th message.
+    private func autoRenameIfNeeded() {
+        guard let sid = sessionId else { return }
+
+        let assistantMessages = ws.messages.filter { $0.role == "assistant" }
+        let totalMessages = ws.messages.count
+
+        // First rename: when we get the first assistant reply
+        // Second rename: after ~6 total messages for a better summary
+        let shouldRename: Bool
+        if renameCount == 0 && !assistantMessages.isEmpty {
+            shouldRename = true
+        } else if renameCount == 1 && totalMessages >= 6 {
+            shouldRename = true
+        } else {
+            shouldRename = false
+        }
+        guard shouldRename else { return }
+
+        // Build title from first user message + assistant context
+        let title: String
+        if renameCount == 0 {
+            // First rename: use the user's first message (what they asked)
+            if let firstUser = ws.messages.first(where: { $0.role == "user" }),
+               let content = firstUser.content, !content.isEmpty {
+                let cleaned = content
+                    .components(separatedBy: .newlines).first ?? content
+                title = String(cleaned.trimmingCharacters(in: .whitespaces).prefix(50))
+            } else {
+                return
+            }
+        } else {
+            // Second rename: use the latest assistant reply's first line for evolved context
+            guard let latest = assistantMessages.last,
+                  let content = latest.content, !content.isEmpty else { return }
+            let firstLine = content
+                .components(separatedBy: .newlines)
+                .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+                ?? content
+            let cleaned = firstLine
+                .replacingOccurrences(of: #"^[#*>\-\s]+"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+            title = String(cleaned.prefix(50))
+        }
+
+        guard !title.isEmpty else { return }
+
+        renameCount += 1
+        Task {
+            try? await app.client.renameSession(sid, name: title)
+            loadSessions()
+        }
+    }
+
     private func truncatedSessionId(_ id: String) -> String {
         if id.count > 12 {
             return String(id.prefix(12)) + "..."
@@ -320,21 +388,13 @@ struct ChatView: View {
         return dateString
     }
 
-    /// Auto-send a message (used for onboarding initial prompts).
-    private func autoSend(_ text: String) {
-        // Optimistic user message
-        ws.messages.append(ChatMessage(
-            messageId: UUID().uuidString,
-            type: "message",
-            role: "user",
-            content: text
-        ))
-
+    /// Simulate an agent greeting with typing dots + streaming text.
+    /// Trigger introspection — creates a new session and sends a hidden trigger message.
+    private func triggerIntrospect() {
         Task {
-            // Create session via gateway (associates agentId)
-            let sessionName = channel != "main" ? "onboard:\(channel)" : nil
+            let dateStr = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)
             do {
-                let session = try await app.client.createSession(agentId: agentId, name: sessionName)
+                let session = try await app.client.createSession(agentId: agentId, name: "Check-in: \(dateStr)")
                 sessionId = session.id
                 ws.connect(sessionId: session.id)
                 try? await Task.sleep(for: .milliseconds(300))
@@ -346,12 +406,35 @@ struct ChatView: View {
                 return
             }
 
-            let payload: [String: String] = ["type": "message", "content": text]
+            let payload: [String: String] = [
+                "type": "message",
+                "content": "[status check]",
+                "agent_id": agentId,
+                "hub_channel": "introspect",
+            ]
             if let data = try? JSONEncoder().encode(payload),
                let json = String(data: data, encoding: .utf8) {
+                // Add hidden trigger to messages (will be filtered from display)
+                ws.messages.append(ChatMessage(
+                    messageId: UUID().uuidString,
+                    type: "message",
+                    role: "user",
+                    content: "[status check]"
+                ))
                 try? await ws.send(json)
             }
+            loadSessions()
         }
+    }
+
+    /// Check if a session is fresh enough to resume (< 24 hours old).
+    private func isSessionFresh(_ session: GatewayClient.SessionResponse) -> Bool {
+        let dateStr = session.updatedAt ?? session.createdAt ?? ""
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: dateStr) ?? ISO8601DateFormatter().date(from: dateStr)
+        guard let date else { return false }
+        return Date().timeIntervalSince(date) < 86400 // 24 hours
     }
 
     private func sendMessage() {
@@ -392,7 +475,14 @@ struct ChatView: View {
                 }
             }
 
-            let payload: [String: String] = ["type": "message", "content": text]
+            var payload: [String: String] = [
+                "type": "message",
+                "content": text,
+                "agent_id": agentId,
+            ]
+            if let ctx = viewingContext {
+                payload["viewing_context"] = ctx
+            }
             if let data = try? JSONEncoder().encode(payload),
                let json = String(data: data, encoding: .utf8) {
                 try? await ws.send(json)
@@ -447,24 +537,42 @@ struct MessageBubble: View {
     }
 }
 
-/// Typing indicator: 3 bouncing dots (matches original 0ms, 150ms, 300ms delays)
-struct TypingIndicator: View {
-    @State private var phase = 0
+/// Agent avatar with a spinning rainbow border to indicate thinking/streaming.
+struct ThinkingAvatar: View {
+    @State private var rotation: Double = 0
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<3, id: \.self) { i in
-                Circle()
-                    .fill(.secondary)
-                    .frame(width: 6, height: 6)
-                    .offset(y: phase == i ? -4 : 0)
-            }
+        ZStack {
+            // Spinning rainbow border
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(
+                    AngularGradient(
+                        colors: [
+                            Color(hex: "#F28B6D"),  // coral
+                            Color(hex: "#F0A84A"),  // amber
+                            Color(hex: "#4AC6B7"),  // teal
+                            Color(hex: "#F28B6D"),  // coral (wrap)
+                        ],
+                        center: .center,
+                        angle: .degrees(rotation)
+                    ),
+                    lineWidth: 2.5
+                )
+                .frame(width: 32, height: 32)
+
+            // Avatar background
+            RoundedRectangle(cornerRadius: 8)
+                .fill(VultiTheme.paperWarm)
+                .frame(width: 26, height: 26)
+
+            // Icon
+            Image(systemName: "cpu")
+                .font(.system(size: 12))
+                .foregroundStyle(VultiTheme.inkDim)
         }
-        .padding(10)
-        .background(VultiTheme.paperWarm, in: RoundedRectangle(cornerRadius: 10))
         .onAppear {
-            withAnimation(.easeInOut(duration: 0.4).repeatForever(autoreverses: true)) {
-                phase = 2
+            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                rotation = 360
             }
         }
     }

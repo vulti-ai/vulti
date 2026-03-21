@@ -16,13 +16,9 @@ struct AgentNode: View {
 
     var isSelected: Bool { app.activeAgentId == agent.id }
 
-    var statusColor: Color {
-        switch agent.status ?? "" {
-        case "active", "connected", "ready": VultiTheme.statusActive
-        case "disconnected", "stopped", "setting_up": VultiTheme.statusWarning
-        case "error": VultiTheme.statusError
-        default: VultiTheme.statusDefault
-        }
+    /// Agent is "thinking" when actively processing
+    var isThinking: Bool {
+        agent.status == "active" || agent.status == "connected"
     }
 
     /// Handles show only near the edge or during an active connection drag
@@ -78,33 +74,9 @@ struct AgentNode: View {
     }
 
     private var nodeBody: some View {
-        VStack(spacing: 4) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(VultiTheme.paperWarm)
-                    .frame(width: 32, height: 32)
-
-                if let avatarStr = agent.avatar, !avatarStr.isEmpty {
-                    if avatarStr.count <= 2, avatarStr.unicodeScalars.allSatisfy({ $0.properties.isEmoji }) {
-                        Text(avatarStr)
-                            .font(.system(size: 18))
-                    } else if let data = Data(base64Encoded: avatarStr),
-                              let nsImage = NSImage(data: data) {
-                        Image(nsImage: nsImage)
-                            .resizable()
-                            .frame(width: 28, height: 28)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                    } else {
-                        Text(String(agent.name.prefix(1)).uppercased())
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(VultiTheme.inkDim)
-                    }
-                } else {
-                    Text(String(agent.name.prefix(1)).uppercased())
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(VultiTheme.inkDim)
-                }
-            }
+        VStack(spacing: 6) {
+            // Avatar — role-colored gradient circle with initial, or image if generated
+            AgentAvatar(agent: agent, roleColor: roleColor, size: 36)
 
             Text(agent.name)
                 .font(.system(size: 13, weight: .medium))
@@ -130,14 +102,12 @@ struct AgentNode: View {
                 .stroke(roleColor, lineWidth: borderWidth)
                 .animation(.easeInOut(duration: 0.12), value: borderWidth)
         )
-        .overlay(
-            Circle()
-                .fill(statusColor)
-                .frame(width: 7, height: 7)
-                .offset(x: -4, y: 4),
-            alignment: .topTrailing
-        )
-        .shadow(color: .black.opacity(isHovered ? 0.10 : 0.06), radius: isHovered ? 18 : 15, y: 8)
+        .overlay {
+            if isThinking {
+                ThinkingBorderEffect(cornerRadius: 10, lineWidth: 2)
+            }
+        }
+        .shadow(color: .black.opacity(isHovered ? 0.18 : 0.12), radius: isHovered ? 24 : 18, y: isHovered ? 12 : 8)
         .animation(.easeInOut(duration: 0.12), value: isHovered)
     }
 }
@@ -189,24 +159,42 @@ struct OwnerNode: View {
 
     private var borderWidth: CGFloat {
         if isSelected { return 2 }
-        if isHovered { return 2 }
-        return 1.5
+        if isHovered { return 1.5 }
+        return 1
+    }
+
+    private var ownerAvatar: String? {
+        app.ownerInfo?.avatar
     }
 
     var body: some View {
-        VStack(spacing: 1) {
+        VStack(spacing: 4) {
+            // Avatar or initial
+            if let avatarStr = ownerAvatar, !avatarStr.isEmpty,
+               let data = Data(base64Encoded: avatarStr),
+               let nsImage = NSImage(data: data) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 40, height: 40)
+                    .clipShape(Circle())
+            } else {
+                Text(String(name.prefix(1)).uppercased())
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkDim)
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(VultiTheme.paperWarm))
+            }
+
             Text(name)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(VultiTheme.inkSoft)
                 .lineLimit(1)
-            Text("Human")
-                .font(.system(size: 10))
-                .foregroundStyle(color)
         }
         .frame(width: 80, height: 80)
         .background(Circle().fill(VultiTheme.paper.opacity(0.85)))
         .overlay(Circle().stroke(color, lineWidth: borderWidth).animation(.easeInOut(duration: 0.12), value: borderWidth))
-        .shadow(color: .black.opacity(isHovered ? 0.10 : 0.06), radius: isHovered ? 16 : 12, y: 6)
+        .shadow(color: .black.opacity(isHovered ? 0.18 : 0.12), radius: isHovered ? 24 : 18, y: isHovered ? 12 : 8)
         .animation(.easeInOut(duration: 0.12), value: isHovered)
         .overlay(alignment: .bottom) {
             HandleDot(position: .bottom, isVisible: handlesVisible, isSource: showHandles)
@@ -233,5 +221,86 @@ struct OwnerNode: View {
                 nearEdge = false
             }
         }
+    }
+}
+
+// MARK: - Thinking Border Effect
+
+/// A clockwise-spinning rainbow arc on the border — indicates the agent is processing.
+struct ThinkingBorderEffect: View {
+    var cornerRadius: CGFloat = 10
+    var lineWidth: CGFloat = 2
+    @State private var rotation: Double = 0
+
+    private var gradient: AngularGradient {
+        AngularGradient(
+            gradient: Gradient(colors: [
+                Color(hex: "#E8607A"),
+                Color(hex: "#F28B6D"),
+                Color(hex: "#F0A84A"),
+                Color(hex: "#4AC6B7"),
+                Color(hex: "#6B8BEB"),
+                Color(hex: "#9D7AEA"),
+                Color(hex: "#E8607A"),
+            ]),
+            center: .center,
+            angle: .degrees(rotation)
+        )
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius)
+            .stroke(gradient, lineWidth: lineWidth)
+            .onAppear {
+                withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+                    rotation = 360
+                }
+            }
+    }
+}
+
+// MARK: - Agent Avatar
+
+/// Flat avatar — paperWarm rounded rect with image, emoji, or initial letter.
+/// No circle, no extra shadow — sits flat on the card surface.
+struct AgentAvatar: View {
+    let agent: GatewayClient.AgentResponse
+    var roleColor: Color = VultiTheme.violet
+    var size: CGFloat = 36
+
+    private var initial: String {
+        String(agent.name.prefix(1)).uppercased()
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.17)
+                .fill(VultiTheme.paperWarm)
+                .frame(width: size, height: size)
+
+            if let avatarStr = agent.avatar, !avatarStr.isEmpty {
+                if avatarStr.count <= 2, avatarStr.unicodeScalars.allSatisfy({ $0.properties.isEmoji }) {
+                    Text(avatarStr)
+                        .font(.system(size: size * 0.5))
+                } else if let data = Data(base64Encoded: avatarStr),
+                          let nsImage = NSImage(data: data) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: size - 4, height: size - 4)
+                        .clipShape(RoundedRectangle(cornerRadius: size * 0.12))
+                } else {
+                    initialView
+                }
+            } else {
+                initialView
+            }
+        }
+    }
+
+    private var initialView: some View {
+        Text(initial)
+            .font(.system(size: size * 0.38, weight: .semibold))
+            .foregroundStyle(VultiTheme.inkDim)
     }
 }

@@ -90,23 +90,23 @@ private struct AdaptiveNoiseOverlay: View {
 
     var body: some View {
         Canvas { context, size in
-            // Dense grain with varied particle sizes for a 200gsm paper feel.
-            // Mix warm browns/tans at different opacities to mimic fiber texture.
+            // Heavy grain — 200gsm cotton card stock texture.
+            // High density, varied sizes, warm brown fibers.
             let area = size.width * size.height
-            let count = Int(area * 0.008)  // 0.8% density — visible grain
+            let count = Int(area * 0.02)  // 2% density — thick paper grain
 
             for _ in 0..<count {
                 let x = CGFloat.random(in: 0..<size.width)
                 let y = CGFloat.random(in: 0..<size.height)
-                let w = CGFloat.random(in: 1...2)
+                let w = CGFloat.random(in: 1...3)
                 let h = CGFloat.random(in: 1...2)
-                let alpha = CGFloat.random(in: 0.02...0.08)
+                let alpha = CGFloat.random(in: 0.04...0.14)
                 let rect = CGRect(x: x, y: y, width: w, height: h)
                 context.fill(Path(rect), with: .color(.brown.opacity(alpha)))
             }
         }
         .blendMode(colorScheme == .dark ? .softLight : .multiply)
-        .opacity(colorScheme == .dark ? 0.30 : 0.45)
+        .opacity(colorScheme == .dark ? 0.40 : 0.60)
         .allowsHitTesting(false)
     }
 }

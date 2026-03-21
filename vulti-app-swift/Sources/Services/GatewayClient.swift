@@ -122,6 +122,10 @@ actor GatewayClient {
         return try await gw.post(SessionResponse.self, path: path, body: body)
     }
 
+    func renameSession(_ id: String, name: String) async throws {
+        _ = try await gw.patchRaw(path: "sessions/\(id)", body: ["name": name])
+    }
+
     func deleteSession(_ id: String) async throws {
         try await gw.delete(path: "sessions/\(id)")
     }
@@ -490,6 +494,10 @@ actor GatewayClient {
         _ = try await gw.putRaw(path: "owner", body: body)
     }
 
+    func generateOwnerAvatar() async throws {
+        try await gw.generateOwnerAvatar()
+    }
+
     // MARK: - Agent Config
 
     func getAgentConfig(agentId: String) async throws -> [String: AnyCodable] {
@@ -557,7 +565,9 @@ actor GatewayClient {
             } else {
                 wd = WidgetData()
             }
-            return VultiHub.PaneWidget(type: wt, title: title, data: wd)
+            var pw = VultiHub.PaneWidget(type: wt, title: title, data: wd)
+            if let widgetId = id { pw.id = widgetId }
+            return pw
         }
     }
 
@@ -568,6 +578,14 @@ actor GatewayClient {
     func clearPaneWidgets(agentId: String, tab: String? = nil) async throws {
         let query = tab != nil ? "?tab=\(tab!)" : ""
         try await gw.delete(path: "agents/\(agentId)/pane\(query)")
+    }
+
+    func removePaneWidget(agentId: String, widgetId: String) async throws {
+        try await gw.delete(path: "agents/\(agentId)/pane/widgets/\(widgetId)")
+    }
+
+    func reorderPaneWidgets(agentId: String, widgetIds: [String]) async throws {
+        _ = try await gw.putRaw(path: "agents/\(agentId)/pane/reorder", body: ["widget_ids": widgetIds])
     }
 
     // MARK: - Integrations & Status

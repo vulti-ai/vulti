@@ -35,14 +35,13 @@ final class AppState {
         case owner
         case settings
         case create
-        case onboard(String)
         case audit
 
         /// Agent/owner panels slide from bottom; toolbar panels slide from left
         var isBottomPanel: Bool {
             switch self {
             case .agent, .owner: return true
-            case .settings, .create, .onboard, .audit: return false
+            case .settings, .create, .audit: return false
             }
         }
     }
@@ -164,7 +163,6 @@ final class AppState {
     func openOwner() { panelMode = .owner }
     func openSettings() { panelMode = .settings }
     func openCreate() { panelMode = .create }
-    func openOnboarding(_ agentId: String) { panelMode = .onboard(agentId) }
     func openAudit() { panelMode = .audit }
     func closePanel() { panelMode = nil; activeAgentId = nil }
 

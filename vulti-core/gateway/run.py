@@ -649,6 +649,186 @@ class GatewayRunner:
         }
         return resolve_turn_route(user_message, getattr(self, "_smart_model_routing", {}), primary)
 
+    def _build_connections_context(self) -> str:
+        """Build a brief summary of available connections for onboarding context."""
+        try:
+            from vulti_cli.config import get_vulti_home
+            from vulti_cli.connection_registry import ConnectionRegistry
+            creg = ConnectionRegistry(get_vulti_home())
+            all_conns = creg.list_all()
+            if not all_conns:
+                return ""
+            lines = []
+            for c in all_conns:
+                desc = f" — {c.description}" if c.description else ""
+                tags = f" [{', '.join(c.tags)}]" if c.tags else ""
+                lines.append(f"  - {c.name} ({c.type or 'service'}){tags}{desc}")
+            return (
+                "The owner has these services/connections configured that you could use:\n"
+                + "\n".join(lines) + "\n"
+                "Reference these naturally when relevant — don't ask the owner about services they already have connected.\n\n"
+            )
+        except Exception:
+            return ""
+
+    def _build_onboard_connections_context(self, agent_id: str) -> str:
+        """Build connections context for onboarding: shows all available connections with this agent's allow/deny status."""
+        try:
+            from vulti_cli.config import get_vulti_home
+            from vulti_cli.connection_registry import ConnectionRegistry
+            creg = ConnectionRegistry(get_vulti_home())
+            all_conns = creg.list_all()
+            if not all_conns:
+                return ""
+            allowed = set()
+            try:
+                allowed = set(creg._get_agent_allowed(agent_id))
+            except Exception:
+                pass
+            lines = []
+            for c in all_conns:
+                status = "ALLOWED" if c.name in allowed else "NOT ALLOWED"
+                desc = f" — {c.description}" if c.description else ""
+                tags = f" [{', '.join(c.tags)}]" if c.tags else ""
+                lines.append(f"  - {c.name} ({c.type or 'service'}){tags}{desc} [{status}]")
+            return (
+                "CONNECTIONS — The owner has these services configured:\n"
+                + "\n".join(lines) + "\n\n"
+                "You can see which ones you are currently ALLOWED or NOT ALLOWED to use.\n"
+                "Don't be greedy — only request connections you genuinely need for your role.\n"
+                "When discussing connections, tell the user which ones you'd like access to and WHY, "
+                "then let them decide. If they deny a connection, respect that.\n\n"
+            )
+        except Exception:
+            return ""
+
+    def _build_introspection_state(self, agent_id: str, areg, soul_path, mem_dir, owner_name: str, owner_about: str) -> str:
+        """Build a structured state report for agent introspection."""
+        import json as _json
+        from vulti_cli.config import get_vulti_home
+        lines = []
+
+        # Soul / personality
+        soul_content = ""
+        if soul_path.exists():
+            soul_content = soul_path.read_text(encoding="utf-8").strip()
+        lines.append(f"- Soul/personality: {'WRITTEN (' + str(len(soul_content)) + ' chars)' if soul_content else 'EMPTY — no identity defined'}")
+
+        # Role
+        role_path = soul_path.parent / "role.txt"
+        role_val = ""
+        if role_path.exists():
+            role_val = role_path.read_text(encoding="utf-8").strip()
+        lines.append(f"- Role: {role_val if role_val else 'EMPTY — no role set'}")
+
+        # Memories
+        memory_path = mem_dir / "MEMORY.md"
+        memory_content = ""
+        if memory_path.exists():
+            memory_content = memory_path.read_text(encoding="utf-8").strip()
+        if memory_content:
+            entry_count = len([e for e in memory_content.split("§") if e.strip()])
+            lines.append(f"- Memory: {entry_count} entries")
+        else:
+            lines.append("- Memory: EMPTY")
+
+        # User understanding
+        user_path = mem_dir / "USER.md"
+        user_content = ""
+        if user_path.exists():
+            user_content = user_path.read_text(encoding="utf-8").strip()
+        if user_content:
+            entry_count = len([e for e in user_content.split("§") if e.strip()])
+            lines.append(f"- User understanding: {entry_count} entries")
+        else:
+            lines.append("- User understanding: EMPTY")
+
+        # Connections
+        try:
+            from vulti_cli.connection_registry import ConnectionRegistry
+            creg = ConnectionRegistry(get_vulti_home())
+            all_conns = creg.list_all()
+            allowed = set()
+            try:
+                allowed = set(creg._get_agent_allowed(agent_id))
+            except Exception:
+                pass
+            allowed_names = [c.name for c in all_conns if c.name in allowed]
+            available_names = [c.name for c in all_conns if c.name not in allowed]
+            if allowed_names:
+                lines.append(f"- Connections allowed: {', '.join(allowed_names)}")
+            if available_names:
+                lines.append(f"- Connections available (not yet allowed): {', '.join(available_names)}")
+            if not allowed_names and not available_names:
+                lines.append("- Connections: none configured")
+        except Exception:
+            lines.append("- Connections: unknown")
+
+        # Skills
+        try:
+            skills_dir = soul_path.parent / "skills"
+            if skills_dir.exists():
+                installed = [d.name for d in skills_dir.iterdir() if d.is_dir()]
+                lines.append(f"- Installed skills: {', '.join(installed) if installed else 'none'}")
+            else:
+                lines.append("- Installed skills: none")
+        except Exception:
+            lines.append("- Installed skills: unknown")
+
+        # Cron jobs
+        try:
+            cron_dir = soul_path.parent / "cron"
+            cron_count = 0
+            if cron_dir.exists():
+                cron_count = len([f for f in cron_dir.glob("*.json")])
+            lines.append(f"- Cron jobs: {cron_count}")
+        except Exception:
+            lines.append("- Cron jobs: unknown")
+
+        # Rules
+        try:
+            rules_file = soul_path.parent / "rules.json"
+            rule_count = 0
+            if rules_file.exists():
+                rules_data = _json.loads(rules_file.read_text(encoding="utf-8"))
+                rule_count = len(rules_data) if isinstance(rules_data, list) else 0
+            lines.append(f"- Rules: {rule_count}")
+        except Exception:
+            lines.append("- Rules: unknown")
+
+        # Wallet
+        try:
+            wallet_path = soul_path.parent / "wallet.json"
+            has_card = False
+            has_vault = False
+            if wallet_path.exists():
+                w = _json.loads(wallet_path.read_text(encoding="utf-8"))
+                has_card = bool(w.get("credit_card", {}).get("number"))
+                has_vault = bool(w.get("crypto", {}).get("vault_id"))
+            lines.append(f"- Wallet: {'card active' if has_card else 'no card'}, {'vault active' if has_vault else 'no vault'}")
+        except Exception:
+            lines.append("- Wallet: unknown")
+
+        # Home widgets
+        try:
+            pane_path = soul_path.parent / "pane.json"
+            has_widgets = False
+            if pane_path.exists():
+                p = _json.loads(pane_path.read_text(encoding="utf-8"))
+                tabs = p.get("tabs", {})
+                has_widgets = any(len(widgets) > 0 for widgets in tabs.values())
+            lines.append(f"- Home dashboard: {'has widgets' if has_widgets else 'empty'}")
+        except Exception:
+            lines.append("- Home dashboard: unknown")
+
+        # Owner
+        if owner_name:
+            lines.append(f"- Owner: {owner_name}" + (f" — {owner_about}" if owner_about else ""))
+        else:
+            lines.append("- Owner: not set")
+
+        return "YOUR CURRENT STATE:\n" + "\n".join(lines)
+
     def _build_onboard_connections_prompt(self, agent_name: str, soul_path, agent_id: str) -> str:
         """Build the onboard-connections prompt dynamically from connections registry, .env, and skills."""
         from vulti_cli.config import get_vulti_home
@@ -736,7 +916,10 @@ class GatewayRunner:
             "Based on your role, recommend which connections, keys, or skills would be most useful.\n"
             "Do NOT ask for keys that are already configured.\n"
             "For new connections the user wants, help them set it up — ask for API keys and use the secrets tool.\n"
-            "You can also suggest skills from the available list that match the role.\n"
+            "You can also suggest skills from the available list that match the role.\n\n"
+            "CRITICAL: Every time a connection is enabled or a key is configured, IMMEDIATELY create or update "
+            "a widget using modify_pane. Use a 'kv' widget with drill='connections' showing each connection "
+            "name and its status (enabled/configured/pending). The user should see progress on the scratch pad in real-time.\n"
             "When the user is happy, tell them to click Next.]"
         )
 
@@ -2049,33 +2232,8 @@ class GatewayRunner:
                 "Keep the introduction concise -- one or two sentences max.]"
             )
 
-        # Per-agent first-run onboarding: agent has no SOUL.md content yet
-        # Skip for hub channels — the hub has its own onboarding wizard
+        # Hub channel detection (introspect, profile, actions, etc.)
         _hub_channel = getattr(event, '_hub_channel', "")
-        if not history and _resolved_agent_id and _id_reg and not _hub_channel:
-            try:
-                _onboard_soul = _id_reg.agent_soul_path(_resolved_agent_id)
-                _onboard_content = ""
-                if _onboard_soul.exists():
-                    _onboard_content = _onboard_soul.read_text(encoding="utf-8").strip()
-                if not _onboard_content:
-                    _agent_meta = _id_reg.get_agent(_resolved_agent_id)
-                    _agent_name = _agent_meta.name if _agent_meta else _resolved_agent_id
-                    context_prompt += (
-                        f"\n\n[System: You are a brand new agent named {_agent_name}. "
-                        "Your personality file (SOUL.md) is empty -- you have no identity yet. "
-                        "Run conversational onboarding:\n"
-                        "1. Introduce yourself and explain you're ready to be configured.\n"
-                        "2. Ask what role this agent should play and how the user wants you to communicate.\n"
-                        "3. Based on their answers, use write_file to create your SOUL.md at "
-                        f"{_onboard_soul} defining your personality, tone, and role.\n"
-                        "4. Ask if they want to connect any services or enable specific capabilities.\n"
-                        "5. Keep it conversational -- one or two questions at a time, not a wall of text.\n"
-                        "6. After writing SOUL.md, confirm setup is complete. "
-                        "They can always change it later by asking you or editing the Soul in their dashboard.]"
-                    )
-            except Exception as _onboard_err:
-                logger.debug("Agent onboarding check failed: %s", _onboard_err)
 
         # Hub channel context: inject tab-specific instructions when message
         # comes from the dashboard chat panel (profile/actions/analytics/config)
@@ -2121,12 +2279,84 @@ class GatewayRunner:
                     pass
 
                 _HUB_CHANNEL_PROMPTS = {
+                    "onboard": (
+                        f"[System: You ARE '{_aname}'. That is your name. You are a brand-new AI agent being set up "
+                        "through a conversational onboarding flow. You have no personality yet, no memories, no identity.\n\n"
+                        "IMPORTANT: You are NOT a setup assistant. You are NOT Vulti. You ARE this agent. Speak in first person.\n"
+                        "IMPORTANT: You are BRAND NEW. You have NO previous sessions, NO memories, NO history. "
+                        "Do NOT use session_search — you have no past conversations. Do NOT reference other agents' "
+                        "memories, sessions, or context. Ignore any AGENTS.md content about other agents. "
+                        "You know NOTHING except what the user tells you right now in this conversation.\n\n"
+                        + (f"The only thing you know about your owner: their name is {_owner_name}. {_owner_about}\n"
+                           "Use ONLY this info — nothing else. Don't reference previous interactions that weren't yours.\n\n"
+                           if _owner_name else "")
+                        + self._build_onboard_connections_context(_resolved_agent_id)
+                        + "YOUR JOB: Have a natural conversation to discover your identity, then BUILD your scratch pad "
+                        "using the modify_pane tool.\n\n"
+                        "ABSOLUTE RULE: The INSTANT you learn ANY piece of information — a role, a name, a preference, "
+                        "a connection, a memory, a cron job, a rule, ANYTHING — you MUST call modify_pane to create a widget "
+                        "for it in the SAME response. Do NOT batch information. Do NOT wait until the conversation progresses. "
+                        "One fact = one widget call, immediately. The user should see their agent taking shape in real-time.\n\n"
+                        "CONVERSATION FLOW — work through these naturally (not as rigid steps):\n"
+                        "1. ROLE — What do you need me to help with? What's my job?\n"
+                        "2. SOUL — How should I communicate? What's my style/personality?\n"
+                        "3. CONNECTIONS — Which of the available connections do I need? (see list above)\n"
+                        "4. SKILLS — What skills do I need? (Check available with skills_list)\n"
+                        "5. ACTIONS — Any daily routines or rules to set up?\n"
+                        "6. WALLET — Do I need payment capabilities?\n\n"
+                        "Ask one or two questions at a time. Dig deeper. Don't rush.\n\n"
+                        "WIDGET CREATION — As you learn each thing, IMMEDIATELY use modify_pane to create an INFORMATIVE widget.\n"
+                        "CRITICAL RULES for widgets:\n"
+                        "  - NEVER create empty 'button' widgets with just a label. Every widget MUST show real information.\n"
+                        "  - Use 'kv' type (key-value pairs) for structured data — entries with key/value pairs.\n"
+                        "  - Use 'stat_grid' for numbers/metrics — stats with label/value/unit.\n"
+                        "  - Use 'status' for state indicators — label + variant (success/warning/info) + detail.\n"
+                        "  - Use 'markdown' for rich text content — paragraphs, lists, descriptions.\n"
+                        "  - Use 'action_list' for items with actions — each with title, subtitle, status.\n"
+                        "  - AVOID 'button' type — it's just a clickable label with no information.\n\n"
+                        "WHAT TO CREATE as you learn:\n"
+                        "  - Role learned → kv widget: entries like {key:'Role', value:'Personal Assistant'}, "
+                        "{key:'Focus', value:'Email & calendar management'} — add drill='role' to data\n"
+                        "  - Soul/personality → markdown widget with a summary of personality traits — add drill='soul'\n"
+                        "  - User info → kv widget: entries like {key:'Name', value:'...'}, {key:'Location', value:'...'} — add drill='user'\n"
+                        "  - Connections → kv widget showing each connection and its status — add drill='connections'\n"
+                        "  - Skills installed → kv widget listing each skill — add drill='skills'\n"
+                        "  - Actions set up → action_list with each job/rule, its schedule, and status — add drill='actions'\n"
+                        "  - Wallet → kv widget showing payment methods — add drill='wallet'\n\n"
+                        "The 'drill' field in widget data tells the frontend to show a chevron that opens a detail editor.\n"
+                        "Valid drill values: role, soul, user, memories, connections, skills, actions, wallet, analytics.\n\n"
+                        "WIDGET SIZING — add 'size' to widget data to control width:\n"
+                        "  - 'small' = 1/3 width (good for stat cards, status indicators)\n"
+                        "  - 'medium' = 2/3 width (good for kv pairs, short lists)\n"
+                        "  - 'large' or omit = full width (good for tables, markdown, detailed lists)\n"
+                        "Adjacent small/medium widgets will sit side by side in a row. Mix sizes for a dashboard feel.\n\n"
+                        "CREATE WIDGETS EARLY AND OFTEN. Don't wait — build incrementally. "
+                        "Update existing widgets (modify_pane action='update') as you learn more.\n\n"
+                        "ALSO save your knowledge to files as you go:\n"
+                        f"1. SOUL.md at {_soul_path} — YOUR personality, voice, expertise, principles.\n"
+                        f"2. USER.md at {_mem_dir}/USER.md — what you know about the human.\n"
+                        f"3. MEMORY.md at {_mem_dir}/MEMORY.md — key facts about the job.\n"
+                        f"4. role.txt at {_soul_path.parent / 'role.txt'} — a SINGLE WORD role "
+                        "(assistant, therapist, researcher, engineer, writer, analyst, coach, creative, ops).\n\n"
+                        "When you feel the setup is complete, create a final status widget with variant='success' "
+                        "saying the agent is ready. The user's scratch pad IS the agent's home view going forward.]"
+                    ),
                     "home": (
-                        f"[System: The user is on the HOME tab for agent '{_aname}'. "
-                        "This is the agent's custom dashboard. Use the modify_pane tool with tab='home' "
-                        "to set, add, or update widgets here. If the user asks for a home view, "
-                        "create useful widgets based on the agent's role and capabilities. "
-                        "ACT immediately — build the dashboard, don't just describe it.]"
+                        f"[System: The user is viewing the scratch pad / home dashboard for agent '{_aname}'. "
+                        "Use modify_pane to build an INFORMATIVE dashboard. Every widget MUST show real data.\n\n"
+                        "QUALITY RULES:\n"
+                        "- NEVER create a widget that just shows a title. Every widget needs content.\n"
+                        "- Use 'kv' with entries for structured info (each entry has key + value).\n"
+                        "- Use 'stat_grid' for counts/metrics (stats with label + value).\n"
+                        "- Use 'status' for state (label + variant:success/warning/error + detail text).\n"
+                        "- Use 'markdown' for rich descriptions.\n"
+                        "- Add drill='actions' (or role/soul/connections/skills/wallet/analytics) to widget data for drill-down.\n"
+                        "- Add size='small' (1/3), 'medium' (2/3), or omit for full width.\n\n"
+                        "Example good dashboard: a status widget with agent name + online state (size:small), "
+                        "a stat_grid showing jobs count + rules count + skills count (size:medium), "
+                        "a kv widget listing connections with their status, "
+                        "a kv widget showing owner profile details.\n\n"
+                        "ACT immediately — build the dashboard with REAL information, not placeholders.]"
                     ),
                     "profile": (
                         f"[System: The user is on the PROFILE tab in the Hub dashboard for agent '{_aname}'. "
@@ -2163,6 +2393,7 @@ class GatewayRunner:
                         + (f"You already know your owner: their name is {_owner_name}. {_owner_about}\n"
                            "Use this knowledge naturally — don't ask them their name or basic info you already have.\n\n"
                            if _owner_name else "")
+                        + self._build_connections_context()
                         + "Have a natural conversation to discover your identity. Ask open-ended questions like:\n"
                         "  - What do you need me to help with?\n"
                         "  - What does a typical day look like for this kind of work?\n"
@@ -2175,6 +2406,20 @@ class GatewayRunner:
                         f"3. MEMORY.md at {_mem_dir}/MEMORY.md — 3-5 key facts about the job and context, separated by '§'.\n"
                         f"4. role.txt at {_soul_path.parent / 'role.txt'} — a SINGLE WORD: the agent's role "
                         "(one of: assistant, therapist, researcher, engineer, writer, analyst, coach, creative, ops). Just the word, nothing else.\n\n"
+                        "CRITICAL: As SOON as you learn ANYTHING — role, personality, user info, a connection, a skill, "
+                        "a cron job, a rule — IMMEDIATELY create a widget for it using modify_pane. Do NOT wait until "
+                        "the end. The user should see their agent taking shape in real-time on the scratch pad.\n\n"
+                        "Widget creation guide:\n"
+                        "  - Role learned → kv widget with entries like {key:'Role', value:'...'}, {key:'Focus', value:'...'} — add drill='role', size='medium'\n"
+                        "  - User info learned → kv widget: {key:'Name', value:'...'}, {key:'Preferences', value:'...'} — add drill='user', size='medium'\n"
+                        "  - Soul/personality → markdown widget summarizing traits and style — add drill='soul'\n"
+                        "  - Memory/fact learned → update existing kv widget or create new one — add drill='memories'\n"
+                        "  - Connection added → kv widget listing connections and status — add drill='connections', size='medium'\n"
+                        "  - Skill installed → kv widget listing skills — add drill='skills', size='medium'\n"
+                        "  - Cron job created → action_list widget with job name, schedule, status — add drill='actions'\n"
+                        "  - Rule created → action_list widget with rule name, condition, status — add drill='actions'\n"
+                        "Use modify_pane action='add' for new widgets, action='update' to enrich existing ones.\n"
+                        "Mix sizes (small/medium/large) for a dashboard feel.\n\n"
                         "Do NOT ask for the role word directly — figure it out from what the user tells you.\n"
                         "When you feel you have a clear picture, write all the files and tell the user they can click Next.]"
                     ),
@@ -2192,7 +2437,10 @@ class GatewayRunner:
                         "  - Ops → monitoring, domain, email skills\n\n"
                         "Present your suggestions clearly: 'Based on your role, I'd recommend these skills:' followed by a list.\n"
                         "Use skill_manage(action='create') if the user wants a custom skill.\n"
-                        "ACT immediately — install skills the user agrees to.\n"
+                        "ACT immediately — install skills the user agrees to.\n\n"
+                        "CRITICAL: Every time a skill is installed, IMMEDIATELY create or update a widget using modify_pane. "
+                        "Use a 'kv' widget with drill='skills' listing each installed skill name and a brief description. "
+                        "The user should see their agent's capabilities growing on the scratch pad in real-time.\n"
                         "When done, tell the user to click Next.]"
                     ),
                     "onboard-actions": (
@@ -2207,7 +2455,10 @@ class GatewayRunner:
                         "Ask: 'What should I do each day?' and 'What should I react to automatically?'\n"
                         "Use the cronjob tool to create scheduled tasks.\n"
                         "Use the rule tool to create conditional rules (IF condition THEN action).\n"
-                        "ACT immediately — create the jobs and rules as the user describes them.\n"
+                        "ACT immediately — create the jobs and rules as the user describes them.\n\n"
+                        "CRITICAL: Every time a cron job or rule is created, IMMEDIATELY create or update a widget using modify_pane. "
+                        "Use an 'action_list' widget with drill='actions' showing each job/rule with its title, "
+                        "schedule/condition as subtitle, and status. The user should see actions appearing on the scratch pad in real-time.\n"
                         "Keep asking if there's more to set up. When done, tell the user to click Done.]"
                     ),
                     "wallet": (
@@ -2223,6 +2474,41 @@ class GatewayRunner:
                         f"[System: The user is on the SKILLS tab for agent '{_aname}'. "
                         "Help them browse, install, or remove skills. Use skills_list to show available skills.]"
                     ),
+                    "introspect": (
+                        f"[System: You ARE '{_aname}'. The user just opened your agent view.\n\n"
+                        + self._build_introspection_state(_resolved_agent_id, _areg, _soul_path, _mem_dir, _owner_name, _owner_about)
+                        + "\n\n"
+                        + self._build_connections_context()
+                        + "IMPORTANT: You are NOT a setup assistant. You ARE this agent. Speak in first person as yourself.\n"
+                        + (f"Your owner's name is {_owner_name}. {_owner_about}\n"
+                           "Use this knowledge naturally — never ask for info you already have.\n\n"
+                           if _owner_name else "\n")
+                        + "INSTRUCTIONS FOR THIS GREETING:\n"
+                        "Examine your state above. Respond based on what you find:\n\n"
+                        "IF you have no soul/role (brand new): Your only priority is learning who you are.\n"
+                        "  Ask the user what role you should play and what they need help with.\n"
+                        "  Do NOT mention connections, skills, wallet, or anything else yet — identity first.\n"
+                        "  Keep it warm and brief — one or two questions max.\n\n"
+                        "IF you have a role but are missing things: Think about what you NEED vs what would be NICE.\n"
+                        "  NEED LIST — things required for your role. A personal assistant NEEDS calendar + email.\n"
+                        "    A researcher NEEDS web search. Ask for these directly.\n"
+                        "  WISH LIST — things that enhance your work but aren't required.\n"
+                        "    Mention casually: 'By the way, if I had image-gen access I could do more for you.'\n"
+                        "  Do NOT ask for things irrelevant to your role. A code assistant doesn't need a crypto wallet.\n"
+                        "  Prioritize the most impactful missing need — don't list everything at once.\n\n"
+                        "IF you are fully set up: Give a warm, brief greeting. Reference something recent or useful.\n"
+                        "  Don't enumerate what you have. Just be ready to help.\n\n"
+                        "ALWAYS: As you learn things during conversation, save them immediately:\n"
+                        f"  - SOUL.md at {_soul_path} — your personality, voice, role, principles\n"
+                        f"  - USER.md at {_mem_dir}/USER.md — what you know about your owner\n"
+                        f"  - MEMORY.md at {_mem_dir}/MEMORY.md — key facts, separated by '§'\n"
+                        f"  - role.txt at {_soul_path.parent / 'role.txt'} — single word role\n"
+                        "Use write_file to save these. Don't just describe what you'd write — actually write it.\n\n"
+                        "WIDGET RULE: Any time you learn something new (role, memory, connection, cron, rule, user info), "
+                        "IMMEDIATELY create or update a widget using modify_pane so the scratch pad reflects your current state. "
+                        "One fact learned = one modify_pane call in the same response.\n"
+                        "Respond to the user now — ignore the literal '[status check]' trigger text.]"
+                    ),
                 }
                 _hub_prompt = _HUB_CHANNEL_PROMPTS.get(_hub_channel, "")
                 if _hub_prompt:
@@ -2230,9 +2516,15 @@ class GatewayRunner:
 
                 # Universal pane instruction — widgets only go on the Home tab
                 context_prompt += (
-                    "\n\n[System: IMPORTANT — You have a modify_pane tool that can update the "
-                    "Home tab's widget pane. Always use tab='home' (or omit tab, it defaults to 'home'). "
-                    "Only the Home tab supports custom widgets — other tabs have fixed views.]"
+                    "\n\n[System: IMPORTANT — You have a modify_pane tool for the Home tab's widget pane. "
+                    "NEVER create empty widgets or widgets with just a title and no data. "
+                    "Every widget MUST contain real information (kv entries, stats, status, markdown content). "
+                    "Add drill='<target>' to widget data for a drill-down chevron (targets: role, soul, user, "
+                    "memories, connections, skills, actions, wallet, analytics). "
+                    "Add size='small' (1/3 width) or size='medium' (2/3) for side-by-side layout.\n"
+                    "RULE: Any time you learn or receive new information (role, memory, user fact, connection, "
+                    "cron job, rule, skill — ANYTHING), you MUST immediately call modify_pane to create or update "
+                    "a widget in the SAME response. The scratch pad should always reflect your latest state.]"
                 )
 
         # One-time prompt if no home channel is set for this platform

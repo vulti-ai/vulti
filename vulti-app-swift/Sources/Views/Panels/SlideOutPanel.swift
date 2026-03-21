@@ -37,9 +37,6 @@ struct SlideOutPanel: View {
             case .create:
                 Text("New Agent")
                     .font(.system(size: 16, weight: .bold)).foregroundStyle(VultiTheme.inkSoft)
-            case .onboard(let id):
-                Text("Setup: \(app.agent(byId: id)?.name ?? id)")
-                    .font(.system(size: 16, weight: .bold)).foregroundStyle(VultiTheme.inkSoft)
             case .audit:
                 Text("Audit Log")
                     .font(.system(size: 16, weight: .bold)).foregroundStyle(VultiTheme.inkSoft)
@@ -75,52 +72,37 @@ struct SlideOutPanel: View {
             SettingsView()
         case .create:
             CreateAgentView()
-        case .onboard(let id):
-            OnboardingView(agentId: id)
         case .audit:
             AuditView()
         }
     }
 }
 
-/// Agent header: avatar, name, role badge, @id, default badge, delete button
+/// Agent header: avatar, name, role badge, @id, default badge, delete button, model picker
 struct AgentPanelHeader: View {
     let agentId: String
     @Environment(AppState.self) private var app
     @State private var isGeneratingAvatar = false
     @State private var showDeleteConfirm = false
     @State private var isDeleting = false
+    @State private var configModel = ""
+    @State private var providers: [GatewayClient.ProviderResponse] = []
 
     private var agent: GatewayClient.AgentResponse? {
         app.agent(byId: agentId)
     }
 
+    /// Short display name for the active model (e.g. "claude-opus-4.6" from "openrouter/anthropic/claude-opus-4.6")
+    private var modelShortName: String {
+        if configModel.isEmpty { return "No model" }
+        return String(configModel.split(separator: "/").last ?? Substring(configModel))
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            // Avatar (32px — warm paper bg)
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(VultiTheme.paperWarm)
-                    .frame(width: 32, height: 32)
-
-                if let avatarStr = agent?.avatar, !avatarStr.isEmpty {
-                    if avatarStr.count <= 2, avatarStr.unicodeScalars.allSatisfy({ $0.properties.isEmoji }) {
-                        Text(avatarStr)
-                            .font(.system(size: 18))
-                    } else if let data = Data(base64Encoded: avatarStr),
-                              let img = NSImage(data: data) {
-                        Image(nsImage: img)
-                            .resizable()
-                            .frame(width: 32, height: 32)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    } else {
-                        Text(String((agent?.name ?? "A").prefix(1)).uppercased())
-                            .font(.system(size: 13, weight: .semibold))
-                    }
-                } else {
-                    Text(String((agent?.name ?? "A").prefix(1)).uppercased())
-                        .font(.system(size: 13, weight: .semibold))
-                }
+            // Avatar — uses shared AgentAvatar component
+            if let a = agent {
+                AgentAvatar(agent: a, roleColor: roleColorForAgent(a), size: 32)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -129,10 +111,8 @@ struct AgentPanelHeader: View {
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(VultiTheme.inkSoft)
 
-                    // Generate Avatar button
                     if isGeneratingAvatar {
-                        ProgressView()
-                            .controlSize(.mini)
+                        ProgressView().controlSize(.mini)
                     } else {
                         Button {
                             isGeneratingAvatar = true
@@ -161,7 +141,16 @@ struct AgentPanelHeader: View {
                             .foregroundStyle(VultiTheme.lime)
                     }
 
-                    // Delete with confirmation (matches Tauri)
+                }
+
+                HStack(spacing: 8) {
+                    Text("@\(agentId)-vulti")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                        .monospaced()
+
+                    modelPicker
+
                     if showDeleteConfirm {
                         HStack(spacing: 6) {
                             Text("Delete?")
@@ -199,12 +188,75 @@ struct AgentPanelHeader: View {
                             .buttonStyle(.plain)
                     }
                 }
-
-                Text("@\(agentId)-vulti")
-                    .font(.system(size: 11))
-                    .foregroundStyle(VultiTheme.inkMuted)
-                    .monospaced()
             }
         }
+        .task {
+            if let cfg = try? await app.client.getAgentConfig(agentId: agentId),
+               let model = cfg["model"]?.value as? String {
+                configModel = model
+            }
+            if let list = try? await app.client.listProviders() {
+                providers = list.filter(\.authenticated)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var modelPicker: some View {
+        Menu {
+            if providers.isEmpty {
+                Text("No providers connected")
+            }
+            ForEach(providers, id: \.id) { provider in
+                let models = provider.models ?? []
+                if models.isEmpty {
+                    Menu(provider.name) {
+                        Text("No models available")
+                    }
+                } else {
+                    Menu(provider.name) {
+                        ForEach(models, id: \.self) { model in
+                            let fullId = "\(provider.id)/\(model)"
+                            Button {
+                                configModel = fullId
+                                Task {
+                                    _ = try? await app.client.updateAgent(
+                                        agentId, updates: ["model": fullId]
+                                    )
+                                }
+                            } label: {
+                                HStack {
+                                    Text(model)
+                                    if configModel == fullId || configModel == model {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 9))
+                Text(modelShortName)
+                    .font(.system(size: 10, design: .monospaced))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7))
+            }
+            .foregroundStyle(VultiTheme.inkDim)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(VultiTheme.paperDeep, in: Capsule())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private func roleColorForAgent(_ agent: GatewayClient.AgentResponse) -> Color {
+        let hex = CanvasLayout.roleColors[(agent.role ?? "").lowercased()] ?? CanvasLayout.defaultColor
+        return Color(hex: hex)
     }
 }

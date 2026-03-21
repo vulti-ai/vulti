@@ -125,6 +125,17 @@ actor GatewayService {
         return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 
+    func patchRaw(path: String, body: any Encodable) async throws -> [String: Any] {
+        let url = URL(string: "api/\(path)", relativeTo: baseURL)!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addAuth(&request)
+        request.httpBody = try JSONEncoder().encode(body)
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
+
     func delete(path: String) async throws {
         let url = URL(string: "api/\(path)", relativeTo: baseURL)!
         var request = URLRequest(url: url)
@@ -182,6 +193,18 @@ actor GatewayService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addAuth(&request)
+        _ = try await URLSession.shared.data(for: request)
+    }
+
+    /// POST /api/owner/generate-avatar — generate owner avatar from name + about.
+    /// Image gen can take 10-30s, so use a longer timeout.
+    func generateOwnerAvatar() async throws {
+        let url = baseURL.appending(path: "api/owner/generate-avatar")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
         addAuth(&request)
         _ = try await URLSession.shared.data(for: request)
     }

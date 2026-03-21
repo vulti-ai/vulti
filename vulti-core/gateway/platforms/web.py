@@ -202,6 +202,19 @@ class WebAdapter(BasePlatformAdapter):
             adapter._save_session_meta(session_id, session)
             return session
 
+        @app.patch("/api/sessions/{session_id}")
+        async def update_session(session_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            meta = adapter._get_session_meta(session_id)
+            if not meta:
+                return {"ok": False, "error": "Session not found"}
+            for field in ("name", "preview"):
+                if field in data:
+                    meta[field] = data[field]
+            adapter._save_session_meta(session_id, meta)
+            return meta
+
         @app.delete("/api/sessions/{session_id}")
         async def delete_session(session_id: str, authorization: str = Header("")):
             await get_current_user(authorization)
@@ -888,6 +901,11 @@ class WebAdapter(BasePlatformAdapter):
             data = await req.json()
             return adapter._update_owner(data)
 
+        @app.post("/api/owner/generate-avatar")
+        async def generate_owner_avatar(authorization: str = Header("")):
+            await get_current_user(authorization)
+            return await asyncio.to_thread(adapter._generate_owner_avatar)
+
         # --- Agent Avatar (fetch) ---
 
         @app.get("/api/agents/{agent_id}/avatar")
@@ -938,6 +956,18 @@ class WebAdapter(BasePlatformAdapter):
         async def clear_pane_widgets(agent_id: str, tab: str = None, authorization: str = Header("")):
             await get_current_user(authorization)
             return adapter._clear_pane_widgets(agent_id, tab)
+
+        @app.delete("/api/agents/{agent_id}/pane/widgets/{widget_id}")
+        async def remove_pane_widget(agent_id: str, widget_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._remove_pane_widget(agent_id, widget_id)
+
+        @app.put("/api/agents/{agent_id}/pane/reorder")
+        async def reorder_pane_widgets(agent_id: str, req: Request, authorization: str = Header("")):
+            await get_current_user(authorization)
+            data = await req.json()
+            widget_ids = data.get("widget_ids", [])
+            return adapter._reorder_pane_widgets(agent_id, widget_ids)
 
         # --- Finalize Onboarding ---
 
@@ -1439,10 +1469,13 @@ class WebAdapter(BasePlatformAdapter):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Write personality to soul if provided
+        # Write personality to soul if provided, otherwise clear default for clean onboarding
+        soul_path = registry.agent_soul_path(agent_id)
         if data.get("personality"):
-            soul_path = registry.agent_soul_path(agent_id)
             soul_path.write_text(data["personality"], encoding="utf-8")
+        else:
+            # Empty soul so onboarding starts fresh — agent has no identity yet
+            soul_path.write_text("", encoding="utf-8")
 
         # Write model to agent's config.yaml if provided
         if data.get("model"):
@@ -2407,7 +2440,7 @@ class WebAdapter(BasePlatformAdapter):
                     "openrouter/google/gemini-2.5-pro",
                     "openrouter/openai/gpt-4o",
                     "openrouter/meta-llama/llama-4-maverick",
-                    "openrouter/deepseek/deepseek-chat-v3",
+                    "openrouter/deepseek/deepseek-chat-v3.1",
                 ],
             },
             {
@@ -2753,6 +2786,90 @@ class WebAdapter(BasePlatformAdapter):
         owner_file.write_text(json.dumps(current, indent=2))
         return current
 
+    def _generate_owner_avatar(self) -> dict:
+        """Generate a profile avatar for the owner using their name and about.
+
+        Owner has blanket permissions — all secrets from .env are injected
+        so any image gen provider that's configured will work.
+        """
+        owner = self._get_owner()
+        name = owner.get("name", "").strip() or "Human"
+        about = owner.get("about", "").strip()
+
+        prompt = (
+            f"A minimalist, stylized profile avatar for a person named '{name}'. "
+            f"Clean digital art style, warm and approachable, muted professional colors. "
+            f"Suitable as a small circular profile picture. White or transparent background."
+        )
+        if about:
+            prompt += f" About them: {about[:200]}."
+
+        home = self._get_vulti_home()
+        avatar_path = home / "owner_avatar.png"
+
+        # Owner has blanket access — inject ALL secrets from .env
+        env_file = home / ".env"
+        originals = {}
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key, value = key.strip(), value.strip().strip("'\"")
+                if value:
+                    originals[key] = os.environ.get(key)
+                    os.environ[key] = value
+
+        try:
+            image_url = self._try_openrouter_image(prompt)
+            if not image_url:
+                # fal needs no agent context when env vars are already set
+                fal_key = os.getenv("FAL_KEY")
+                if fal_key:
+                    try:
+                        import fal_client
+                        handler = fal_client.submit(
+                            "fal-ai/flux-2-pro",
+                            arguments={
+                                "prompt": prompt,
+                                "image_size": "square",
+                                "num_inference_steps": 30,
+                                "guidance_scale": 4.5,
+                                "num_images": 1,
+                                "output_format": "png",
+                                "enable_safety_checker": False,
+                            },
+                        )
+                        result = handler.get()
+                        if result and result.get("images"):
+                            image_url = result["images"][0]["url"]
+                    except Exception as e:
+                        logger.warning("fal image gen failed for owner: %s", e)
+
+            if not image_url:
+                return {"ok": False, "error": "No image generation provider available"}
+
+            import urllib.request, base64
+            urllib.request.urlretrieve(image_url, str(avatar_path))
+            logger.info("Generated owner avatar at %s", avatar_path)
+
+            with open(avatar_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            self._update_owner({"avatar": b64})
+
+            return {"ok": True, "path": str(avatar_path)}
+        except Exception as e:
+            logger.error("Owner avatar generation failed: %s", e)
+            return {"ok": False, "error": str(e)}
+        finally:
+            # Restore original env
+            for key, original in originals.items():
+                if original is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = original
+
     # --- Agent Avatar (fetch) ---
 
     def _get_agent_avatar(self, agent_id: str) -> dict:
@@ -2871,6 +2988,47 @@ class WebAdapter(BasePlatformAdapter):
         else:
             if pane_path.exists():
                 pane_path.unlink()
+        return {"ok": True}
+
+    def _remove_pane_widget(self, agent_id: str, widget_id: str) -> dict:
+        """Remove a single widget by ID from the pane."""
+        registry = self._get_agent_registry()
+        pane_path = registry.agent_home(agent_id) / "pane_widgets.json"
+        if pane_path.exists():
+            try:
+                data = json.loads(pane_path.read_text())
+                tabs = data.get("tabs", {})
+                for tab_name, widgets in tabs.items():
+                    tabs[tab_name] = [w for w in widgets if w.get("id") != widget_id]
+                data["tabs"] = tabs
+                pane_path.write_text(json.dumps(data, indent=2))
+            except Exception:
+                pass
+        return {"ok": True}
+
+    def _reorder_pane_widgets(self, agent_id: str, widget_ids: list) -> dict:
+        """Reorder widgets on the home tab by the given ID order."""
+        registry = self._get_agent_registry()
+        pane_path = registry.agent_home(agent_id) / "pane_widgets.json"
+        if pane_path.exists():
+            try:
+                data = json.loads(pane_path.read_text())
+                tabs = data.get("tabs", {})
+                home = tabs.get("home", [])
+                # Build index by id
+                by_id = {w.get("id"): w for w in home}
+                # Reorder: put known IDs first in order, then any unknown ones
+                reordered = []
+                for wid in widget_ids:
+                    if wid in by_id:
+                        reordered.append(by_id.pop(wid))
+                # Append any remaining widgets not in the order list
+                reordered.extend(by_id.values())
+                tabs["home"] = reordered
+                data["tabs"] = tabs
+                pane_path.write_text(json.dumps(data, indent=2))
+            except Exception:
+                pass
         return {"ok": True}
 
     # --- Finalize Onboarding ---

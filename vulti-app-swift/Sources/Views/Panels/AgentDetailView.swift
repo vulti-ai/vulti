@@ -1,106 +1,73 @@
 import SwiftUI
 
-/// Two-column agent detail: Chat (26rem) LEFT + Tabs RIGHT.
-/// Matches SlideOutPanel.svelte agent mode layout.
+/// Agent detail: Chat LEFT + ScratchPad RIGHT (appears when agent pushes content).
 struct AgentDetailView: View {
     let agentId: String
     @Environment(AppState.self) private var app
-    @State private var selectedTab = Tab.home
-
-    enum Tab: String, CaseIterable {
-        case home = "Home"
-        case profile = "Profile"
-        case connections = "Connections"
-        case skills = "Skills"
-        case actions = "Actions"
-        case wallet = "Wallet"
-        case analytics = "Analytics"
-    }
-
-    @State private var chatWidth: CGFloat = 380
+    @State private var scratchPadHasContent = false
+    @State private var expandedWidget: DrillTarget? = nil
+    @State private var pollTimer: Timer?
 
     var body: some View {
         GeometryReader { geo in
-            let minChat = geo.size.width / 3
-            let maxChat = geo.size.width * 2 / 3
-
             HStack(spacing: 0) {
-                // Left: Chat — resizable
-                ChatView(agentId: agentId)
-                    .frame(width: max(minChat, min(maxChat, chatWidth)))
+                ChatView(
+                    agentId: agentId,
+                    autoIntrospect: true,
+                    viewingContext: expandedWidget?.contextLabel
+                )
+                .frame(width: scratchPadHasContent ? geo.size.width / 3 : geo.size.width)
 
-                // Drag handle divider
-                Rectangle()
-                    .fill(VultiTheme.border)
-                    .frame(width: 1)
-                    .overlay(
-                        Rectangle()
-                            .fill(Color.clear)
-                            .frame(width: 8)
-                            .contentShape(Rectangle())
-                            .onHover { h in if h { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
-                            .gesture(
-                                DragGesture(minimumDistance: 1)
-                                    .onChanged { value in
-                                        let newWidth = chatWidth + value.translation.width
-                                        chatWidth = max(minChat, min(maxChat, newWidth))
-                                    }
-                            )
+                if scratchPadHasContent {
+                    // Static 1px divider
+                    Rectangle()
+                        .fill(VultiTheme.border)
+                        .frame(width: 1)
+
+                    ScratchPadView(
+                        agentId: agentId,
+                        expandedWidget: $expandedWidget,
+                        hasContent: $scratchPadHasContent
                     )
+                }
+            }
+        }
+        .animation(.spring(duration: 0.4), value: scratchPadHasContent)
+        .onAppear { startWidgetPolling() }
+        .onDisappear { stopWidgetPolling() }
+    }
 
-                // Right: Tabs — fills remaining space
-                VStack(spacing: 0) {
-                    tabBar
-                    Divider()
-                    ScrollView {
-                        tabContent
-                            .padding(24)
+    /// Poll for pane widgets from AgentDetailView so we detect content
+    /// even before ScratchPadView is mounted.
+    private func startWidgetPolling() {
+        checkForWidgets()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            checkForWidgets()
+        }
+    }
+
+    private func stopWidgetPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+    }
+
+    private func checkForWidgets() {
+        guard !scratchPadHasContent else {
+            // Already showing — stop polling from here, ScratchPadView takes over
+            pollTimer?.invalidate()
+            pollTimer = nil
+            return
+        }
+        Task {
+            if let pane = try? await app.client.getPaneWidgets(agentId: agentId),
+               let tabs = pane.tabs {
+                let hasWidgets = tabs.values.contains { !$0.isEmpty }
+                if hasWidgets {
+                    await MainActor.run {
+                        scratchPadHasContent = true
                     }
                 }
-                .frame(maxWidth: .infinity)
             }
-        }
-    }
-
-    /// Tab bar matching original: 0.625rem vertical, 1rem horizontal padding,
-    /// 0.8125rem font, weight 500, 2px bottom border on active.
-    private var tabBar: some View {
-        HStack(alignment: .bottom, spacing: 0) {
-            ForEach(Tab.allCases, id: \.self) { tab in
-                Button {
-                    selectedTab = tab
-                } label: {
-                    Text(tab.rawValue)
-                        .font(.system(size: 13, weight: .medium))
-                        .padding(.horizontal, 16)
-                        .frame(height: 40)
-                        .overlay(alignment: .bottom) {
-                            if selectedTab == tab {
-                                Rectangle()
-                                    .fill(VultiTheme.inkSoft)
-                                    .frame(height: 2)
-                            }
-                        }
-                        .foregroundStyle(selectedTab == tab ? VultiTheme.inkSoft : VultiTheme.inkDim)
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 8)
-        .frame(height: 40)
-    }
-
-    @ViewBuilder
-    private var tabContent: some View {
-        switch selectedTab {
-        case .home: AgentHomeTab(agentId: agentId)
-        case .profile: AgentProfileTab(agentId: agentId)
-        case .connections: AgentConnectionsTab(agentId: agentId)
-        case .skills: AgentSkillsTab(agentId: agentId)
-        case .actions: AgentActionsTab(agentId: agentId)
-        case .wallet: AgentWalletTab(agentId: agentId)
-        case .analytics: AgentAnalyticsTab(agentId: agentId)
         }
     }
 }
@@ -564,11 +531,11 @@ struct AgentConnectionsTab: View {
                     .padding(.vertical, 8)
                     .padding(.leading, 16)
             } else {
-                ForEach(models, id: \.self) { model in
-                    let fullId = "\(provider.id)/\(model)"
-                    let isActive = configModel == fullId || configModel == model
+                ForEach(models, id: \.self) { rawModel in
+                    let model = stripProviderPrefix(rawModel)
+                    let isActive = configModel == model
                     Button {
-                        saveModel(fullId)
+                        saveModel(model)
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
@@ -590,6 +557,14 @@ struct AgentConnectionsTab: View {
         }
         .padding(.vertical, 4)
         .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func stripProviderPrefix(_ model: String) -> String {
+        let prefixes = ["openrouter/", "openai/openai/", "anthropic/anthropic/"]
+        for prefix in prefixes {
+            if model.hasPrefix(prefix) { return String(model.dropFirst(prefix.count)) }
+        }
+        return model
     }
 
     private func saveModel(_ model: String) {

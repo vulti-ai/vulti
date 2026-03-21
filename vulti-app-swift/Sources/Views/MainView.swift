@@ -12,7 +12,7 @@ struct MainView: View {
 
             // Left toolbar (matches screenshot: top-left, stacked, paper material)
             if app.panelMode == nil {
-                VStack(spacing: 2) {
+                VStack(spacing: 8) {
                     ToolbarButton(icon: "gear", tooltip: "Settings") {
                         app.openSettings()
                     }
@@ -56,25 +56,32 @@ struct ToolbarButton: View {
     let icon: String
     let tooltip: String
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 14))
-                .foregroundStyle(VultiTheme.inkDim)
+                .foregroundStyle(VultiTheme.rainbowGradient)
                 .frame(width: 36, height: 36)
                 .background {
                     RoundedRectangle(cornerRadius: 10)
                         .fill(.ultraThinMaterial)
                         .overlay(
                             RoundedRectangle(cornerRadius: 10)
-                                .fill(VultiTheme.paperWarm.opacity(0.6))
+                                .fill(VultiTheme.paperWarm.opacity(isHovered ? 0.9 : 0.6))
                         )
                 }
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(VultiTheme.border))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(VultiTheme.rainbowGradient, lineWidth: isHovered ? 1.5 : 1)
+                )
+                .scaleEffect(isHovered ? 1.08 : 1.0)
+                .shadow(color: .black.opacity(isHovered ? 0.12 : 0.06), radius: isHovered ? 12 : 8, y: isHovered ? 6 : 4)
         }
         .buttonStyle(.plain)
         .help(tooltip)
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.15), value: isHovered)
     }
 }

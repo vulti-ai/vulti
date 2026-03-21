@@ -199,7 +199,8 @@ struct SquadCanvas: View {
                 height: geo.size.height
             )
             ZStack {
-                VultiTheme.paper.opacity(0.85).ignoresSafeArea()
+                VultiTheme.paper.opacity(0.7).ignoresSafeArea()
+                VultiTheme.noiseOverlay().ignoresSafeArea()
                 canvasContent(layout: layout, size: geo.size)
                     .scaleEffect(scale)
                     .offset(x: offset.x, y: offset.y)
@@ -576,10 +577,20 @@ struct BezierEdge: View {
         return CGPoint(x: to.x + dir.x * spread, y: to.y + dir.y * spread)
     }
 
+    /// Curve endpoint shortened by arrowLen so the line stops at the arrow base, not the tip
+    private var shortenedEnd: CGPoint {
+        let arrowLen: CGFloat = 12
+        let angle = atan2(to.y - controlPoint2.y, to.x - controlPoint2.x)
+        return CGPoint(
+            x: to.x - arrowLen * Foundation.cos(angle),
+            y: to.y - arrowLen * Foundation.sin(angle)
+        )
+    }
+
     var bezierPath: Path {
         Path { p in
             p.move(to: from)
-            p.addCurve(to: to, control1: controlPoint1, control2: controlPoint2)
+            p.addCurve(to: shortenedEnd, control1: controlPoint1, control2: controlPoint2)
         }
     }
 
