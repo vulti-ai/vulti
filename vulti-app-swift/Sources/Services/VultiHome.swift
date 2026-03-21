@@ -36,7 +36,7 @@ final class VultiHome: Sendable {
     static func agentDir(_ id: String) -> URL { root.appending(path: "agents/\(id)") }
     static func agentConfig(_ id: String) -> URL { agentDir(id).appending(path: "config.yaml") }
     static func agentSoul(_ id: String) -> URL { agentDir(id).appending(path: "SOUL.md") }
-    static func agentWallet(_ id: String) -> URL { agentDir(id).appending(path: "wallet.json") }
+    static func agentWallet(_ id: String) -> URL { agentDir(id).appending(path: "creditcard.json") }
     static func agentCron(_ id: String) -> URL { agentDir(id).appending(path: "cron/jobs.json") }
     static func agentUser(_ id: String) -> URL { agentDir(id).appending(path: "memories/USER.md") }
     static func agentMemory(_ id: String) -> URL { agentDir(id).appending(path: "memories/MEMORY.md") }

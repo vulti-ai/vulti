@@ -62,7 +62,7 @@ struct ChatView: View {
                                 HStack(alignment: .top, spacing: 8) {
                                     ThinkingAvatar()
                                     MarkdownMessageView(
-                                        content: ws.streamingContent,
+                                        content: stripToolCallXML(ws.streamingContent),
                                         isUser: false
                                     )
                                         .padding(.horizontal, 14)
@@ -74,8 +74,23 @@ struct ChatView: View {
                                 .id("streaming")
                             }
 
+                            // Active tool call indicator
+                            if let toolCall = ws.activeToolCall {
+                                HStack(spacing: 6) {
+                                    Text(toolCall)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(VultiTheme.inkMuted)
+                                        .lineLimit(1)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(VultiTheme.paperDeep.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                                .id("tool_use")
+                            }
+
                             // Typing indicator — agent avatar with spinning rainbow border
-                            if ws.isTyping {
+                            if ws.isTyping && ws.activeToolCall == nil {
                                 HStack {
                                     ThinkingAvatar()
                                     Spacer()
@@ -518,6 +533,26 @@ struct ChatView: View {
     }
 }
 
+/// Strip tool call XML from message content so it does not render as raw text.
+private func stripToolCallXML(_ text: String) -> String {
+    var result = text
+    let patterns = [
+        "<invoke[\\s\\S]*?</invoke>",
+        "<function_calls>[\\s\\S]*?</function_calls>",
+        "<antml:invoke[\\s\\S]*?</antml:invoke>",
+    ]
+    for pattern in patterns {
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+            result = regex.stringByReplacingMatches(
+                in: result,
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: ""
+            )
+        }
+    }
+    return result.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
 struct MessageBubble: View {
     let message: ChatMessage
     var isUser: Bool { message.role == "user" }
@@ -528,7 +563,6 @@ struct MessageBubble: View {
             if isUser { Spacer(minLength: 60) }
 
             if !isUser {
-                // Agent avatar (28x28 matching Tauri h-7 w-7)
                 ZStack {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(VultiTheme.paperWarm)
@@ -540,7 +574,7 @@ struct MessageBubble: View {
             }
 
             MarkdownMessageView(
-                content: message.content ?? "",
+                content: stripToolCallXML(message.content ?? ""),
                 isUser: isUser
             )
                 .padding(.horizontal, 14)
@@ -566,6 +600,7 @@ struct MessageBubble: View {
 
 /// Agent avatar with a spinning rainbow border to indicate thinking/streaming.
 struct ThinkingAvatar: View {
+
     @State private var rotation: Double = 0
 
     var body: some View {

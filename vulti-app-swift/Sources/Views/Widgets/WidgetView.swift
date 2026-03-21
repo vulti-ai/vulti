@@ -525,7 +525,7 @@ struct LiveProfileWidget: View {
     }
 }
 
-/// Live wallet widget — fetches card + vault data from API.
+/// Live wallet widget — fetches card from creditcard.json API, vault from CLI-backed API.
 struct LiveWalletWidget: View {
     let agentId: String
     var tick: Int = 0
@@ -535,10 +535,12 @@ struct LiveWalletWidget: View {
     @State private var cardExpiry: String?
     @State private var vaultId: String?
     @State private var vaultName: String?
+    @State private var portfolioValue: String?
+    @State private var chainCount: Int = 0
     @State private var loaded = false
 
     private var hasCard: Bool { cardLast4 != nil && !(cardLast4?.isEmpty ?? true) }
-    private var hasVault: Bool { vaultId != nil && !(vaultId?.isEmpty ?? true) }
+    private var hasVault: Bool { vaultName != nil && !(vaultName?.isEmpty ?? true) }
 
     var body: some View {
         Group {
@@ -549,14 +551,14 @@ struct LiveWalletWidget: View {
                 HStack(alignment: .top, spacing: 12) {
                     CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
                         .frame(maxWidth: .infinity)
-                    VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "")
+                    VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "", portfolioValue: portfolioValue, chainCount: chainCount)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .fixedSize(horizontal: false, vertical: true)
             } else if hasCard {
                 CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
             } else if hasVault {
-                VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "")
+                VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "", portfolioValue: portfolioValue, chainCount: chainCount)
             } else {
                 HStack {
                     Image(systemName: "creditcard")
@@ -570,7 +572,7 @@ struct LiveWalletWidget: View {
             }
         }
         .task(id: tick) {
-            // Fetch wallet (card)
+            // Fetch credit card
             if let wallet = try? await app.client.getWallet(agentId: agentId) {
                 if let cc = wallet["credit_card"]?.value as? [String: Any] {
                     cardName = cc["name"] as? String ?? cc["cardholder_name"] as? String
@@ -580,10 +582,21 @@ struct LiveWalletWidget: View {
                     cardExpiry = cc["expiry"] as? String
                 }
             }
-            // Fetch vault
-            if let vault = try? await app.client.getVault(agentId: agentId) {
+            // Fetch vault (CLI-backed — only returns data if .vult keyshare exists)
+            if let vault = try? await app.client.getVault(agentId: agentId),
+               let name = vault.name, !name.isEmpty {
                 vaultId = vault.vaultId
-                vaultName = vault.name
+                vaultName = name
+                chainCount = vault.chains ?? 0
+                // Fetch portfolio value
+                if let portfolio = try? await app.client.getVaultPortfolio(agentId: agentId) {
+                    portfolioValue = portfolio.data?.portfolio?.totalValue?.amount
+                }
+            } else {
+                vaultId = nil
+                vaultName = nil
+                portfolioValue = nil
+                chainCount = 0
             }
             loaded = true
         }

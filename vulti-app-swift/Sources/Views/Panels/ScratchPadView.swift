@@ -881,6 +881,7 @@ struct CreditCardVisual: View {
     let name: String
     let last4: String
     let expiry: String
+    var cvv: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -921,6 +922,16 @@ struct CreditCardVisual: View {
                     .foregroundStyle(.white.opacity(0.8))
                     .lineLimit(1)
                 Spacer()
+                if let cvv, !cvv.isEmpty {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text("CVV")
+                            .font(.system(size: 6, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.4))
+                        Text("\u{2022}\u{2022}\u{2022}")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
                 VStack(alignment: .trailing, spacing: 1) {
                     Text("VALID THRU")
                         .font(.system(size: 6, weight: .medium))
@@ -949,7 +960,8 @@ struct CreditCardVisual: View {
 struct VaultVisual: View {
     let name: String
     let vaultId: String
-    var addresses: [String: String] = [:]
+    var portfolioValue: String? = nil
+    var chainCount: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -964,22 +976,33 @@ struct VaultVisual: View {
                     .foregroundStyle(.white.opacity(0.5))
             }
 
-            Spacer()
+            Spacer(minLength: 6)
 
             // Vault name
             Text(name)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(1)
 
             // Vault ID
-            Text(truncate(vaultId))
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
-                .lineLimit(1)
-                .padding(.top, 2)
+            if !vaultId.isEmpty {
+                Text(truncate(vaultId))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+                    .padding(.top, 1)
+            }
 
-            Spacer()
+            Spacer(minLength: 6)
+
+            // Portfolio value
+            if let value = portfolioValue {
+                Text("$\(value)")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+
+            Spacer(minLength: 4)
 
             // Bottom: status + chain count
             HStack {
@@ -992,14 +1015,14 @@ struct VaultVisual: View {
                         .foregroundStyle(.white.opacity(0.5))
                 }
                 Spacer()
-                if !addresses.isEmpty {
-                    Text("\(addresses.count) chains")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.6))
+                if chainCount > 0 {
+                    Text("\(chainCount) chains")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
                 }
             }
         }
-        .padding(16)
+        .padding(14)
         .frame(height: 140)
         .background(
             LinearGradient(
@@ -1032,7 +1055,8 @@ struct WalletWidgetContent: View {
                 CreditCardVisual(
                     name: data.cardName ?? "",
                     last4: data.cardLast4 ?? "",
-                    expiry: data.cardExpiry ?? ""
+                    expiry: data.cardExpiry ?? "",
+                    cvv: data.cardCode
                 )
                 .frame(maxWidth: .infinity)
 

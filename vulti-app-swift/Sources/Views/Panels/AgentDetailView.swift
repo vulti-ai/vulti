@@ -682,6 +682,7 @@ struct CardSubtab: View {
     @State private var cardName: String?
     @State private var cardNumber: String?
     @State private var cardExpiry: String?
+    @State private var cardCode: String?
     @State private var hasCard = false
 
     var body: some View {
@@ -710,6 +711,7 @@ struct CardSubtab: View {
                                 cardName = name
                                 cardNumber = number
                                 cardExpiry = expiry
+                                cardCode = code.isEmpty ? nil : code
                                 hasCard = true
                                 isEditing = false
                             }
@@ -725,11 +727,12 @@ struct CardSubtab: View {
                             .monospaced()
                     }
                     LabeledContent("Expiry") { Text(cardExpiry ?? "\u{2014}") }
+                    LabeledContent("CVV") { Text(cardCode != nil ? "\u{2022}\u{2022}\u{2022}" : "\u{2014}") }
                     Button("Edit") {
                         name = cardName ?? ""
                         number = cardNumber ?? ""
                         expiry = cardExpiry ?? ""
-                        code = ""
+                        code = cardCode ?? ""
                         isEditing = true
                     }
                     .buttonStyle(.vultiSecondary)
@@ -755,6 +758,7 @@ struct CardSubtab: View {
                 cardName = cc["name"] as? String
                 cardNumber = cc["number"] as? String
                 cardExpiry = cc["expiry"] as? String
+                cardCode = cc["code"] as? String
                 hasCard = true
             }
         } catch {
@@ -925,6 +929,7 @@ struct CryptoSubtab: View {
                 _ = try await app.vultisig.verifyVault(
                     vaultId: vaultId,
                     code: verifyCode.trimmingCharacters(in: .whitespaces),
+                    password: vaultPassword,
                     agentId: agentId
                 )
                 await loadVault()

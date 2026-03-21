@@ -17,16 +17,16 @@ logger = logging.getLogger(__name__)
 
 
 def _wallet_path() -> Path:
-    """Return the wallet.json path for the current agent."""
+    """Return the creditcard.json path for the current agent."""
     vulti_home = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
     agent_id = os.getenv("VULTI_AGENT_ID")
     if not agent_id:
-        return vulti_home / "wallet.json"
-    return vulti_home / "agents" / agent_id / "wallet.json"
+        return vulti_home / "creditcard.json"
+    return vulti_home / "agents" / agent_id / "creditcard.json"
 
 
 def _load_wallet() -> Dict[str, Any]:
-    """Load wallet.json for the current agent."""
+    """Load creditcard.json for the current agent."""
     wp = _wallet_path()
     if not wp.exists():
         return {}
@@ -37,7 +37,7 @@ def _load_wallet() -> Dict[str, Any]:
 
 
 def _save_wallet(data: Dict[str, Any]) -> None:
-    """Save wallet.json for the current agent."""
+    """Save creditcard.json for the current agent."""
     wp = _wallet_path()
     wp.parent.mkdir(parents=True, exist_ok=True)
     wp.write_text(json.dumps(data, indent=2), encoding="utf-8")

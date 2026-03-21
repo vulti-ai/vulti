@@ -73,6 +73,8 @@ class WebAdapter(BasePlatformAdapter):
         # Sessions with active streaming — send() uses "chunk" type instead
         # of "message" to avoid creating committed message bubbles mid-stream
         self._streaming_sessions: set = set()
+        # Per-session tool progress callbacks for WebSocket clients
+        self._ws_tool_callbacks: Dict[str, callable] = {}
 
     def _build_app(self):
         """Build the FastAPI application with all routes."""
@@ -1002,6 +1004,11 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return adapter._delete_agent_vault(agent_id)
 
+        @app.get("/api/agents/{agent_id}/vault/portfolio")
+        async def get_agent_vault_portfolio(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return await asyncio.to_thread(adapter._get_vault_portfolio, agent_id)
+
         # --- Pane Widgets ---
 
         @app.get("/api/agents/{agent_id}/pane")
@@ -1153,6 +1160,9 @@ class WebAdapter(BasePlatformAdapter):
             if ws:
                 await ws.send_text(json.dumps({"type": "typing", "active": True}))
 
+            # Set up tool progress callback for this session's WebSocket
+            self._setup_tool_progress_ws(session_id)
+
             # Call gateway message handler
             if not callable(self._message_handler):
                 logger.error("[web] _message_handler is not callable: type=%s value=%r", type(self._message_handler).__name__, self._message_handler)
@@ -1237,6 +1247,49 @@ class WebAdapter(BasePlatformAdapter):
                     await ws.send_text(json.dumps({"type": "typing", "active": False}))
                 except Exception:
                     pass
+
+    # --- Tool progress for WebSocket clients ---
+
+    def _setup_tool_progress_ws(self, session_id: str):
+        """Install a tool_progress_callback that emits tool_use events over WebSocket.
+
+        This runs in-band during the agent's tool execution. The callback is stored
+        on the adapter so the gateway's progress_callback can find it for web sessions.
+        """
+        import asyncio as _asyncio
+
+        ws = self._connections.get(session_id)
+        if not ws:
+            return
+
+        loop = _asyncio.get_event_loop()
+
+        def _ws_tool_progress(tool_name: str, preview: str = None, args: dict = None):
+            from agent.display import get_tool_emoji
+            emoji = get_tool_emoji(tool_name, default="⚙️")
+            msg = {
+                "type": "tool_use",
+                "name": tool_name,
+                "emoji": emoji,
+                "preview": (preview[:80] + "...") if preview and len(preview) > 80 else (preview or ""),
+            }
+            logger.info("[web] tool_use event: %s (session=%s)", tool_name, session_id)
+            current_ws = self._connections.get(session_id)
+            if current_ws:
+                try:
+                    _asyncio.run_coroutine_threadsafe(
+                        current_ws.send_text(json.dumps(msg)),
+                        loop,
+                    )
+                except Exception as e:
+                    logger.error("[web] Failed to send tool_use: %s", e)
+            else:
+                logger.warning("[web] No WS connection for session %s", session_id)
+
+        # Store under both raw and web:-prefixed keys since the gateway
+        # session store uses "web:{session_id}" as its session_id
+        self._ws_tool_callbacks[session_id] = _ws_tool_progress
+        self._ws_tool_callbacks[f"web:{session_id}"] = _ws_tool_progress
 
     # --- BasePlatformAdapter implementation ---
 
@@ -1413,6 +1466,8 @@ class WebAdapter(BasePlatformAdapter):
             return []
         sessions = []
         for f in sorted(data_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if f.stem.endswith("_widgets"):
+                continue
             try:
                 sessions.append(json.loads(f.read_text()))
             except Exception:
@@ -3015,7 +3070,7 @@ class WebAdapter(BasePlatformAdapter):
 
     def _get_agent_wallet(self, agent_id: str) -> dict:
         registry = self._get_agent_registry()
-        wallet_path = registry.agent_home(agent_id) / "wallet.json"
+        wallet_path = registry.agent_home(agent_id) / "creditcard.json"
         if wallet_path.exists():
             try:
                 return json.loads(wallet_path.read_text())
@@ -3025,7 +3080,7 @@ class WebAdapter(BasePlatformAdapter):
 
     def _save_agent_wallet(self, agent_id: str, data: dict) -> dict:
         registry = self._get_agent_registry()
-        wallet_path = registry.agent_home(agent_id) / "wallet.json"
+        wallet_path = registry.agent_home(agent_id) / "creditcard.json"
         wallet_path.parent.mkdir(parents=True, exist_ok=True)
         # Merge with existing
         current = {}
@@ -3041,36 +3096,72 @@ class WebAdapter(BasePlatformAdapter):
     # --- Agent Vault ---
 
     def _get_agent_vault(self, agent_id: str) -> dict:
+        """Get vault info. The .vult file is encrypted — use CLI for metadata."""
         registry = self._get_agent_registry()
         agent_home = registry.agent_home(agent_id)
-        # Look for .vult files
-        for f in agent_home.iterdir():
-            if f.suffix == ".vult":
-                try:
-                    data = json.loads(f.read_text())
-                    return {"vault_id": data.get("vault_id", f.stem), "name": data.get("name", f.stem), **data}
-                except Exception:
-                    return {"vault_id": f.stem, "name": f.stem}
+        # Find .vult keyshare — its stem is the vault name
+        vault_name = None
+        try:
+            for f in agent_home.iterdir():
+                if f.suffix == ".vult":
+                    vault_name = f.stem
+                    break
+        except FileNotFoundError:
+            pass
+        if not vault_name:
+            return {}
+        # Query CLI for vault ID and metadata
+        try:
+            import subprocess
+            vbin = str(self._vulti_home / "vultisig-cli" / "node_modules" / ".bin" / "vultisig")
+            result = subprocess.run(
+                [vbin, "vaults", "-o", "json", "--silent"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                for v in data.get("data", {}).get("vaults", []):
+                    if v.get("name") == vault_name:
+                        return {
+                            "vault_id": v.get("id", ""),
+                            "name": v.get("name", vault_name),
+                            "type": v.get("type", ""),
+                            "chains": v.get("chains", 0),
+                        }
+        except Exception:
+            pass
+        return {"vault_id": "", "name": vault_name}
+
+    def _get_vault_portfolio(self, agent_id: str) -> dict:
+        """Get vault portfolio by wrapping vultisig CLI."""
+        vault_info = self._get_agent_vault(agent_id)
+        vault_id = vault_info.get("vault_id")
+        if not vault_id:
+            return {}
+        try:
+            import subprocess
+            vbin = str(self._vulti_home / "vultisig-cli" / "node_modules" / ".bin" / "vultisig")
+            result = subprocess.run(
+                [vbin, "portfolio", "--vault", vault_id, "-o", "json", "--silent"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                return json.loads(result.stdout)
+        except Exception:
+            pass
         return {}
 
     def _delete_agent_vault(self, agent_id: str) -> dict:
         registry = self._get_agent_registry()
         agent_home = registry.agent_home(agent_id)
         deleted = False
-        for f in agent_home.iterdir():
-            if f.suffix == ".vult":
-                f.unlink()
-                deleted = True
-        # Also clear crypto wallet from wallet.json
-        wallet_path = agent_home / "wallet.json"
-        if wallet_path.exists():
-            try:
-                w = json.loads(wallet_path.read_text())
-                if "crypto" in w:
-                    del w["crypto"]
-                    wallet_path.write_text(json.dumps(w, indent=2))
-            except Exception:
-                pass
+        try:
+            for f in agent_home.iterdir():
+                if f.suffix == ".vult":
+                    f.unlink()
+                    deleted = True
+        except FileNotFoundError:
+            pass
         return {"ok": True, "deleted": deleted}
 
     # --- Pane Widgets ---
@@ -3228,39 +3319,35 @@ class WebAdapter(BasePlatformAdapter):
             },
         })
 
-        # 6. Wallet — credit card visual + vault visual
+        # 6. Wallet — credit card from creditcard.json, vault from .vult keyshare
         card_name = ""
         card_last4 = ""
         card_expiry = ""
         vault_id = ""
         vault_name = ""
         try:
-            wallet_path = agent_home / "wallet.json"
-            if wallet_path.exists():
-                w = json.loads(wallet_path.read_text(encoding="utf-8"))
+            cc_path = agent_home / "creditcard.json"
+            if cc_path.exists():
+                w = json.loads(cc_path.read_text(encoding="utf-8"))
                 cc = w.get("credit_card", {})
                 if cc.get("number"):
                     card_name = cc.get("cardholder_name", cc.get("name", ""))
                     card_last4 = cc["number"][-4:]
                     card_expiry = cc.get("expiry", "")
-                crypto = w.get("crypto", {})
-                if crypto.get("vault_id"):
-                    vault_id = crypto["vault_id"]
-                    vault_name = crypto.get("name", w.get("name", "Vault"))
         except Exception:
             pass
 
-        # Also check .vult files
-        if not vault_id:
-            try:
-                for f in agent_home.iterdir():
-                    if f.suffix == ".vult":
-                        vdata = json.loads(f.read_text())
-                        vault_id = vdata.get("vault_id", f.stem)
-                        vault_name = vdata.get("name", f.stem)
-                        break
-            except Exception:
-                pass
+        # Vault: .vult file is encrypted — use filename as name, CLI for ID
+        try:
+            for f in agent_home.iterdir():
+                if f.suffix == ".vult":
+                    vault_name = f.stem
+                    # Get vault ID from CLI
+                    vault_info = self._get_agent_vault(agent_id)
+                    vault_id = vault_info.get("vault_id", "")
+                    break
+        except Exception:
+            pass
 
         widgets.append({
             "id": "default_wallet",

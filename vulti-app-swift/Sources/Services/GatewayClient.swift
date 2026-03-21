@@ -534,15 +534,44 @@ actor GatewayClient {
     struct VaultResponse: Codable {
         var vaultId: String?
         var name: String?
+        var type: String?
+        var chains: Int?
 
         enum CodingKeys: String, CodingKey {
-            case name
+            case name, type, chains
             case vaultId = "vault_id"
+        }
+    }
+
+    struct VaultPortfolioResponse: Codable {
+        var data: PortfolioData?
+
+        struct PortfolioData: Codable {
+            var portfolio: Portfolio?
+        }
+
+        struct Portfolio: Codable {
+            var totalValue: TotalValue?
+            var chainBalances: [ChainBalance]?
+        }
+
+        struct TotalValue: Codable {
+            var amount: String?
+            var currency: String?
+        }
+
+        struct ChainBalance: Codable {
+            var chain: String?
+            var value: TotalValue?
         }
     }
 
     func getVault(agentId: String) async throws -> VaultResponse {
         try await gw.get(VaultResponse.self, path: "agents/\(agentId)/vault")
+    }
+
+    func getVaultPortfolio(agentId: String) async throws -> VaultPortfolioResponse {
+        try await gw.get(VaultPortfolioResponse.self, path: "agents/\(agentId)/vault/portfolio")
     }
 
     func deleteVault(agentId: String) async throws {

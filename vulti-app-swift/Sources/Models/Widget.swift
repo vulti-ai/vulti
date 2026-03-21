@@ -109,8 +109,11 @@ struct WidgetData: Codable {
     var cardName: String?
     var cardLast4: String?
     var cardExpiry: String?
+    var cardCode: String?
     var vaultId: String?
     var vaultName: String?
+    var vaultAddresses: [String: String]?
+    var chainCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case content, entries, columns, rows, src, alt, width, height
@@ -126,8 +129,11 @@ struct WidgetData: Codable {
         case cardName = "card_name"
         case cardLast4 = "card_last4"
         case cardExpiry = "card_expiry"
+        case cardCode = "card_code"
         case vaultId = "vault_id"
         case vaultName = "vault_name"
+        case vaultAddresses = "vault_addresses"
+        case chainCount = "chain_count"
         // toggleItems and actionItems are decoded manually from "items"
     }
 
@@ -165,8 +171,11 @@ struct WidgetData: Codable {
         cardName = try? c.decode(String.self, forKey: .cardName)
         cardLast4 = try? c.decode(String.self, forKey: .cardLast4)
         cardExpiry = try? c.decode(String.self, forKey: .cardExpiry)
+        cardCode = try? c.decode(String.self, forKey: .cardCode)
         vaultId = try? c.decode(String.self, forKey: .vaultId)
         vaultName = try? c.decode(String.self, forKey: .vaultName)
+        vaultAddresses = try? c.decode([String: String].self, forKey: .vaultAddresses)
+        chainCount = try? c.decode(Int.self, forKey: .chainCount)
 
         // "items" is polymorphic: bar_chart uses [BarItem], toggle_list uses [ToggleItem],
         // action_list uses [ActionItem]. Try each in order.

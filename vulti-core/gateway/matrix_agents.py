@@ -751,7 +751,8 @@ async def ensure_relationship_rooms(
         for rel in relationships:
             from_id = rel.get("from_agent_id", "")
             to_id = rel.get("to_agent_id", "")
-            if rel.get("rel_type") == "manages" and from_id not in ("owner", ""):
+            rel_type = rel.get("type", "") or rel.get("rel_type", "")
+            if rel_type == "manages" and from_id not in ("owner", ""):
                 team_managed.add(to_id)
 
         for rel in relationships:
@@ -761,7 +762,7 @@ async def ensure_relationship_rooms(
 
             from_id = rel.get("from_agent_id", "")
             to_id = rel.get("to_agent_id", "")
-            rel_type = rel.get("rel_type", "")
+            rel_type = rel.get("type", "") or rel.get("rel_type", "")
 
             if from_id == "owner" or to_id == "owner":
                 agent_id = to_id if from_id == "owner" else from_id
@@ -774,6 +775,16 @@ async def ensure_relationship_rooms(
                     manager_teams[from_id].append(to_id)
             elif rel_type == "collaborates":
                 collab_pairs.append((from_id, to_id))
+
+        # Implicit owner relationships: active agents not managed by another
+        # agent report directly to the owner and get a DM.
+        for agent_id, agent_data in agents_data.items():
+            if agent_data.get("status") != "active":
+                continue
+            if agent_id in team_managed:
+                continue
+            if agent_id not in owner_dm_agents:
+                owner_dm_agents.append(agent_id)
 
         # Create owner DMs
         for agent_id in owner_dm_agents:
@@ -861,9 +872,29 @@ async def create_owner_dm_room(
 
     agent_headers = {"Authorization": f"Bearer {agent_creds['access_token']}"}
     owner_headers = {"Authorization": f"Bearer {owner_creds['access_token']}"}
+    agent_user_id = agent_creds["user_id"]
+    owner_user_id = owner_creds["user_id"]
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
+            # Check if a DM already exists between this agent and the owner
+            resp = await client.get(
+                f"{homeserver_url}/_matrix/client/v3/joined_rooms",
+                headers=agent_headers,
+            )
+            if resp.status_code == 200:
+                from urllib.parse import quote
+                for room_id in resp.json().get("joined_rooms", []):
+                    members_resp = await client.get(
+                        f"{homeserver_url}/_matrix/client/v3/rooms/{quote(room_id, safe='')}/joined_members",
+                        headers=agent_headers,
+                    )
+                    if members_resp.status_code == 200:
+                        members = set(members_resp.json().get("joined", {}).keys())
+                        if members == {agent_user_id, owner_user_id}:
+                            logger.debug("Matrix: owner DM already exists for %s: %s", agent_id, room_id)
+                            return room_id
+
             resp = await client.post(
                 f"{homeserver_url}/_matrix/client/v3/createRoom",
                 headers=agent_headers,
@@ -871,7 +902,7 @@ async def create_owner_dm_room(
                     "is_direct": True,
                     "visibility": "private",
                     "preset": "trusted_private_chat",
-                    "invite": [owner_creds["user_id"]],
+                    "invite": [owner_user_id],
                     "initial_state": [
                         {
                             "type": "m.room.history_visibility",

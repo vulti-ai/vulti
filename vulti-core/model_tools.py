@@ -98,6 +98,7 @@ def _discover_tools():
         "tools.honcho_tools",
         "tools.homeassistant_tool",
         "tools.wallet_tool",
+        "tools.vault_tool",
     ]
     import importlib
     for mod_name in _modules:

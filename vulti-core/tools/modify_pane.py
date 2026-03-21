@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 _VULTI_HOME = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
 
-VALID_TABS = {"home", "chat"}
+VALID_TABS = {"chat"}
 VALID_WIDGET_TYPES = {
     "markdown", "kv", "table", "image",
     "status", "stat_grid", "bar_chart", "progress",
@@ -76,10 +76,8 @@ def _ensure_ids(widgets: List[dict]) -> List[dict]:
 
 def modify_pane(args, **kw) -> str:
     action = (args.get("action") or "").strip().lower()
-    # Default tab: during active chat, default to "chat"; otherwise "home"
-    hub_channel = os.getenv("VULTI_HUB_CHANNEL", "")
-    default_tab = "chat" if _session_id_from_env() and hub_channel not in ("onboard", "onboard-role", "onboard-connections", "onboard-skills", "onboard-actions") else "home"
-    tab = (args.get("tab") or default_tab).strip().lower()
+    # Home tab is fully live-widget-driven — modify_pane only writes to chat tab
+    tab = "chat"
     widgets = args.get("widgets") or []
     widget_id = args.get("widget_id") or ""
     widget_data = args.get("widget_data")
@@ -244,11 +242,9 @@ MODIFY_PANE_SCHEMA = {
         "  toggle_list — Toggleable items (data: {items: [{id, label, description?, enabled, tags?}], on_toggle_message})\n"
         "  action_list — Items with buttons (data: {items: [{id, title, subtitle?, status?, actions: [{label, message, variant?}]}]})\n"
         "  empty       — Empty state (data: {icon?: clock|bolt|book|search, heading, subtext?, button?: {label, message}})\n\n"
-        "Two tabs:\n"
-        "  chat — Per-session widgets (default during conversations). Starts blank each chat, fills as you respond.\n"
-        "  home — Persistent default dashboard. Updated during onboarding, persists across chats.\n\n"
-        "During normal conversations, widgets go to 'chat' by default.\n"
-        "During onboarding, widgets go to 'home' by default."
+        "Widgets are added to the chat pane (right side of the conversation).\n"
+        "Each session starts blank and fills as you respond.\n"
+        "The home tab is live-only (driven by API data) and cannot be modified."
     ),
     "parameters": {
         "type": "object",
@@ -259,7 +255,7 @@ MODIFY_PANE_SCHEMA = {
             },
             "tab": {
                 "type": "string",
-                "description": "'chat' (per-session, default during conversations) or 'home' (persistent dashboard, default during onboarding).",
+                "description": "Always 'chat'. The home tab is live-only and cannot be modified.",
             },
             "widgets": {
                 "type": "array",

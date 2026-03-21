@@ -167,15 +167,13 @@ final class AgentStore {
 
     func soul(for id: String) -> String? { VultiHome.readString(from: VultiHome.agentSoul(id)) }
     func config(for id: String) -> AgentConfig? { VultiHome.readYAML(AgentConfig.self, from: VultiHome.agentConfig(id)) }
-    func wallet(for id: String) -> WalletFile? { VultiHome.readJSON(WalletFile.self, from: VultiHome.agentWallet(id)) }
+    func creditCard(for id: String) -> CreditCardFile? { VultiHome.readJSON(CreditCardFile.self, from: VultiHome.agentWallet(id)) }
     func userMemory(for id: String) -> String? { VultiHome.readString(from: VultiHome.agentUser(id)) }
     func agentMemory(for id: String) -> String? { VultiHome.readString(from: VultiHome.agentMemory(id)) }
 
-    func saveWallet(_ wallet: WalletFile, for id: String) throws {
-        // Merge with existing
-        var existing = self.wallet(for: id) ?? WalletFile()
-        if wallet.creditCard != nil { existing.creditCard = wallet.creditCard }
-        if wallet.crypto != nil { existing.crypto = wallet.crypto }
+    func saveCreditCard(_ card: CreditCardFile, for id: String) throws {
+        var existing = self.creditCard(for: id) ?? CreditCardFile()
+        if card.creditCard != nil { existing.creditCard = card.creditCard }
         try VultiHome.atomicWriteJSON(existing, to: VultiHome.agentWallet(id))
     }
 

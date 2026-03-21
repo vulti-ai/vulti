@@ -816,13 +816,16 @@ class GatewayRunner:
 
         # Wallet
         try:
-            wallet_path = soul_path.parent / "wallet.json"
+            cc_path = soul_path.parent / "creditcard.json"
             has_card = False
             has_vault = False
-            if wallet_path.exists():
-                w = _json.loads(wallet_path.read_text(encoding="utf-8"))
+            if cc_path.exists():
+                w = _json.loads(cc_path.read_text(encoding="utf-8"))
                 has_card = bool(w.get("credit_card", {}).get("number"))
-                has_vault = bool(w.get("crypto", {}).get("vault_id"))
+            # Vault: only from .vult keyshare files
+            agent_dir = soul_path.parent
+            if agent_dir.exists():
+                has_vault = any(f.suffix == ".vult" for f in agent_dir.iterdir())
             lines.append(f"- Wallet: {'card active' if has_card else 'no card'}, {'vault active' if has_vault else 'no vault'}")
         except Exception:
             lines.append("- Wallet: unknown")
@@ -940,12 +943,10 @@ class GatewayRunner:
             "3. WAIT for the user to confirm. Do NOT proceed until they say yes.\n"
             "4. Once confirmed, call manage_own_connections(action='add', connection_names=[...]) "
             "to add ONLY the approved connections to your allowlist.\n"
-            "5. Update the default_connections widget showing ONLY your allowed connections.\n\n"
+            "The home dashboard updates automatically — do NOT use modify_pane for this.\n\n"
             "IMPORTANT:\n"
             "- Do NOT be greedy — only request connections you genuinely need for your role.\n"
             "- Do NOT add ALL connections. Be selective.\n"
-            "- The default_connections widget should ONLY show connections you are allowed to use, "
-            "not all available connections.\n"
             "- Do NOT ask for keys that are already configured.\n"
             "When the user is happy, tell them to click Next.]"
         )
@@ -2434,18 +2435,14 @@ class GatewayRunner:
                         "The MOMENT you can figure out the user's role from what they say, IMMEDIATELY:\n"
                         f"  1. Write role.txt at {_soul_path.parent / 'role.txt'} — a SINGLE WORD "
                         "(one of: assistant, therapist, researcher, engineer, writer, analyst, coach, creative, ops). Just the word, nothing else.\n"
-                        "  2. Call update_own_profile(role='<the role>') to update your agent profile metadata.\n"
-                        "  3. Update the default_personality widget with your role.\n"
+                        "  2. Call update_own_profile(role='the_role') to update your agent profile metadata.\n"
                         "Do NOT wait. Do NOT ask for the role word. Infer it and write it in the SAME response.\n\n"
                         "SOUL, USER, MEMORIES — BUILD OVER TIME:\n"
                         "As the conversation progresses, progressively save using write_file (overwrite as you learn more):\n"
                         f"  - SOUL.md at {_soul_path} — YOUR personality, voice, expertise, principles, and boundaries.\n"
                         f"  - USER.md at {_mem_dir}/USER.md — what you know about the human: name, role, preferences, goals.\n"
                         f"  - MEMORY.md at {_mem_dir}/MEMORY.md — 3-5 key facts about the job and context, separated by '§'.\n\n"
-                        "Update the corresponding widget each time you learn something:\n"
-                        "  - Role/job info → default_personality (markdown with your personality summary)\n"
-                        "  - User info → default_user (kv with entries like {key:'Name', value:'...'})\n"
-                        "  - Memory/facts → default_memories (kv with entries for each fact)\n\n"
+                        "The home dashboard updates automatically from the API — do NOT use modify_pane for home widgets.\n\n"
                         "BEFORE FINISHING: Before telling the user to click Next, verify you have written:\n"
                         "  1. role.txt (REQUIRED — must exist)\n"
                         "  2. SOUL.md (at least a draft)\n"
@@ -4974,17 +4971,22 @@ class GatewayRunner:
         )
         tool_progress_enabled = progress_mode != "off"
 
-        # Suppress tool progress for web when streaming is active —
-        # the streaming response itself provides real-time feedback,
-        # and progress send()/edit_message() calls create duplicate
-        # messages that interfere with the streaming chunk flow.
-        _scfg_pre = getattr(getattr(self, 'config', None), 'streaming', None)
-        if tool_progress_enabled and source.platform == Platform.WEB:
-            if _scfg_pre is None:
-                from gateway.config import StreamingConfig
-                _scfg_pre = StreamingConfig()
-            if _scfg_pre.enabled and _scfg_pre.transport != "off":
-                tool_progress_enabled = False
+        # For web platform: use lightweight WebSocket tool_use events instead of
+        # the progress queue (which sends full messages via send()/edit_message()).
+        _web_tool_callback = None
+        if source.platform == Platform.WEB:
+            tool_progress_enabled = False  # disable the queue-based progress
+            # Get the WebSocket-specific callback set up by the web adapter
+            web_adapter = self.adapters.get(Platform.WEB)
+            if web_adapter and hasattr(web_adapter, '_ws_tool_callbacks'):
+                # Look up by chat_id (e.g. "web:abc123") which contains the raw WS session_id
+                chat_id = source.chat_id or ""
+                ws_session_id = chat_id.replace("web:", "", 1) if chat_id.startswith("web:") else chat_id
+                _web_tool_callback = (
+                    web_adapter._ws_tool_callbacks.get(ws_session_id)
+                    or web_adapter._ws_tool_callbacks.get(chat_id)
+                    or web_adapter._ws_tool_callbacks.get(session_id)
+                )
         
         # Queue for progress messages (thread-safe)
         progress_queue = queue.Queue() if tool_progress_enabled else None
@@ -5274,7 +5276,7 @@ class GatewayRunner:
                 provider_require_parameters=pr.get("require_parameters", False),
                 provider_data_collection=pr.get("data_collection"),
                 session_id=session_id,
-                tool_progress_callback=progress_callback if tool_progress_enabled else None,
+                tool_progress_callback=_web_tool_callback or (progress_callback if tool_progress_enabled else None),
                 step_callback=_step_callback_sync if _hooks_ref.loaded_hooks else None,
                 stream_delta_callback=_stream_delta_cb,
                 stream_reset_callback=_stream_consumer.reset if _stream_consumer else None,

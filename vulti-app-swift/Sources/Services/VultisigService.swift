@@ -36,30 +36,26 @@ actor VultisigService {
         throw VultisigError.commandFailed("Could not extract vault ID from response")
     }
 
-    func verifyVault(vaultId: String, code: String, agentId: String? = nil) async throws -> String {
+    func verifyVault(vaultId: String, code: String, password: String = "", agentId: String? = nil) async throws -> String {
         _ = try await run([
             "verify", vaultId,
             "--code", code,
             "-o", "json", "--silent"
         ])
 
-        // If agent_id provided, export keyshare and save to agent dir
+        // If agent_id provided, export keyshare to agent dir
+        // The .vult file IS the vault — no other storage needed
         if let agentId {
-            // Get vault name from ~/.vultisig/
             let vaultName = vaultNameFromStore(vaultId: vaultId) ?? "vault"
             let exportPath = VultiHome.agentDir(agentId).appending(path: "\(vaultName).vult").path()
 
             _ = try await run([
                 "export",
                 "--vault", vaultId,
-                "--password", "", // uses stored credentials
+                "--password", password,
                 "--silent",
                 "-o", exportPath
             ])
-
-            // Auto-save crypto entry to wallet.json
-            let wallet = WalletFile(crypto: CryptoWalletEntry(vaultId: vaultId, name: vaultName))
-            try VultiHome.atomicWriteJSON(wallet, to: VultiHome.agentWallet(agentId))
         }
 
         return vaultId

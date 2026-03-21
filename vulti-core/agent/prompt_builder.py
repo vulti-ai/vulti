@@ -625,43 +625,65 @@ def build_rules_prompt(agent_id: Optional[str] = None) -> str:
 def build_wallet_prompt(agent_id: Optional[str] = None) -> str:
     """Build a wallet summary for the system prompt.
 
-    Only includes non-sensitive identifiers (cardholder name, last 4 digits,
-    vault name). Full card details are fetched on demand via the ``wallet`` tool.
+    Credit card info from creditcard.json (non-sensitive summary only).
+    Vault info from .vult keyshare files (no keyshare = no vault).
     """
     if not agent_id:
         return ""
 
     import json
     _vulti_home = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
-    wallet_path = _vulti_home / "agents" / agent_id / "wallet.json"
-    if not wallet_path.exists():
-        return ""
-
-    try:
-        data = json.loads(wallet_path.read_text(encoding="utf-8"))
-    except Exception:
-        return ""
-
+    agent_dir = _vulti_home / "agents" / agent_id
     sections = []
 
-    cc = data.get("credit_card")
-    if cc and cc.get("number"):
-        last4 = cc["number"][-4:]
-        sections.append(
-            f"- **Credit card**: {cc.get('name', 'Unknown')} ending in {last4}. "
-            f"Call `wallet(action='get_credit_card')` to retrieve full number, expiry, and CVV."
-        )
+    # Credit card from creditcard.json
+    cc_path = agent_dir / "creditcard.json"
+    if cc_path.exists():
+        try:
+            data = json.loads(cc_path.read_text(encoding="utf-8"))
+            cc = data.get("credit_card")
+            if cc and cc.get("number"):
+                last4 = cc["number"][-4:]
+                sections.append(
+                    f"- **Credit card**: {cc.get('name', 'Unknown')} ending in {last4}. "
+                    f"Call `wallet(action='get_credit_card')` to retrieve full number, expiry, and CVV."
+                )
+        except Exception:
+            pass
 
-    crypto = data.get("crypto")
-    if crypto and crypto.get("vault_id"):
-        vultisig_bin = str(_vulti_home / "vultisig-cli" / "node_modules" / ".bin" / "vultisig")
-        sections.append(
-            f"- Vultisig vault: \"{crypto.get('name', 'Vault')}\" "
-            f"(ID: {crypto['vault_id'][:16]}..., email: {crypto.get('email', '?')})\n"
-            f"  CLI binary: `{vultisig_bin}`\n"
-            f"  Use with `--vault {crypto['vault_id']}` for crypto operations. "
-            f"Load the 'vultisig-cli' skill for command reference."
-        )
+    # Vault from .vult keyshare file — encrypted, use CLI for metadata
+    try:
+        if agent_dir.exists():
+            for f in agent_dir.iterdir():
+                if f.suffix == ".vult":
+                    vault_name = f.stem
+                    vultisig_bin = str(_vulti_home / "vultisig-cli" / "node_modules" / ".bin" / "vultisig")
+                    # Get vault ID from CLI
+                    vault_id = ""
+                    try:
+                        import subprocess
+                        result = subprocess.run(
+                            [vultisig_bin, "vaults", "-o", "json", "--silent"],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        if result.returncode == 0:
+                            cli_data = json.loads(result.stdout)
+                            for v in cli_data.get("data", {}).get("vaults", []):
+                                if v.get("name") == vault_name:
+                                    vault_id = v.get("id", "")
+                                    break
+                    except Exception:
+                        pass
+                    id_hint = f" (ID: {vault_id[:16]}...)" if vault_id else ""
+                    sections.append(
+                        f"- Vultisig vault: \"{vault_name}\"{id_hint}\n"
+                        f"  CLI binary: `{vultisig_bin}`\n"
+                        f"  Use with `--vault {vault_id or vault_name}` for crypto operations. "
+                        f"You also have the `vault` tool for get_vault, create_vault, etc."
+                    )
+                    break
+    except Exception:
+        pass
 
     if not sections:
         return ""
