@@ -74,23 +74,8 @@ struct ChatView: View {
                                 .id("streaming")
                             }
 
-                            // Active tool call indicator
-                            if let toolCall = ws.activeToolCall {
-                                HStack(spacing: 6) {
-                                    Text(toolCall)
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(VultiTheme.inkMuted)
-                                        .lineLimit(1)
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(VultiTheme.paperDeep.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
-                                .id("tool_use")
-                            }
-
                             // Typing indicator — agent avatar with spinning rainbow border
-                            if ws.isTyping && ws.activeToolCall == nil {
+                            if ws.isTyping {
                                 HStack {
                                     ThinkingAvatar()
                                     Spacer()
@@ -557,8 +542,22 @@ struct MessageBubble: View {
     let message: ChatMessage
     var isUser: Bool { message.role == "user" }
     var isError: Bool { message.type == "error" }
+    var isToolUse: Bool { message.type == "tool_use" }
 
     var body: some View {
+        if isToolUse {
+            // Compact persistent tool call indicator
+            HStack(spacing: 6) {
+                Text(message.content ?? "")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(VultiTheme.inkMuted)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(VultiTheme.paperDeep.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+        } else {
         HStack {
             if isUser { Spacer(minLength: 60) }
 
@@ -595,6 +594,7 @@ struct MessageBubble: View {
 
             if !isUser { Spacer(minLength: 60) }
         }
+        } // else (not tool_use)
     }
 }
 

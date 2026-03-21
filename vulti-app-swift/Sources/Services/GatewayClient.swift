@@ -536,9 +536,11 @@ actor GatewayClient {
         var name: String?
         var type: String?
         var chains: Int?
+        var createdAt: Double?
+        var addresses: [String: String]?
 
         enum CodingKeys: String, CodingKey {
-            case name, type, chains
+            case name, type, chains, addresses, createdAt
             case vaultId = "vault_id"
         }
     }

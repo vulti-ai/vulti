@@ -857,32 +857,61 @@ struct CryptoSubtab: View {
 
     @ViewBuilder
     private func connectedVaultView(_ vault: GatewayClient.VaultResponse) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Section {
-                LabeledContent("Name") { Text(vault.name ?? "Unnamed") }
-                LabeledContent("Vault ID") {
-                    Text(truncateId(vault.vaultId ?? ""))
-                        .font(.system(size: 11)).monospaced().lineLimit(1)
-                        .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 16) {
+            // Green vault card
+            VaultVisual(
+                name: vault.name ?? "Vault",
+                vaultId: vault.vaultId ?? "",
+                chainCount: vault.chains ?? addresses.count,
+                vaultType: vault.type ?? "Fast Vault"
+            )
+
+            // Vault details
+            VStack(alignment: .leading, spacing: 8) {
+                Text("VAULT DETAILS")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkMuted)
+
+                vaultDetailRow("Name", vault.name ?? "Unnamed")
+                vaultDetailRow("Vault ID", truncateId(vault.vaultId ?? ""), mono: true, selectable: true)
+                vaultDetailRow("Type", vault.type?.capitalized ?? "Fast Vault")
+                vaultDetailRow("Security", "Encrypted, 2-of-2 threshold")
+                if let ts = vault.createdAt {
+                    let date = Date(timeIntervalSince1970: ts / 1000)
+                    vaultDetailRow("Created", date.formatted(date: .abbreviated, time: .shortened))
                 }
-            } header: {
-                Label("Vault connected", systemImage: "checkmark.shield.fill")
-                    .foregroundStyle(.green)
-                    .font(.system(size: 12, weight: .medium))
             }
 
+            // Addresses
             if !addresses.isEmpty {
                 Divider()
-                Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("CHAIN ADDRESSES")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(VultiTheme.inkMuted)
+
                     ForEach(addresses.sorted(by: { $0.key < $1.key }), id: \.key) { chain, addr in
-                        LabeledContent(chain) {
-                            Text(truncateId(addr))
-                                .font(.system(size: 11)).monospaced()
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Image(systemName: chainIcon(chain))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(chainColor(chain))
+                                    .frame(width: 16)
+                                Text(chain)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(VultiTheme.inkSoft)
+                                Spacer()
+                            }
+                            Text(addr)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(VultiTheme.inkDim)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                                 .textSelection(.enabled)
                         }
+                        .padding(10)
+                        .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
                     }
-                } header: {
-                    Text("ADDRESSES").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
                 }
             }
 
@@ -895,9 +924,51 @@ struct CryptoSubtab: View {
                     addresses = [:]
                 }
             }
-            .buttonStyle(.vultiSecondary)
+            .foregroundStyle(VultiTheme.coral)
+            .font(.system(size: 12, weight: .medium))
+            .buttonStyle(.plain)
         }
-        .font(.system(size: 12))
+    }
+
+    private func vaultDetailRow(_ key: String, _ value: String, mono: Bool = false, selectable: Bool = false) -> some View {
+        HStack {
+            Text(key)
+                .font(.system(size: 12))
+                .foregroundStyle(VultiTheme.inkDim)
+            Spacer()
+            Group {
+                if selectable {
+                    Text(value)
+                        .textSelection(.enabled)
+                } else {
+                    Text(value)
+                }
+            }
+            .font(.system(size: 12, design: mono ? .monospaced : .default))
+            .foregroundStyle(VultiTheme.inkSoft)
+            .lineLimit(1)
+        }
+    }
+
+    private func chainIcon(_ chain: String) -> String {
+        switch chain.lowercased() {
+        case "bitcoin": return "bitcoinsign.circle"
+        case "ethereum", "bsc": return "diamond"
+        case "solana": return "sun.max"
+        case "thorchain": return "bolt.shield"
+        default: return "circle"
+        }
+    }
+
+    private func chainColor(_ chain: String) -> Color {
+        switch chain.lowercased() {
+        case "bitcoin": return .orange
+        case "ethereum": return .blue
+        case "solana": return .purple
+        case "thorchain": return .cyan
+        case "bsc": return .yellow
+        default: return VultiTheme.inkDim
+        }
     }
 
     // MARK: - Actions
@@ -963,7 +1034,11 @@ struct CryptoSubtab: View {
 
     private func loadVault() async {
         vault = try? await app.client.getVault(agentId: agentId)
-        if let vid = vault?.vaultId {
+        // Addresses come from the vault response now (backend fetches via CLI)
+        if let addrs = vault?.addresses {
+            addresses = addrs
+        } else if let vid = vault?.vaultId, !vid.isEmpty {
+            // Fallback: fetch via Vultisig client
             if let addrs = try? await app.vultisig.addresses(vaultId: vid) {
                 var result: [String: String] = [:]
                 for (k, v) in addrs {

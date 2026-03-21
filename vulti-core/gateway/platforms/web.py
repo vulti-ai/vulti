@@ -3128,12 +3128,27 @@ class WebAdapter(BasePlatformAdapter):
                 for v in data.get("data", {}).get("vaults", []):
                     cli_name = v.get("name", "")
                     if _norm(cli_name) == norm_name or cli_name == vault_name:
-                        return {
-                            "vault_id": v.get("id", ""),
+                        vid = v.get("id", "")
+                        resp = {
+                            "vault_id": vid,
                             "name": v.get("name", vault_name),
                             "type": v.get("type", ""),
                             "chains": v.get("chains", 0),
+                            "createdAt": v.get("createdAt"),
                         }
+                        # Fetch addresses
+                        if vid:
+                            try:
+                                addr_result = subprocess.run(
+                                    [vbin, "addresses", "--vault", vid, "-o", "json", "--silent"],
+                                    capture_output=True, text=True, timeout=10,
+                                )
+                                if addr_result.returncode == 0:
+                                    addr_data = json.loads(addr_result.stdout)
+                                    resp["addresses"] = addr_data.get("data", {}).get("addresses", {})
+                            except Exception:
+                                pass
+                        return resp
         except Exception:
             pass
         return {"vault_id": "", "name": vault_name}

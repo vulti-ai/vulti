@@ -10,7 +10,6 @@ final class WebSocketManager {
     var isStreaming = false
     var messages: [ChatMessage] = []
     var streamingContent = ""
-    var activeToolCall: String? = nil  // e.g. "⚙️ web_search: \"crypto papers\""
 
     private var webSocket: URLSessionWebSocketTask?
     private var sessionId: String?
@@ -127,14 +126,14 @@ final class WebSocketManager {
             // Replace semantics — content is full accumulated text
             isStreaming = true
             isTyping = false
-            activeToolCall = nil
+
             streamingContent = json["content"] as? String ?? ""
 
         case "message":
             // Complete message — ends streaming
             isStreaming = false
             isTyping = false
-            activeToolCall = nil
+
             let content = json["content"] as? String ?? streamingContent
             streamingContent = ""
             let msg = ChatMessage(
@@ -151,7 +150,15 @@ final class WebSocketManager {
             let name = json["name"] as? String ?? "tool"
             let emoji = json["emoji"] as? String ?? "⚙️"
             let preview = json["preview"] as? String ?? ""
-            activeToolCall = preview.isEmpty ? "\(emoji) \(name)" : "\(emoji) \(name): \(preview)"
+            let label = preview.isEmpty ? "\(emoji) \(name)" : "\(emoji) \(name): \(preview)"
+            // Persist as a message so it stays in the chat history
+            let msg = ChatMessage(
+                messageId: UUID().uuidString,
+                type: "tool_use",
+                role: "tool",
+                content: label
+            )
+            messages.append(msg)
 
         case "typing":
             isTyping = json["active"] as? Bool ?? true

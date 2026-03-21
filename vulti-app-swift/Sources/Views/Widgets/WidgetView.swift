@@ -191,7 +191,7 @@ struct LiveConnectionsWidget: View {
                 Text("Allowed (\(allowed.count))")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(VultiTheme.inkMuted)
-                ForEach(allowed, id: \.name) { conn in
+                ForEach(allowed.prefix(5), id: \.name) { conn in
                     HStack {
                         Text(conn.name)
                             .font(.system(size: 11))
@@ -201,6 +201,11 @@ struct LiveConnectionsWidget: View {
                             .foregroundStyle(.green)
                     }
                     .padding(.vertical, 1)
+                }
+                if allowed.count > 5 {
+                    Text("+\(allowed.count - 5) more")
+                        .font(.system(size: 10))
+                        .foregroundStyle(VultiTheme.inkMuted)
                 }
                 if allowed.isEmpty {
                     Text("None")
@@ -220,14 +225,14 @@ struct LiveConnectionsWidget: View {
                 Text("Available (\(available.count))")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(VultiTheme.inkMuted)
-                ForEach(available.prefix(8), id: \.name) { conn in
+                ForEach(available.prefix(5), id: \.name) { conn in
                     Text(conn.name)
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkDim)
                         .padding(.vertical, 1)
                 }
-                if available.count > 8 {
-                    Text("+\(available.count - 8) more")
+                if available.count > 5 {
+                    Text("+\(available.count - 5) more")
                         .font(.system(size: 10))
                         .foregroundStyle(VultiTheme.inkMuted)
                 }
@@ -299,7 +304,7 @@ struct LiveJobsWidget: View {
                 }
             } else {
                 VStack(spacing: 6) {
-                    ForEach(jobs) { job in
+                    ForEach(jobs.prefix(5)) { job in
                         HStack {
                             Text(job.name ?? job.id)
                                 .font(.system(size: 12))
@@ -309,6 +314,11 @@ struct LiveJobsWidget: View {
                                 .font(.system(size: 12, design: .monospaced))
                                 .lineLimit(1)
                         }
+                    }
+                    if jobs.count > 5 {
+                        Text("+\(jobs.count - 5) more")
+                            .font(.system(size: 10))
+                            .foregroundStyle(VultiTheme.inkMuted)
                     }
                 }
             }
@@ -339,7 +349,7 @@ struct LiveRulesWidget: View {
                 }
             } else {
                 VStack(spacing: 6) {
-                    ForEach(rules) { rule in
+                    ForEach(rules.prefix(5)) { rule in
                         HStack {
                             Text(rule.name ?? rule.id)
                                 .font(.system(size: 12))
@@ -348,6 +358,11 @@ struct LiveRulesWidget: View {
                             Text((rule.enabled ?? true) ? "\u{2713}" : "\u{23f8}")
                                 .font(.system(size: 12))
                         }
+                    }
+                    if rules.count > 5 {
+                        Text("+\(rules.count - 5) more")
+                            .font(.system(size: 10))
+                            .foregroundStyle(VultiTheme.inkMuted)
                     }
                 }
             }
@@ -380,7 +395,7 @@ struct LiveSkillsWidget: View {
                 Text("Installed (\(installed.count))")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(VultiTheme.inkMuted)
-                ForEach(installed, id: \.name) { skill in
+                ForEach(installed.prefix(5), id: \.name) { skill in
                     HStack {
                         Text(skill.name)
                             .font(.system(size: 11))
@@ -390,6 +405,11 @@ struct LiveSkillsWidget: View {
                             .foregroundStyle(.green)
                     }
                     .padding(.vertical, 1)
+                }
+                if installed.count > 5 {
+                    Text("+\(installed.count - 5) more")
+                        .font(.system(size: 10))
+                        .foregroundStyle(VultiTheme.inkMuted)
                 }
                 if installed.isEmpty {
                     Text("None")
@@ -409,14 +429,14 @@ struct LiveSkillsWidget: View {
                 Text("Available (\(notInstalled.count))")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(VultiTheme.inkMuted)
-                ForEach(notInstalled.prefix(8), id: \.name) { skill in
+                ForEach(notInstalled.prefix(5), id: \.name) { skill in
                     Text(skill.name)
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkDim)
                         .padding(.vertical, 1)
                 }
-                if notInstalled.count > 8 {
-                    Text("+\(notInstalled.count - 8) more")
+                if notInstalled.count > 5 {
+                    Text("+\(notInstalled.count - 5) more")
                         .font(.system(size: 10))
                         .foregroundStyle(VultiTheme.inkMuted)
                 }
