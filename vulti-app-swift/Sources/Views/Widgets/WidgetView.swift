@@ -172,6 +172,7 @@ struct StatusWidgetContent: View {
 /// Live connections widget — shows allowed vs available counts with lists.
 struct LiveConnectionsWidget: View {
     let agentId: String
+    var tick: Int = 0
     @Environment(AppState.self) private var app
     @State private var allConnections: [GatewayClient.ConnectionResponse] = []
     @State private var allowedNames: Set<String> = []
@@ -233,9 +234,8 @@ struct LiveConnectionsWidget: View {
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .task {
+        .task(id: tick) {
             allConnections = (try? await app.client.listConnections()) ?? []
-            // Fetch agent directly from API to get fresh allowedConnections
             if let agent = try? await app.client.getAgent(agentId),
                let allowed = agent.allowedConnections {
                 allowedNames = Set(allowed)
@@ -246,6 +246,7 @@ struct LiveConnectionsWidget: View {
 
 struct LiveAnalyticsWidget: View {
     let agentId: String
+    var tick: Int = 0
     @Environment(AppState.self) private var app
     @State private var overview: AnalyticsOverview?
 
@@ -271,7 +272,7 @@ struct LiveAnalyticsWidget: View {
                     .frame(maxWidth: .infinity, minHeight: 40)
             }
         }
-        .task {
+        .task(id: tick) {
             let data = try? await app.client.getAnalyticsData(days: 7, agentId: agentId)
             overview = data?.overview
         }
@@ -281,6 +282,7 @@ struct LiveAnalyticsWidget: View {
 /// Live jobs widget — fetches real cron jobs from the API.
 struct LiveJobsWidget: View {
     let agentId: String
+    var tick: Int = 0
     @Environment(AppState.self) private var app
     @State private var jobs: [GatewayClient.CronResponse] = []
 
@@ -311,7 +313,7 @@ struct LiveJobsWidget: View {
                 }
             }
         }
-        .task {
+        .task(id: tick) {
             jobs = (try? await app.client.listCron(agentId: agentId)) ?? []
         }
     }
@@ -320,6 +322,7 @@ struct LiveJobsWidget: View {
 /// Live rules widget — fetches real rules from the API.
 struct LiveRulesWidget: View {
     let agentId: String
+    var tick: Int = 0
     @Environment(AppState.self) private var app
     @State private var rules: [GatewayClient.RuleResponse] = []
 
@@ -349,7 +352,7 @@ struct LiveRulesWidget: View {
                 }
             }
         }
-        .task {
+        .task(id: tick) {
             rules = (try? await app.client.listRules(agentId: agentId)) ?? []
         }
     }
@@ -358,6 +361,7 @@ struct LiveRulesWidget: View {
 /// Live skills widget — two-column layout matching connections widget.
 struct LiveSkillsWidget: View {
     let agentId: String
+    var tick: Int = 0
     @Environment(AppState.self) private var app
     @State private var installed: [GatewayClient.SkillResponse] = []
     @State private var allAvailable: [GatewayClient.SkillResponse] = []
@@ -419,9 +423,169 @@ struct LiveSkillsWidget: View {
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .task {
+        .task(id: tick) {
             installed = (try? await app.client.listAgentSkills(agentId: agentId)) ?? []
             allAvailable = (try? await app.client.listAvailableSkills()) ?? []
+        }
+    }
+}
+
+/// Live profile widget — fetches agent metadata + soul/user/memory status from API.
+struct LiveProfileWidget: View {
+    let agentId: String
+    var tick: Int = 0
+    var onDrill: ((DrillTarget) -> Void)?
+    @Environment(AppState.self) private var app
+    @State private var hasSoul = false
+    @State private var userCount = 0
+    @State private var memoryCount = 0
+
+    private var agent: GatewayClient.AgentResponse? {
+        app.agent(byId: agentId)
+    }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 12) {
+                if let agent {
+                    AgentAvatar(agent: agent, size: 44)
+                } else {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(VultiTheme.paperWarm)
+                        .frame(width: 44, height: 44)
+                        .overlay(Text(String(agentId.prefix(1)).uppercased())
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(VultiTheme.inkDim))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(agent?.name ?? agentId)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                    if let role = agent?.role, !role.isEmpty {
+                        Text(role)
+                            .font(.system(size: 12))
+                            .foregroundStyle(VultiTheme.inkMuted)
+                    }
+                }
+                Spacer()
+            }
+
+            HStack(spacing: 0) {
+                drillLink("Soul", icon: "sparkles", hasContent: hasSoul, target: .soul)
+                Divider().frame(height: 20).padding(.horizontal, 8)
+                drillLink("User", icon: "person", count: userCount, target: .user)
+                Divider().frame(height: 20).padding(.horizontal, 8)
+                drillLink("Memories", icon: "brain", count: memoryCount, target: .memories)
+                Spacer()
+            }
+        }
+        .task(id: tick) {
+            await app.refreshAgents()
+            if let soul = try? await app.client.getSoul(agentId: agentId) {
+                hasSoul = !soul.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            if let mem = try? await app.client.getMemories(agentId: agentId) {
+                let userRaw = mem.user.trimmingCharacters(in: .whitespacesAndNewlines)
+                userCount = userRaw.isEmpty ? 0 : userRaw.components(separatedBy: "\u{00A7}").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
+                let memRaw = mem.memory.trimmingCharacters(in: .whitespacesAndNewlines)
+                memoryCount = memRaw.isEmpty ? 0 : memRaw.components(separatedBy: "\u{00A7}").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
+            }
+        }
+    }
+
+    private func drillLink(_ title: String, icon: String, hasContent: Bool, target: DrillTarget) -> some View {
+        drillLink(title, icon: icon, count: hasContent ? nil : 0, target: target)
+    }
+
+    private func drillLink(_ title: String, icon: String, count: Int?, target: DrillTarget) -> some View {
+        Button {
+            onDrill?(target)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                if let c = count, c > 0 {
+                    Text("(\(c))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkDim)
+                } else if count == 0 {
+                    Circle()
+                        .fill(VultiTheme.inkMuted.opacity(0.3))
+                        .frame(width: 5, height: 5)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9))
+                    .foregroundStyle(VultiTheme.inkMuted)
+            }
+            .foregroundStyle(VultiTheme.primary)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Live wallet widget — fetches card + vault data from API.
+struct LiveWalletWidget: View {
+    let agentId: String
+    var tick: Int = 0
+    @Environment(AppState.self) private var app
+    @State private var cardName: String?
+    @State private var cardLast4: String?
+    @State private var cardExpiry: String?
+    @State private var vaultId: String?
+    @State private var vaultName: String?
+    @State private var loaded = false
+
+    private var hasCard: Bool { cardLast4 != nil && !(cardLast4?.isEmpty ?? true) }
+    private var hasVault: Bool { vaultId != nil && !(vaultId?.isEmpty ?? true) }
+
+    var body: some View {
+        Group {
+            if !loaded {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 40)
+            } else if hasCard && hasVault {
+                HStack(alignment: .top, spacing: 12) {
+                    CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
+                        .frame(maxWidth: .infinity)
+                    VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            } else if hasCard {
+                CreditCardVisual(name: cardName ?? "", last4: cardLast4 ?? "", expiry: cardExpiry ?? "")
+            } else if hasVault {
+                VaultVisual(name: vaultName ?? "Vault", vaultId: vaultId ?? "")
+            } else {
+                HStack {
+                    Image(systemName: "creditcard")
+                        .font(.system(size: 20))
+                        .foregroundStyle(VultiTheme.inkMuted.opacity(0.4))
+                    Text("No card or vault set up")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                    Spacer()
+                }
+            }
+        }
+        .task(id: tick) {
+            // Fetch wallet (card)
+            if let wallet = try? await app.client.getWallet(agentId: agentId) {
+                if let cc = wallet["credit_card"]?.value as? [String: Any] {
+                    cardName = cc["name"] as? String ?? cc["cardholder_name"] as? String
+                    if let num = cc["number"] as? String, num.count >= 4 {
+                        cardLast4 = String(num.suffix(4))
+                    }
+                    cardExpiry = cc["expiry"] as? String
+                }
+            }
+            // Fetch vault
+            if let vault = try? await app.client.getVault(agentId: agentId) {
+                vaultId = vault.vaultId
+                vaultName = vault.name
+            }
+            loaded = true
         }
     }
 }

@@ -36,6 +36,7 @@ struct ScratchPadView: View {
     @State private var deletedIds: Set<String> = []
     @State private var suppressPoll = false
     @State private var draggingWidget: PaneWidget?
+    @State private var refreshTick: Int = 0
 
     private var widgets: [PaneWidget] {
         activeTab == .chat ? chatWidgets : homeWidgets
@@ -209,24 +210,26 @@ struct ScratchPadView: View {
                 let rows = buildRows(from: widgets)
                 LazyVStack(spacing: 10) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        if row.count > 1 {
-                            // Merged card — both widgets inside one card, side by side
-                            mergedWidgetCard(row)
-                        } else if let widget = row.first {
-                            widgetCard(widget)
-                                .opacity(draggingWidget?.id == widget.id ? 0.4 : 1.0)
-                                .onDrag {
-                                    draggingWidget = widget
-                                    suppressPoll = true
-                                    return NSItemProvider(object: widget.id as NSString)
-                                }
-                                .onDrop(of: [.text], delegate: WidgetDropDelegate(
-                                    targetWidget: widget,
-                                    widgets: activeTab == .chat ? $chatWidgets : $homeWidgets,
-                                    draggingWidget: $draggingWidget,
-                                    onReorder: saveOrder
-                                ))
+                        let anchor = row.first!
+                        Group {
+                            if row.count > 1 {
+                                mergedWidgetCard(row)
+                            } else {
+                                widgetCard(anchor)
+                            }
                         }
+                        .opacity(draggingWidget?.id == anchor.id ? 0.4 : 1.0)
+                        .onDrag {
+                            draggingWidget = anchor
+                            suppressPoll = true
+                            return NSItemProvider(object: anchor.id as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: WidgetDropDelegate(
+                            targetWidget: anchor,
+                            widgets: activeTab == .chat ? $chatWidgets : $homeWidgets,
+                            draggingWidget: $draggingWidget,
+                            onReorder: saveOrder
+                        ))
                     }
                 }
                 .padding(16)
@@ -271,17 +274,49 @@ struct ScratchPadView: View {
         let rightDrill = Self.inferDrillTarget(for: rightWidget)
 
         return VStack(alignment: .leading, spacing: 0) {
+            // Top bar: drag handle (left) + close button (right)
+            HStack(spacing: 0) {
+                VStack(spacing: 2.5) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 0.5)
+                            .fill(VultiTheme.inkMuted.opacity(0.4))
+                            .frame(width: 14, height: 1.5)
+                    }
+                }
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+
+                Spacer()
+
+                Button {
+                    removeWidget(rightWidget)
+                    removeWidget(leftWidget)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(VultiTheme.inkMuted.opacity(0.5))
+                        .frame(width: 20, height: 20)
+                        .background(VultiTheme.border.opacity(0.3), in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+
             // Content: two columns side by side
             HStack(alignment: .top, spacing: 0) {
                 // Left column
                 VStack(alignment: .leading, spacing: 8) {
-                    // Title row with drill chevron
+                    // Title row with live dot + drill chevron
                     if let title = leftWidget.title, !title.isEmpty {
                         HStack(spacing: 6) {
                             Text(title)
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(VultiTheme.inkSoft)
                             Spacer()
+                            if isLiveWidget(leftWidget) {
+                                Circle().fill(.green).frame(width: 6, height: 6)
+                            }
                             if leftDrill != nil {
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 10))
@@ -313,6 +348,9 @@ struct ScratchPadView: View {
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(VultiTheme.inkSoft)
                             Spacer()
+                            if isLiveWidget(rightWidget) {
+                                Circle().fill(.green).frame(width: 6, height: 6)
+                            }
                             if rightDrill != nil {
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 10))
@@ -368,13 +406,16 @@ struct ScratchPadView: View {
             .padding(.horizontal, 10)
             .padding(.top, 8)
 
-            // Title row with optional drill chevron
+            // Title row with live dot + optional drill chevron
             if let title = widget.title {
                 HStack(spacing: 8) {
                     Text(title)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
                     Spacer()
+                    if isLiveWidget(widget) {
+                        Circle().fill(.green).frame(width: 6, height: 6)
+                    }
                     if drillTarget != nil {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 11))
@@ -456,22 +497,44 @@ struct ScratchPadView: View {
         }
     }
 
+    // MARK: - Live Indicator
+
+    /// Returns true if this widget fetches live data from the API (vs static pane_widgets.json).
+    private func isLiveWidget(_ widget: PaneWidget) -> Bool {
+        let drill = widget.data.drill ?? ""
+        if widget.type == .profile || drill == "profile" { return true }
+        if drill == "connections" { return true }
+        if drill == "analytics" { return true }
+        if drill == "jobs" { return true }
+        if drill == "rules" { return true }
+        if drill == "skills" { return true }
+        if drill == "wallet" || drill == "crypto" { return true }
+        return false
+    }
+
     // MARK: - Widget Body
 
     @ViewBuilder
     private func widgetBody(_ widget: PaneWidget) -> some View {
-        // Live overrides for known drill targets
+        // Every known widget type gets a live override that fetches from the API.
+        // No widget should ever render stale data from pane_widgets.json.
         let drill = widget.data.drill ?? ""
-        if drill == "connections" {
-            LiveConnectionsWidget(agentId: agentId)
-        } else if drill == "analytics" && widget.type == .statGrid {
-            LiveAnalyticsWidget(agentId: agentId)
+        if widget.type == .profile || drill == "profile" {
+            LiveProfileWidget(agentId: agentId, tick: refreshTick, onDrill: { target in
+                withAnimation(.easeInOut(duration: 0.2)) { expandedWidget = target }
+            })
+        } else if drill == "connections" {
+            LiveConnectionsWidget(agentId: agentId, tick: refreshTick)
+        } else if drill == "analytics" {
+            LiveAnalyticsWidget(agentId: agentId, tick: refreshTick)
         } else if drill == "jobs" {
-            LiveJobsWidget(agentId: agentId)
+            LiveJobsWidget(agentId: agentId, tick: refreshTick)
         } else if drill == "rules" {
-            LiveRulesWidget(agentId: agentId)
+            LiveRulesWidget(agentId: agentId, tick: refreshTick)
         } else if drill == "skills" {
-            LiveSkillsWidget(agentId: agentId)
+            LiveSkillsWidget(agentId: agentId, tick: refreshTick)
+        } else if drill == "wallet" || drill == "crypto" {
+            LiveWalletWidget(agentId: agentId, tick: refreshTick)
         } else {
             staticWidgetBody(widget)
         }
@@ -611,6 +674,9 @@ struct ScratchPadView: View {
                     withAnimation(.easeInOut(duration: 0.2)) { activeTab = .chat }
                 }
             }
+
+            // Bump tick so live widgets re-fetch data
+            refreshTick += 1
 
             if (!homeWidgets.isEmpty || !chatWidgets.isEmpty) && !hasContent {
                 hasContent = true

@@ -1240,10 +1240,11 @@ struct CreateAgentView: View {
                     model: selectedModel
                 )
 
-                // Every agent gets matrix connection by default (we run our own server)
+                // Every agent gets matrix connection + skill by default
                 _ = try? await app.client.updateAgent(agent.id, updates: [
                     "allowedConnections": "matrix"
                 ])
+                try? await app.client.installSkill(agentId: agent.id, name: "matrix")
 
                 await app.refreshAgents()
 

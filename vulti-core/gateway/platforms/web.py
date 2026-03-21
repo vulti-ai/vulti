@@ -1461,11 +1461,18 @@ class WebAdapter(BasePlatformAdapter):
             f.write(json.dumps(message) + "\n")
 
     def _get_agent_registry(self):
-        """Get or create the agent registry instance."""
+        """Get or create the agent registry instance.
+
+        Always invalidates the in-memory cache so we pick up changes
+        made by agent subprocesses (e.g. manage_own_connections,
+        update_own_profile writing directly to registry.json).
+        """
         if not hasattr(self, "_agent_registry"):
             from vulti_cli.agent_registry import AgentRegistry
             self._agent_registry = AgentRegistry()
             self._agent_registry.ensure_initialized()
+        # Invalidate cache so we always read fresh data from disk
+        self._agent_registry._data = None
         return self._agent_registry
 
     def _get_agents(self) -> list:
@@ -3335,6 +3342,8 @@ class WebAdapter(BasePlatformAdapter):
 
     def _get_pane_widgets(self, agent_id: str) -> dict:
         registry = self._get_agent_registry()
+        # Sync role.txt → registry if agent wrote role.txt but registry is behind
+        self._sync_role_from_file(agent_id, registry)
         pane_path = registry.agent_home(agent_id) / "pane_widgets.json"
         if pane_path.exists():
             try:
@@ -3343,6 +3352,23 @@ class WebAdapter(BasePlatformAdapter):
                 pass
         # No pane file — generate and persist defaults
         return self._reset_default_widgets(agent_id)
+
+    def _sync_role_from_file(self, agent_id: str, registry=None) -> None:
+        """If the agent wrote role.txt but the registry role is empty/different, sync it."""
+        try:
+            if registry is None:
+                registry = self._get_agent_registry()
+            role_path = registry.agent_home(agent_id) / "role.txt"
+            if not role_path.exists():
+                return
+            file_role = role_path.read_text(encoding="utf-8").strip()
+            if not file_role:
+                return
+            meta = registry.get_agent(agent_id)
+            if meta and meta.role != file_role:
+                registry.update_agent(agent_id, role=file_role)
+        except Exception:
+            pass
 
     def _clear_pane_widgets(self, agent_id: str, tab: str = None) -> dict:
         registry = self._get_agent_registry()

@@ -83,15 +83,15 @@ struct AgentNode: View {
                 .foregroundStyle(VultiTheme.inkSoft)
                 .lineLimit(1)
 
-            if agent.status == "onboarding" {
-                Text("setting up")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
-            } else if let role = agent.role, !role.isEmpty {
+            if let role = agent.role, !role.isEmpty {
                 Text(role)
                     .font(.system(size: 11))
                     .foregroundStyle(roleColor)
+                    .lineLimit(1)
+            } else {
+                Text("onboarding")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
                     .lineLimit(1)
             }
         }

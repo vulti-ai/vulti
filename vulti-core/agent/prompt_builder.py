@@ -105,6 +105,16 @@ SKILLS_GUIDANCE = (
     "Skills that aren't maintained become liabilities."
 )
 
+PROFILE_GUIDANCE = (
+    "When the user tells you your role, purpose, or identity — or asks you to change it — "
+    "IMMEDIATELY call update_own_profile(role='...') to update your agent metadata. "
+    "Do NOT just acknowledge it in text. The profile widget and header display your role "
+    "from the registry, so it won't update unless you call the tool.\n"
+    "Similarly, if the user asks you to enable or disable connections for yourself, "
+    "use manage_own_connections(action='add'|'remove', connection_names=[...]) directly. "
+    "Do NOT tell the user to run CLI commands — you have the tools to do it yourself."
+)
+
 PLATFORM_HINTS = {
     "whatsapp": (
         "You are on a text messaging communication platform, WhatsApp. "

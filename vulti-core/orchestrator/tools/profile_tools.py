@@ -83,6 +83,7 @@ def _check_requirements() -> bool:
         os.getenv("VULTI_INTERACTIVE")
         or os.getenv("VULTI_GATEWAY_SESSION")
         or os.getenv("VULTI_EXEC_ASK")
+        or os.getenv("VULTI_AGENT_ID")
     )
 
 
