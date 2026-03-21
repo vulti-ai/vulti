@@ -3111,20 +3111,19 @@ class WebAdapter(BasePlatformAdapter):
             },
         })
 
-        # 2. Connections — from connections.yaml, filtered by agent allow list
+        # 2. Connections — only show allowed connections for this agent
         all_connections = self._list_connections()
         allowed = set(meta.allowed_connections) if meta and meta.allowed_connections else set()
         conn_entries = []
         for c in all_connections:
-            is_allowed = c["name"] in allowed
-            conn_entries.append({"key": c["name"], "value": "\u2713" if is_allowed else "\u2014"})
-        connected_names = [c["name"] for c in all_connections if c["name"] in allowed]
+            if c["name"] in allowed:
+                conn_entries.append({"key": c["name"], "value": "\u2713"})
         widgets.append({
             "id": "default_connections",
             "type": "kv",
-            "title": "\U0001f50c Connections" + (f" ({len(connected_names)})" if connected_names else ""),
+            "title": "\U0001f50c Connections" + (f" ({len(conn_entries)})" if conn_entries else ""),
             "data": {
-                "entries": conn_entries if conn_entries else [{"key": "\u2014", "value": "None configured"}],
+                "entries": conn_entries if conn_entries else [{"key": "\u2014", "value": "No connections allowed"}],
                 "drill": "connections",
             },
         })
@@ -3184,33 +3183,37 @@ class WebAdapter(BasePlatformAdapter):
             },
         })
 
-        # 5. Skills — compact status summary
-        skill_count = 0
-        skill_names = []
+        # 5. Skills — show installed (agent-specific) vs available (global)
+        installed_names = []
+        available_count = 0
         try:
             skills_dir = agent_home / "skills"
             if skills_dir.exists():
-                skill_names = [d.name for d in sorted(skills_dir.iterdir()) if d.is_dir()]
-                skill_count = len(skill_names)
-            if not skill_count:
-                from vulti_cli.config import get_vulti_home
-                global_skills = get_vulti_home() / "skills"
-                if global_skills.exists():
-                    skill_names = [d.name for d in sorted(global_skills.iterdir()) if d.is_dir()]
-                    skill_count = len(skill_names)
+                installed_names = [d.name for d in sorted(skills_dir.iterdir()) if d.is_dir()]
         except Exception:
             pass
-        skill_detail = ", ".join(skill_names[:3])
-        if len(skill_names) > 3:
-            skill_detail += f" +{len(skill_names) - 3}"
+        try:
+            from vulti_cli.config import get_vulti_home
+            global_skills = get_vulti_home() / "skills"
+            if global_skills.exists():
+                available_count = len([d for d in global_skills.iterdir() if d.is_dir()])
+        except Exception:
+            pass
+        installed_count = len(installed_names)
+        skill_detail = ", ".join(installed_names[:3])
+        if len(installed_names) > 3:
+            skill_detail += f" +{len(installed_names) - 3}"
+        label = f"{installed_count} installed"
+        if available_count:
+            label += f" / {available_count} available"
         widgets.append({
             "id": "default_skills",
             "type": "status",
             "title": "\U0001f9e9 Skills",
             "data": {
-                "label": f"{skill_count} installed" if skill_count else "None installed",
-                "variant": "success" if skill_count else "info",
-                "detail": skill_detail,
+                "label": label if installed_count else f"0 installed / {available_count} available",
+                "variant": "success" if installed_count else "info",
+                "detail": skill_detail if skill_detail else "No skills installed yet",
                 "drill": "skills",
             },
         })

@@ -61,9 +61,7 @@ struct WidgetView: View {
 struct MarkdownWidgetContent: View {
     let data: WidgetData
     var body: some View {
-        Text(data.content ?? "")
-            .font(.system(size: 13))
-            .textSelection(.enabled)
+        MarkdownMessageView(content: data.content ?? "", isUser: false)
     }
 }
 
@@ -171,6 +169,81 @@ struct StatusWidgetContent: View {
 }
 
 /// Live analytics widget — fetches real data from the analytics API instead of using static widget data.
+/// Live connections widget — shows allowed vs available counts with lists.
+struct LiveConnectionsWidget: View {
+    let agentId: String
+    @Environment(AppState.self) private var app
+    @State private var allConnections: [GatewayClient.ConnectionResponse] = []
+    @State private var allowedNames: Set<String> = []
+
+    private var allowed: [GatewayClient.ConnectionResponse] {
+        allConnections.filter { allowedNames.contains($0.name) }
+    }
+    private var available: [GatewayClient.ConnectionResponse] {
+        allConnections.filter { !allowedNames.contains($0.name) }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            // Left: Allowed
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Allowed (\(allowed.count))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkMuted)
+                ForEach(allowed, id: \.name) { conn in
+                    HStack {
+                        Text(conn.name)
+                            .font(.system(size: 11))
+                        Spacer()
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.green)
+                    }
+                    .padding(.vertical, 1)
+                }
+                if allowed.isEmpty {
+                    Text("None")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkDim)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            Rectangle()
+                .fill(VultiTheme.border)
+                .frame(width: 1)
+                .padding(.horizontal, 8)
+
+            // Right: Available
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Available (\(available.count))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkMuted)
+                ForEach(available.prefix(8), id: \.name) { conn in
+                    Text(conn.name)
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkDim)
+                        .padding(.vertical, 1)
+                }
+                if available.count > 8 {
+                    Text("+\(available.count - 8) more")
+                        .font(.system(size: 10))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .task {
+            allConnections = (try? await app.client.listConnections()) ?? []
+            // Fetch agent directly from API to get fresh allowedConnections
+            if let agent = try? await app.client.getAgent(agentId),
+               let allowed = agent.allowedConnections {
+                allowedNames = Set(allowed)
+            }
+        }
+    }
+}
+
 struct LiveAnalyticsWidget: View {
     let agentId: String
     @Environment(AppState.self) private var app
@@ -202,6 +275,122 @@ struct LiveAnalyticsWidget: View {
             let data = try? await app.client.getAnalyticsData(days: 7, agentId: agentId)
             overview = data?.overview
         }
+    }
+}
+
+/// Live jobs widget — fetches real cron jobs from the API.
+struct LiveJobsWidget: View {
+    let agentId: String
+    @Environment(AppState.self) private var app
+    @State private var jobs: [GatewayClient.CronResponse] = []
+
+    var body: some View {
+        Group {
+            if jobs.isEmpty {
+                HStack(spacing: 6) {
+                    Text("\u{2014}")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                    Text("None scheduled")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                }
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(jobs) { job in
+                        HStack {
+                            Text(job.name ?? job.id)
+                                .font(.system(size: 12))
+                                .foregroundStyle(VultiTheme.inkDim)
+                            Spacer()
+                            Text("\(job.schedule ?? "")  \(job.enabled ? "\u{2713}" : "\u{23f8}")")
+                                .font(.system(size: 12, design: .monospaced))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            jobs = (try? await app.client.listCron(agentId: agentId)) ?? []
+        }
+    }
+}
+
+/// Live rules widget — fetches real rules from the API.
+struct LiveRulesWidget: View {
+    let agentId: String
+    @Environment(AppState.self) private var app
+    @State private var rules: [GatewayClient.RuleResponse] = []
+
+    var body: some View {
+        Group {
+            if rules.isEmpty {
+                HStack(spacing: 6) {
+                    Text("\u{2014}")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                    Text("None configured")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                }
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(rules) { rule in
+                        HStack {
+                            Text(rule.name ?? rule.id)
+                                .font(.system(size: 12))
+                                .foregroundStyle(VultiTheme.inkDim)
+                            Spacer()
+                            Text((rule.enabled ?? true) ? "\u{2713}" : "\u{23f8}")
+                                .font(.system(size: 12))
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            rules = (try? await app.client.listRules(agentId: agentId)) ?? []
+        }
+    }
+}
+
+/// Live skills widget — fetches real installed/available counts from the API.
+struct LiveSkillsWidget: View {
+    let agentId: String
+    @Environment(AppState.self) private var app
+    @State private var installed: [GatewayClient.SkillResponse] = []
+    @State private var availableCount: Int = 0
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(installed.isEmpty ? .secondary : .green)
+                .frame(width: 8, height: 8)
+            Text("\(installed.count) installed / \(availableCount) available")
+                .font(.system(size: 13))
+            if !installed.isEmpty {
+                Spacer()
+                Text(skillDetail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(VultiTheme.inkDim)
+                    .lineLimit(1)
+            }
+        }
+        .task {
+            installed = (try? await app.client.listAgentSkills(agentId: agentId)) ?? []
+            let all = (try? await app.client.listAvailableSkills()) ?? []
+            availableCount = all.count
+        }
+    }
+
+    private var skillDetail: String {
+        let names = installed.prefix(3).map(\.name)
+        var detail = names.joined(separator: ", ")
+        if installed.count > 3 {
+            detail += " +\(installed.count - 3)"
+        }
+        return detail
     }
 }
 

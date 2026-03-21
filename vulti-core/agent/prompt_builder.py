@@ -271,13 +271,21 @@ def build_skills_system_prompt(
 ) -> str:
     """Build a compact skill index for the system prompt.
 
-    Scans ~/.vulti/skills/ for SKILL.md files grouped by category.
-    Includes per-skill descriptions from frontmatter so the model can
-    match skills by meaning, not just name.
-    Filters out skills incompatible with the current OS platform.
+    When running as a specific agent (VULTI_AGENT_ID set) with installed
+    skills, only indexes that agent's skills — not all global skills.
+    This saves ~3K tokens per message for agents with curated skill sets.
+    Falls back to the global skills dir when no agent skills are installed.
     """
     vulti_home = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
-    skills_dir = vulti_home / "skills"
+    global_skills_dir = vulti_home / "skills"
+
+    # Prefer agent-specific skills if available (symlinks to global)
+    agent_id = os.getenv("VULTI_AGENT_ID")
+    agent_skills_dir = vulti_home / "agents" / agent_id / "skills" if agent_id else None
+    if agent_skills_dir and agent_skills_dir.exists() and any(agent_skills_dir.iterdir()):
+        skills_dir = agent_skills_dir
+    else:
+        skills_dir = global_skills_dir
 
     if not skills_dir.exists():
         return ""
@@ -295,16 +303,23 @@ def build_skills_system_prompt(
         conditions = _read_skill_conditions(skill_file)
         if not _skill_should_show(conditions, available_tools, available_toolsets):
             continue
-        rel_path = skill_file.relative_to(skills_dir)
-        parts = rel_path.parts
-        if len(parts) >= 2:
-            # Category is everything between skills_dir and the skill folder
-            # e.g. parts = ("mlops", "training", "axolotl", "SKILL.md")
-            #   → category = "mlops/training", skill_name = "axolotl"
-            # e.g. parts = ("github", "github-auth", "SKILL.md")
-            #   → category = "github", skill_name = "github-auth"
-            skill_name = parts[-2]
-            category = "/".join(parts[:-2]) if len(parts) > 2 else parts[0]
+        # Derive category from the resolved (global) path when possible,
+        # so agent symlinks get proper categories instead of being flat.
+        resolved_parent = skill_file.resolve().parent
+        try:
+            resolved_rel = resolved_parent.relative_to(global_skills_dir)
+            cat_parts = resolved_rel.parts
+        except (ValueError, TypeError):
+            # Not under global skills dir — use local path
+            cat_parts = skill_file.relative_to(skills_dir).parts[:-1]
+
+        if len(cat_parts) >= 2:
+            skill_name = cat_parts[-1]
+            category = "/".join(cat_parts[:-1])
+        elif len(cat_parts) == 1:
+            # Flat: e.g. apple-reminders/SKILL.md — infer category from parent
+            skill_name = cat_parts[0]
+            category = "general"
         else:
             category = "general"
             skill_name = skill_file.parent.name
@@ -313,12 +328,11 @@ def build_skills_system_prompt(
     if not skills_by_category:
         return ""
 
-    # Read category-level descriptions from DESCRIPTION.md
-    # Checks both the exact category path and parent directories
+    # Read category-level descriptions from DESCRIPTION.md (always from global dir)
     category_descriptions = {}
     for category in skills_by_category:
         cat_path = Path(category)
-        desc_file = skills_dir / cat_path / "DESCRIPTION.md"
+        desc_file = global_skills_dir / cat_path / "DESCRIPTION.md"
         if desc_file.exists():
             try:
                 content = desc_file.read_text(encoding="utf-8")

@@ -381,72 +381,87 @@ struct AgentConnectionsTab: View {
     @State private var allConnections: [GatewayClient.ConnectionResponse] = []
     @State private var allowedNames: Set<String> = []
 
+    private var allowedConnections: [GatewayClient.ConnectionResponse] {
+        allConnections.filter { allowedNames.contains($0.name) }
+    }
+    private var availableConnections: [GatewayClient.ConnectionResponse] {
+        allConnections.filter { !allowedNames.contains($0.name) }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            // ── Allowed Connections ──
-            Section {
-                if !allowedNames.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(Array(allowedNames).sorted(), id: \.self) { name in
-                            Text(name)
-                                .font(.system(size: 10, weight: .medium))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(VultiTheme.primary.opacity(0.1), in: Capsule())
-                                .foregroundStyle(VultiTheme.primary)
-                        }
-                    }
-                    .padding(.bottom, 4)
-                }
-
-                ForEach(allConnections, id: \.name) { conn in
-                    HStack {
-                        Toggle(isOn: Binding(
-                            get: { allowedNames.contains(conn.name) },
-                            set: { enabled in
-                                if enabled {
-                                    allowedNames.insert(conn.name)
-                                } else {
-                                    allowedNames.remove(conn.name)
-                                }
-                                saveAllowed()
-                            }
-                        )) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(conn.name)
-                                        .font(.system(size: 13, weight: .medium))
-                                    if let type = conn.type {
-                                        Text(type)
-                                            .font(.system(size: 10))
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(VultiTheme.paperDeep, in: Capsule())
-                                    }
-                                }
-                                if let desc = conn.description {
-                                    Text(desc)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(VultiTheme.inkMuted)
-                                        .lineLimit(1)
-                                }
-                            }
-                        }
-                        .toggleStyle(.checkbox)
-                    }
-                    .opacity(allowedNames.contains(conn.name) ? 1.0 : 0.55)
-                }
-
-                if allConnections.isEmpty {
-                    Text("No connections configured. Add connections in Settings.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(VultiTheme.inkMuted)
-                }
-            } header: {
-                Text("ALLOWED CONNECTIONS")
-                    .font(.system(size: 12, weight: .medium))
+        HStack(alignment: .top, spacing: 0) {
+            // Left: Allowed
+            VStack(alignment: .leading, spacing: 8) {
+                Text("ALLOWED (\(allowedConnections.count))")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(VultiTheme.inkMuted)
+
+                if allowedConnections.isEmpty {
+                    Text("None")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                        .padding(.top, 4)
+                } else {
+                    ForEach(allowedConnections, id: \.name) { conn in
+                        HStack(spacing: 6) {
+                            Text(conn.name)
+                                .font(.system(size: 12, weight: .medium))
+                            Spacer()
+                            Button {
+                                allowedNames.remove(conn.name)
+                                saveAllowed()
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.red.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(12)
+
+            Rectangle()
+                .fill(VultiTheme.border)
+                .frame(width: 1)
+
+            // Right: Available (not yet allowed)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AVAILABLE (\(availableConnections.count))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkMuted)
+
+                if availableConnections.isEmpty {
+                    Text("All connections allowed")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                        .padding(.top, 4)
+                } else {
+                    ForEach(availableConnections, id: \.name) { conn in
+                        HStack(spacing: 6) {
+                            Text(conn.name)
+                                .font(.system(size: 12))
+                                .foregroundStyle(VultiTheme.inkDim)
+                            Spacer()
+                            Button {
+                                allowedNames.insert(conn.name)
+                                saveAllowed()
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.green.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(12)
         }
         .task { await loadData() }
     }
@@ -455,7 +470,8 @@ struct AgentConnectionsTab: View {
         if let list = try? await app.client.listConnections() {
             allConnections = list
         }
-        if let agent = app.agent(byId: agentId),
+        // Fetch fresh from API to get current allowedConnections
+        if let agent = try? await app.client.getAgent(agentId),
            let allowed = agent.allowedConnections {
             allowedNames = Set(allowed)
         }

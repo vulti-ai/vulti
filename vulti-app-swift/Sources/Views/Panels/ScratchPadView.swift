@@ -460,6 +460,19 @@ struct ScratchPadView: View {
 
     @ViewBuilder
     private func widgetBody(_ widget: PaneWidget) -> some View {
+        // Live overrides for known drill targets
+        let drill = widget.data.drill ?? ""
+        if drill == "connections" {
+            LiveConnectionsWidget(agentId: agentId)
+        } else if drill == "analytics" && widget.type == .statGrid {
+            LiveAnalyticsWidget(agentId: agentId)
+        } else {
+            staticWidgetBody(widget)
+        }
+    }
+
+    @ViewBuilder
+    private func staticWidgetBody(_ widget: PaneWidget) -> some View {
         switch widget.type {
         case .markdown:
             MarkdownWidgetContent(data: widget.data)
@@ -477,11 +490,7 @@ struct ScratchPadView: View {
         case .status:
             StatusWidgetContent(data: widget.data)
         case .statGrid:
-            if widget.data.drill == "analytics" {
-                LiveAnalyticsWidget(agentId: agentId)
-            } else {
-                StatGridWidgetContent(data: widget.data)
-            }
+            StatGridWidgetContent(data: widget.data)
         case .barChart:
             BarChartWidgetContent(data: widget.data)
         case .progress:

@@ -110,3 +110,99 @@ registry.register(
     check_fn=_check_requirements,
     emoji="🔑",
 )
+
+
+# ---------------------------------------------------------------------------
+# manage_own_connections — add/remove connections from the agent's own allowlist
+# ---------------------------------------------------------------------------
+
+def manage_own_connections(args, **kw):
+    """Add or remove connections from this agent's own allowlist.
+
+    Use this after the user has confirmed which connections they want enabled.
+    """
+    action = args.get("action", "add")
+    connection_names = args.get("connection_names", [])
+
+    if not connection_names:
+        return json.dumps({"success": False, "error": "connection_names is required"})
+
+    agent_id = os.getenv("VULTI_AGENT_ID", "default")
+
+    try:
+        from vulti_cli.config import get_vulti_home
+        from vulti_cli.connection_registry import ConnectionRegistry
+        from vulti_cli.agent_registry import AgentRegistry
+
+        vulti_home = get_vulti_home()
+        creg = ConnectionRegistry(vulti_home)
+        areg = AgentRegistry(vulti_home)
+
+        # Validate connections exist
+        all_conns = {c.name for c in creg.list_all()}
+        invalid = [n for n in connection_names if n not in all_conns]
+        if invalid:
+            return json.dumps({
+                "success": False,
+                "error": f"Unknown connections: {', '.join(invalid)}",
+            })
+
+        meta = areg.get_agent(agent_id)
+        if meta is None:
+            return json.dumps({"success": False, "error": f"Agent '{agent_id}' not found"})
+
+        current = set(meta.allowed_connections)
+
+        if action == "add":
+            current.update(connection_names)
+        elif action == "remove":
+            current -= set(connection_names)
+        else:
+            return json.dumps({"success": False, "error": f"Unknown action: {action}"})
+
+        areg.update_agent(agent_id, allowed_connections=sorted(current))
+
+        return json.dumps({
+            "success": True,
+            "action": action,
+            "connections": connection_names,
+            "allowed_connections": sorted(current),
+            "message": f"{'Added' if action == 'add' else 'Removed'} {len(connection_names)} connection(s).",
+        })
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+MANAGE_OWN_CONNECTIONS_SCHEMA = {
+    "name": "manage_own_connections",
+    "description": (
+        "Add or remove connections from your own allowlist. "
+        "Use this after the user has confirmed which connections they want you to have. "
+        "Pass action='add' to enable connections, action='remove' to disable them."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["add", "remove"],
+                "description": "Whether to add or remove connections from your allowlist",
+            },
+            "connection_names": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of connection names to add or remove",
+            },
+        },
+        "required": ["action", "connection_names"],
+    },
+}
+
+registry.register(
+    name="manage_own_connections",
+    toolset="connections",
+    schema=MANAGE_OWN_CONNECTIONS_SCHEMA,
+    handler=manage_own_connections,
+    check_fn=_check_requirements,
+    emoji="🔗",
+)
