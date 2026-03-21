@@ -12,6 +12,7 @@ struct MainView: View {
 
             // Left toolbar (matches screenshot: top-left, stacked, paper material)
             if app.panelMode == nil {
+                // Left toolbar
                 VStack(spacing: 8) {
                     ToolbarButton(icon: "gear", tooltip: "Settings") {
                         app.openSettings()
@@ -22,14 +23,24 @@ struct MainView: View {
                     ToolbarButton(icon: "clock.arrow.circlepath", tooltip: "Audit Log") {
                         app.openAudit()
                     }
-                    ToolbarButton(icon: "arrow.clockwise", tooltip: "Refresh") {
-                        Task { await app.refreshAgents() }
-                    }
                     Spacer()
                 }
                 .padding(.leading, 20)
                 .padding(.top, 20)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Top-right refresh button
+                VStack {
+                    HStack {
+                        Spacer()
+                        ToolbarButton(icon: "arrow.clockwise", tooltip: "Refresh") {
+                            Task { await app.refreshAgents() }
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.trailing, 20)
+                .padding(.top, 20)
             }
         }
         .overlay {

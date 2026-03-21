@@ -7,6 +7,7 @@ struct AgentDetailView: View {
     @State private var scratchPadHasContent = false
     @State private var expandedWidget: DrillTarget? = nil
     @State private var pollTimer: Timer?
+    @State private var currentSessionId: String? = nil
 
     var body: some View {
         GeometryReader { geo in
@@ -26,6 +27,7 @@ struct AgentDetailView: View {
 
                     ScratchPadView(
                         agentId: agentId,
+                        sessionId: currentSessionId,
                         expandedWidget: $expandedWidget,
                         hasContent: $scratchPadHasContent
                     )
@@ -35,6 +37,13 @@ struct AgentDetailView: View {
         .animation(.spring(duration: 0.4), value: scratchPadHasContent)
         .onAppear { startWidgetPolling() }
         .onDisappear { stopWidgetPolling() }
+        .onReceive(NotificationCenter.default.publisher(for: .chatSessionChanged)) { notification in
+            if let sid = notification.userInfo?["sessionId"] as? String,
+               let aid = notification.userInfo?["agentId"] as? String,
+               aid == agentId {
+                currentSessionId = sid
+            }
+        }
     }
 
     /// Poll for pane widgets from AgentDetailView so we detect content
@@ -59,7 +68,7 @@ struct AgentDetailView: View {
             return
         }
         Task {
-            if let pane = try? await app.client.getPaneWidgets(agentId: agentId),
+            if let pane = try? await app.client.getPaneWidgets(agentId: agentId, sessionId: currentSessionId),
                let tabs = pane.tabs {
                 let hasWidgets = tabs.values.contains { !$0.isEmpty }
                 if hasWidgets {
@@ -167,6 +176,7 @@ struct AgentHomeTab: View {
 
 struct AgentProfileTab: View {
     let agentId: String
+    var initialSubtab: String = "Soul"
     @Environment(AppState.self) private var app
 
     enum ProfileSubtab: String, CaseIterable {
@@ -262,6 +272,7 @@ struct AgentProfileTab: View {
 
         }
         .task { await loadProfileData() }
+        .onAppear { subtab = initialSubtab }
     }
 
     @ViewBuilder

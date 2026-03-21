@@ -324,11 +324,23 @@ actor GatewayClient {
         return try await gw.get([RuleResponse].self, path: path)
     }
 
-    func createRule(condition: String, action: String, name: String? = nil, agentId: String? = nil) async throws -> RuleResponse {
+    /// Create rule — API returns `{"success": true, "rule": {...}}`, so we unwrap the nested object.
+    struct CreateRuleWrapper: Codable {
+        var success: Bool?
+        var rule: RuleResponse?
+        var error: String?
+    }
+
+    func createRule(condition: String, action: String, name: String? = nil, priority: Int = 0, cooldownMinutes: Int? = nil, agentId: String? = nil) async throws -> RuleResponse {
         var body: [String: String] = ["condition": condition, "action": action]
         if let name { body["name"] = name }
+        if priority != 0 { body["priority"] = String(priority) }
+        if let cd = cooldownMinutes { body["cooldown_minutes"] = String(cd) }
         let path = agentId != nil ? "agents/\(agentId!)/rules" : "rules"
-        return try await gw.post(RuleResponse.self, path: path, body: body)
+        let wrapper = try await gw.post(CreateRuleWrapper.self, path: path, body: body)
+        if let error = wrapper.error { throw NSError(domain: "vulti", code: 0, userInfo: [NSLocalizedDescriptionKey: error]) }
+        guard let rule = wrapper.rule else { throw NSError(domain: "vulti", code: 0, userInfo: [NSLocalizedDescriptionKey: "No rule in response"]) }
+        return rule
     }
 
     func updateRule(ruleId: String, updates: [String: String]) async throws {
@@ -571,8 +583,13 @@ actor GatewayClient {
         }
     }
 
-    func getPaneWidgets(agentId: String) async throws -> PaneResponse {
-        try await gw.get(PaneResponse.self, path: "agents/\(agentId)/pane")
+    func getPaneWidgets(agentId: String, sessionId: String? = nil) async throws -> PaneResponse {
+        let query = sessionId != nil ? "?session_id=\(sessionId!)" : ""
+        return try await gw.get(PaneResponse.self, path: "agents/\(agentId)/pane\(query)")
+    }
+
+    func getSessionPaneWidgets(sessionId: String) async throws -> PaneResponse {
+        try await gw.get(PaneResponse.self, path: "sessions/\(sessionId)/pane")
     }
 
     func clearPaneWidgets(agentId: String, tab: String? = nil) async throws {

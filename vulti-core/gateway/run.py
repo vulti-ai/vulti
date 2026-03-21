@@ -275,6 +275,12 @@ def _resolve_gateway_model() -> str:
                 model = _model_cfg.get("default", model)
     except Exception:
         pass
+    # Strip provider prefix if present (e.g. "openrouter/anthropic/claude-opus-4"
+    # → "anthropic/claude-opus-4"). The provider is resolved separately by
+    # _resolve_runtime_agent_kwargs(); including it in the model slug causes
+    # double-prefixing errors at the API level.
+    if model.startswith("openrouter/"):
+        model = model[len("openrouter/"):]
     return model
 
 
@@ -2067,7 +2073,7 @@ class GatewayRunner:
             # normal context management during its tool loop with accurate
             # real token counts.  Having hygiene at 0.50 caused premature
             # compression on every turn in long gateway sessions.
-            _hyg_model = "anthropic/claude-sonnet-4.6"
+            _hyg_model = _resolve_gateway_model()
             _hyg_threshold_pct = 0.85
             _hyg_compression_enabled = True
             try:
@@ -2076,13 +2082,6 @@ class GatewayRunner:
                     import yaml as _hyg_yaml
                     with open(_hyg_cfg_path, encoding="utf-8") as _hyg_f:
                         _hyg_data = _hyg_yaml.safe_load(_hyg_f) or {}
-
-                    # Resolve model name (same logic as run_sync)
-                    _model_cfg = _hyg_data.get("model", {})
-                    if isinstance(_model_cfg, str):
-                        _hyg_model = _model_cfg
-                    elif isinstance(_model_cfg, dict):
-                        _hyg_model = _model_cfg.get("default", _hyg_model)
 
                     # Read compression settings — only use enabled flag.
                     # The threshold is intentionally separate from the agent's
@@ -2544,17 +2543,29 @@ class GatewayRunner:
                         "Focus on completing your setup: role, personality, connections, skills, actions.]"
                     )
 
-                # Universal pane instruction — widgets only go on the Home tab
+                # Universal pane instruction — two tabs: chat (per-session) and home (persistent)
                 context_prompt += (
-                    "\n\n[System: IMPORTANT — You have a modify_pane tool for the Home tab's widget pane. "
-                    "NEVER create empty widgets or widgets with just a title and no data. "
-                    "Every widget MUST contain real information (kv entries, stats, status, markdown content). "
-                    "Add drill='<target>' to widget data for a drill-down chevron (targets: role, soul, user, "
-                    "memories, connections, skills, actions, wallet, analytics). "
-                    "Add size='small' (1/3 width) or size='medium' (2/3) for side-by-side layout.\n"
-                    "RULE: Any time you learn or receive new information (role, memory, user fact, connection, "
-                    "cron job, rule, skill — ANYTHING), you MUST immediately call modify_pane to create or update "
-                    "a widget in the SAME response. The scratch pad should always reflect your latest state.]"
+                    "\n\n[System: IMPORTANT — You have a modify_pane tool with two tabs:\n"
+                    "  - tab='chat' (default during conversations) — per-session widgets the user sees RIGHT NOW.\n"
+                    "  - tab='home' — persistent default dashboard (updated during onboarding).\n\n"
+                    "CHAT WIDGET RULE: Whenever your response contains useful, structured information — "
+                    "user profile data, account details, lookup results, summaries, lists, credentials, "
+                    "settings, or ANY data the user would want to see at a glance — you MUST immediately "
+                    "call modify_pane(tab='chat', action='add', ...) to create a widget for it in the SAME response.\n\n"
+                    "Examples of when to create chat widgets:\n"
+                    "  - User asks 'what's my credit card?' → kv widget with card details\n"
+                    "  - You look up connections/skills/jobs → kv or action_list widget with results\n"
+                    "  - You summarize something → markdown widget with the summary\n"
+                    "  - You show stats or metrics → stat_grid widget\n"
+                    "  - You return any structured data → appropriate widget type\n\n"
+                    "The chat view starts blank and fills up as you provide useful information. "
+                    "Think of it as a live workspace that captures the highlights of the conversation.\n\n"
+                    "HOME WIDGET RULE: During onboarding, update default_* widgets on tab='home'. "
+                    "The home tab has 9 persistent widgets: default_soul, default_user, default_memories, "
+                    "default_connections, default_jobs, default_rules, default_skills, default_wallet, default_analytics.\n\n"
+                    "Widget types: kv (key-value pairs), markdown (rich text), stat_grid (metrics), "
+                    "action_list (items with status), status (colored indicator), table (data grid).\n"
+                    "NEVER create empty widgets. Every widget MUST show real data.]"
                 )
 
         # One-time prompt if no home channel is set for this platform
@@ -5163,6 +5174,8 @@ class GatewayRunner:
             # Use per-agent model if configured, otherwise gateway default
             if _agent_config.get("model"):
                 model = _agent_config["model"]
+                if model.startswith("openrouter/"):
+                    model = model[len("openrouter/"):]
             else:
                 model = _resolve_gateway_model()
 

@@ -1005,9 +1005,22 @@ class WebAdapter(BasePlatformAdapter):
         # --- Pane Widgets ---
 
         @app.get("/api/agents/{agent_id}/pane")
-        async def get_pane_widgets(agent_id: str, authorization: str = Header("")):
+        async def get_pane_widgets(agent_id: str, session_id: str = None, authorization: str = Header("")):
             await get_current_user(authorization)
+            if session_id:
+                # Return both home + chat widgets for the given session
+                home = adapter._get_pane_widgets(agent_id)
+                chat = adapter._get_session_pane_widgets(session_id)
+                # Merge: home tab from agent, chat tab from session
+                home_tabs = home.get("tabs", {})
+                chat_tabs = chat.get("tabs", {})
+                return {"version": 1, "tabs": {**home_tabs, "chat": chat_tabs.get("chat", [])}}
             return adapter._get_pane_widgets(agent_id)
+
+        @app.get("/api/sessions/{session_id}/pane")
+        async def get_session_pane(session_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._get_session_pane_widgets(session_id)
 
         @app.delete("/api/agents/{agent_id}/pane")
         async def clear_pane_widgets(agent_id: str, tab: str = None, authorization: str = Header("")):
@@ -2513,12 +2526,12 @@ class WebAdapter(BasePlatformAdapter):
                 "name": "OpenRouter",
                 "env_keys": ["OPENROUTER_API_KEY"],
                 "models": [
-                    "openrouter/anthropic/claude-opus-4",
-                    "openrouter/anthropic/claude-sonnet-4",
-                    "openrouter/google/gemini-2.5-pro",
-                    "openrouter/openai/gpt-4o",
-                    "openrouter/meta-llama/llama-4-maverick",
-                    "openrouter/deepseek/deepseek-chat-v3.1",
+                    "anthropic/claude-opus-4",
+                    "anthropic/claude-sonnet-4",
+                    "google/gemini-2.5-pro",
+                    "openai/gpt-4o",
+                    "meta-llama/llama-4-maverick",
+                    "deepseek/deepseek-chat-v3.1",
                 ],
             },
             {
@@ -3040,7 +3053,7 @@ class WebAdapter(BasePlatformAdapter):
     # --- Pane Widgets ---
 
     def _build_default_widgets(self, agent_id: str) -> list:
-        """Build the 9 default widgets from the agent's current state."""
+        """Build the 9 default home widgets from the agent's current state."""
         registry = self._get_agent_registry()
         agent_home = registry.agent_home(agent_id)
         meta = registry.get_agent(agent_id)
@@ -3049,123 +3062,128 @@ class WebAdapter(BasePlatformAdapter):
 
         widgets = []
 
-        # 1. Personality (soul)
+        # 1. Profile card — compact card with avatar, name, role, and drill links
         soul_content = ""
         if soul_path.exists():
             soul_content = soul_path.read_text(encoding="utf-8").strip()
-        widgets.append({
-            "id": "default_personality",
-            "type": "markdown",
-            "title": "Personality",
-            "data": {
-                "content": soul_content if soul_content else "*No personality defined yet*",
-                "drill": "soul",
-                "size": "large",
-            },
-        })
 
-        # 2. Memories
-        memory_path = mem_dir / "MEMORY.md"
-        memory_entries = []
-        if memory_path.exists():
-            raw = memory_path.read_text(encoding="utf-8").strip()
-            if raw:
-                for entry in raw.split("§"):
-                    entry = entry.strip()
-                    if entry:
-                        memory_entries.append({"key": f"#{len(memory_entries)+1}", "value": entry})
-        widgets.append({
-            "id": "default_memories",
-            "type": "kv",
-            "title": "Memories",
-            "data": {
-                "entries": memory_entries if memory_entries else [{"key": "—", "value": "No memories yet"}],
-                "drill": "memories",
-                "size": "large",
-            },
-        })
-
-        # 3. User
         user_path = mem_dir / "USER.md"
-        user_entries = []
+        user_count = 0
         if user_path.exists():
             raw = user_path.read_text(encoding="utf-8").strip()
             if raw:
-                for entry in raw.split("§"):
-                    entry = entry.strip()
-                    if entry:
-                        # Try to split on first colon for key/value
-                        if ":" in entry:
-                            k, _, v = entry.partition(":")
-                            user_entries.append({"key": k.strip(), "value": v.strip()})
-                        else:
-                            user_entries.append({"key": f"#{len(user_entries)+1}", "value": entry})
+                user_count = len([e for e in raw.split("\u00a7") if e.strip()])
+
+        memory_path = mem_dir / "MEMORY.md"
+        memory_count = 0
+        if memory_path.exists():
+            raw = memory_path.read_text(encoding="utf-8").strip()
+            if raw:
+                memory_count = len([e for e in raw.split("\u00a7") if e.strip()])
+
         widgets.append({
-            "id": "default_user",
-            "type": "kv",
-            "title": "User",
+            "id": "default_profile",
+            "type": "profile",
+            "title": meta.name if meta else agent_id,
             "data": {
-                "entries": user_entries if user_entries else [{"key": "—", "value": "No user info yet"}],
-                "drill": "user",
-                "size": "medium",
+                "role": meta.role if meta and meta.role else "",
+                "avatar": meta.avatar if meta and meta.avatar else "",
+                "has_soul": bool(soul_content),
+                "user_count": user_count,
+                "memory_count": memory_count,
+                "size": "large",
             },
         })
 
-        # 4. Connections
-        conn_entries = []
+        # 2. Connections — compact status summary (from registry + .env API keys)
+        connected_names = []
         try:
             from vulti_cli.connection_registry import ConnectionRegistry
             from vulti_cli.config import get_vulti_home
-            creg = ConnectionRegistry(get_vulti_home())
-            allowed = set()
-            try:
-                allowed = set(creg._get_agent_allowed(agent_id))
-            except Exception:
-                pass
-            for c in creg.list_all():
-                status = "allowed" if c.name in allowed else "available"
-                conn_entries.append({"key": c.name, "value": status})
+            _vhome = get_vulti_home()
+            creg = ConnectionRegistry(_vhome)
+            all_conns = creg.list_all()
+            if all_conns:
+                connected_names = [c.name for c in all_conns]
         except Exception:
             pass
+        # Also count configured API keys from .env as connections
+        try:
+            from vulti_cli.config import get_vulti_home
+            _vhome = get_vulti_home()
+            env_file = _vhome / ".env"
+            if env_file.exists():
+                _key_map = {
+                    "TELEGRAM_BOT_TOKEN": "Telegram",
+                    "DISCORD_BOT_TOKEN": "Discord",
+                    "SLACK_BOT_TOKEN": "Slack",
+                    "MATRIX_SERVER_NAME": "Matrix",
+                    "GMAIL_CREDENTIALS": "Gmail",
+                    "FIRECRAWL_API_KEY": "Firecrawl",
+                    "BROWSERBASE_API_KEY": "Browserbase",
+                    "OPENROUTER_API_KEY": "OpenRouter",
+                    "HONCHO_API_KEY": "Honcho",
+                    "WANDB_API_KEY": "W&B",
+                }
+                for line in env_file.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key = line.split("=", 1)[0].strip()
+                        if key in _key_map:
+                            name = _key_map[key]
+                            if name not in connected_names:
+                                connected_names.append(name)
+        except Exception:
+            pass
+        conn_count = len(connected_names)
+        conn_label = f"{conn_count} connected" if conn_count else "None configured"
+        conn_preview = ", ".join(connected_names[:4])
+        if len(connected_names) > 4:
+            conn_preview += f" +{len(connected_names) - 4}"
         widgets.append({
             "id": "default_connections",
-            "type": "kv",
-            "title": "Connections",
+            "type": "status",
+            "title": "\U0001f50c Connections",
             "data": {
-                "entries": conn_entries if conn_entries else [{"key": "—", "value": "No connections configured"}],
+                "label": conn_label,
+                "variant": "success" if conn_count else "info",
+                "detail": conn_preview,
                 "drill": "connections",
-                "size": "medium",
             },
         })
 
-        # 5. Jobs (cron)
-        job_items = []
+        # 3. Jobs — compact status summary
+        active_jobs = 0
+        paused_jobs = 0
         try:
             cron_file = agent_home / "cron" / "jobs.json"
             if cron_file.exists():
                 jobs = json.loads(cron_file.read_text(encoding="utf-8"))
                 if isinstance(jobs, list):
                     for j in jobs:
-                        job_items.append({
-                            "title": j.get("name", j.get("id", "unnamed")),
-                            "subtitle": j.get("schedule", ""),
-                            "status": "active" if j.get("enabled", True) else "paused",
-                        })
+                        if j.get("enabled", True):
+                            active_jobs += 1
+                        else:
+                            paused_jobs += 1
         except Exception:
             pass
+        job_label = f"{active_jobs} active" if active_jobs else "None scheduled"
+        job_detail = f"{paused_jobs} paused" if paused_jobs else ""
         widgets.append({
             "id": "default_jobs",
-            "type": "action_list" if job_items else "kv",
-            "title": "Jobs",
+            "type": "status",
+            "title": "\u23f0 Jobs",
             "data": {
-                **({"action_items": job_items} if job_items else {"entries": [{"key": "—", "value": "No scheduled jobs"}]}),
+                "label": job_label,
+                "variant": "success" if active_jobs else "info",
+                "detail": job_detail,
                 "drill": "actions",
-                "size": "medium",
+                "size": "half",
             },
         })
 
-        # 6. Rules
-        rule_items = []
+        # 4. Rules — compact status summary
+        active_rules = 0
         try:
             from vulti_cli.config import get_vulti_home
             rules_file = get_vulti_home() / "rules" / "rules.json"
@@ -3173,103 +3191,143 @@ class WebAdapter(BasePlatformAdapter):
                 rules_data = json.loads(rules_file.read_text(encoding="utf-8"))
                 if isinstance(rules_data, list):
                     for r in rules_data:
-                        # Only show rules for this agent or global rules
                         r_agent = r.get("agent_id", "")
                         if r_agent and r_agent != agent_id:
                             continue
-                        rule_items.append({
-                            "title": r.get("name", r.get("id", "unnamed")),
-                            "subtitle": r.get("condition", ""),
-                            "status": "active" if r.get("enabled", True) else "disabled",
-                        })
+                        if r.get("enabled", True):
+                            active_rules += 1
         except Exception:
             pass
         widgets.append({
             "id": "default_rules",
-            "type": "action_list" if rule_items else "kv",
-            "title": "Rules",
+            "type": "status",
+            "title": "\U0001f4d0 Rules",
             "data": {
-                **({"action_items": rule_items} if rule_items else {"entries": [{"key": "—", "value": "No rules configured"}]}),
+                "label": f"{active_rules} active" if active_rules else "None configured",
+                "variant": "success" if active_rules else "info",
                 "drill": "actions",
-                "size": "medium",
+                "size": "half",
             },
         })
 
-        # 7. Skills
-        skill_entries = []
+        # 5. Skills — compact status summary
+        skill_count = 0
+        skill_names = []
         try:
             skills_dir = agent_home / "skills"
             if skills_dir.exists():
-                for d in sorted(skills_dir.iterdir()):
-                    if d.is_dir():
-                        skill_entries.append({"key": d.name, "value": "installed"})
-            # Also check global skills
-            if not skill_entries:
+                skill_names = [d.name for d in sorted(skills_dir.iterdir()) if d.is_dir()]
+                skill_count = len(skill_names)
+            if not skill_count:
                 from vulti_cli.config import get_vulti_home
                 global_skills = get_vulti_home() / "skills"
                 if global_skills.exists():
-                    for d in sorted(global_skills.iterdir()):
-                        if d.is_dir():
-                            skill_entries.append({"key": d.name, "value": "available"})
+                    skill_names = [d.name for d in sorted(global_skills.iterdir()) if d.is_dir()]
+                    skill_count = len(skill_names)
         except Exception:
             pass
+        skill_detail = ", ".join(skill_names[:3])
+        if len(skill_names) > 3:
+            skill_detail += f" +{len(skill_names) - 3}"
         widgets.append({
             "id": "default_skills",
-            "type": "kv",
-            "title": "Skills",
+            "type": "status",
+            "title": "\U0001f9e9 Skills",
             "data": {
-                "entries": skill_entries if skill_entries else [{"key": "—", "value": "No skills installed"}],
+                "label": f"{skill_count} installed" if skill_count else "None installed",
+                "variant": "success" if skill_count else "info",
+                "detail": skill_detail,
                 "drill": "skills",
-                "size": "medium",
             },
         })
 
-        # 8. Wallet
-        wallet_entries = []
+        # 6. Wallet — credit card visual + vault visual
+        card_name = ""
+        card_last4 = ""
+        card_expiry = ""
+        vault_id = ""
+        vault_name = ""
         try:
             wallet_path = agent_home / "wallet.json"
             if wallet_path.exists():
                 w = json.loads(wallet_path.read_text(encoding="utf-8"))
                 cc = w.get("credit_card", {})
                 if cc.get("number"):
-                    last4 = cc["number"][-4:]
-                    wallet_entries.append({"key": cc.get("cardholder_name", "Card"), "value": f"•••• {last4}", "masked": True})
+                    card_name = cc.get("cardholder_name", cc.get("name", ""))
+                    card_last4 = cc["number"][-4:]
+                    card_expiry = cc.get("expiry", "")
                 crypto = w.get("crypto", {})
                 if crypto.get("vault_id"):
-                    wallet_entries.append({"key": "Vault", "value": crypto["vault_id"]})
+                    vault_id = crypto["vault_id"]
+                    vault_name = crypto.get("name", w.get("name", "Vault"))
         except Exception:
             pass
+
+        # Also check .vult files
+        if not vault_id:
+            try:
+                for f in agent_home.iterdir():
+                    if f.suffix == ".vult":
+                        vdata = json.loads(f.read_text())
+                        vault_id = vdata.get("vault_id", f.stem)
+                        vault_name = vdata.get("name", f.stem)
+                        break
+            except Exception:
+                pass
+
         widgets.append({
             "id": "default_wallet",
-            "type": "kv",
-            "title": "Wallet",
+            "type": "kv",  # Rendered specially by frontend when it sees wallet data fields
+            "title": "\U0001f4b3 Wallet",
             "data": {
-                "entries": wallet_entries if wallet_entries else [{"key": "—", "value": "No payment methods"}],
+                "card_name": card_name,
+                "card_last4": card_last4,
+                "card_expiry": card_expiry,
+                "vault_id": vault_id,
+                "vault_name": vault_name,
+                "entries": [] if (card_name or vault_id) else [{"key": "\u2014", "value": "No card or vault set up"}],
                 "drill": "wallet",
-                "size": "small",
+                "size": "half",
             },
         })
 
-        # 9. Analytics
+        # 7. Analytics — cost, sessions, tokens
         session_count = 0
+        total_tokens = 0
         try:
-            sessions_dir = agent_home / "sessions"
+            from vulti_cli.config import get_vulti_home
+            sessions_dir = get_vulti_home() / "web" / "sessions"
             if sessions_dir.exists():
-                session_count = len([f for f in sessions_dir.iterdir() if f.is_file()])
+                session_count = len([f for f in sessions_dir.glob("*.json") if "_widgets" not in f.name])
+        except Exception:
+            pass
+        try:
+            audit_dir = get_vulti_home() / "audit"
+            if audit_dir.exists():
+                for f in sorted(audit_dir.glob("*.jsonl"), reverse=True)[:1]:
+                    for line in f.read_text(encoding="utf-8").strip().splitlines()[-50:]:
+                        try:
+                            evt = json.loads(line)
+                            if evt.get("agent_id") == agent_id:
+                                tokens = evt.get("details", {}).get("total_tokens", 0)
+                                if tokens:
+                                    total_tokens += int(tokens)
+                        except Exception:
+                            pass
         except Exception:
             pass
         widgets.append({
             "id": "default_analytics",
             "type": "stat_grid",
-            "title": "Analytics",
+            "title": "\U0001f4ca Analytics",
             "data": {
                 "stats": [
                     {"label": "Sessions", "value": str(session_count)},
-                    {"label": "Status", "value": meta.status if meta else "unknown"},
-                    {"label": "Role", "value": meta.role if meta and meta.role else "—"},
+                    {"label": "Tokens", "value": f"{total_tokens:,}" if total_tokens else "0"},
+                    {"label": "Est. Cost", "value": f"${total_tokens * 0.000003:.2f}" if total_tokens else "$0.00"},
                 ],
                 "drill": "analytics",
-                "size": "large",
+                "size": "half",
             },
         })
 
@@ -3283,6 +3341,17 @@ class WebAdapter(BasePlatformAdapter):
         data = {"version": 1, "tabs": {"home": widgets}}
         pane_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return data
+
+    def _get_session_pane_widgets(self, session_id: str) -> dict:
+        """Get per-session (chat tab) widgets."""
+        from vulti_cli.config import get_vulti_home
+        path = get_vulti_home() / "web" / "sessions" / f"{session_id}_widgets.json"
+        if path.exists():
+            try:
+                return json.loads(path.read_text())
+            except Exception:
+                pass
+        return {"version": 1, "tabs": {}}
 
     def _get_pane_widgets(self, agent_id: str) -> dict:
         registry = self._get_agent_registry()

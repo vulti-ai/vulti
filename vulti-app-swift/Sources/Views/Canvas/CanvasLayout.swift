@@ -118,35 +118,71 @@ struct CanvasLayout {
         let availableHeight = height - topMargin - 80
         let verticalSpacing = min(180, availableHeight / (CGFloat(maxDepth) + 0.5))
 
-        // Horizontal padding
+        // Horizontal spacing
         let horizontalPadding: CGFloat = 100
         let usableWidth = width - horizontalPadding * 2
+        let nodeSpacing: CGFloat = min(220, usableWidth / CGFloat(max(agents.count, 1)))
 
-        // Position agent nodes
-        for (depth, group) in depthGroups {
-            let count = group.count
-            let spacing = min(220, usableWidth / CGFloat(max(count, 1)))
-            let rowWidth = spacing * CGFloat(count - 1)
-            let startX = width / 2 - rowWidth / 2
+        // Position nodes depth by depth.
+        // Depth 1: centered across the canvas (children of owner).
+        // Depth 2+: centered under their parent's X position.
+        var positionMap: [String: CGPoint] = [:]
+
+        // Owner position
+        positionMap[ownerNodeId] = CGPoint(x: width / 2, y: topMargin)
+
+        for depth in 1...maxDepth {
+            guard let group = depthGroups[depth] else { continue }
             let y = topMargin + CGFloat(depth) * verticalSpacing
 
-            for (i, agent) in group.enumerated() {
-                let x = count == 1 ? width / 2 : startX + CGFloat(i) * spacing
-                let roleStr = agent.role ?? ""
-                let colorHex = roleColors[roleStr.lowercased()] ?? defaultColor
+            if depth == 1 {
+                // Root agents — center across full width
+                let count = group.count
+                let rowWidth = nodeSpacing * CGFloat(count - 1)
+                let startX = width / 2 - rowWidth / 2
+                for (i, agent) in group.enumerated() {
+                    let x = count == 1 ? width / 2 : startX + CGFloat(i) * nodeSpacing
+                    positionMap[agent.id] = CGPoint(x: x, y: y)
+                }
+            } else {
+                // Sub-agents — group by parent, center each group under parent's X
+                var byParent: [String: [AgentEntry]] = [:]
+                for agent in group {
+                    let parent = managedBy[agent.id] ?? ownerNodeId
+                    byParent[parent, default: []].append(agent)
+                }
 
-                nodes.append(LayoutNode(
-                    id: agent.id,
-                    type: .agent,
-                    x: x,
-                    y: y,
-                    label: agent.name,
-                    sublabel: roleStr,
-                    color: Color(hex: colorHex),
-                    status: agent.status,
-                    role: roleStr
-                ))
+                for (parentId, children) in byParent {
+                    let parentX = positionMap[parentId]?.x ?? width / 2
+                    let count = children.count
+                    let rowWidth = nodeSpacing * CGFloat(count - 1)
+                    let startX = parentX - rowWidth / 2
+
+                    for (i, agent) in children.enumerated() {
+                        let x = count == 1 ? parentX : startX + CGFloat(i) * nodeSpacing
+                        positionMap[agent.id] = CGPoint(x: x, y: y)
+                    }
+                }
             }
+        }
+
+        // Build layout nodes from positions
+        for agent in agents {
+            let pos = positionMap[agent.id] ?? CGPoint(x: width / 2, y: topMargin + verticalSpacing)
+            let roleStr = agent.role ?? ""
+            let colorHex = roleColors[roleStr.lowercased()] ?? defaultColor
+
+            nodes.append(LayoutNode(
+                id: agent.id,
+                type: .agent,
+                x: pos.x,
+                y: pos.y,
+                label: agent.name,
+                sublabel: roleStr,
+                color: Color(hex: colorHex),
+                status: agent.status,
+                role: roleStr
+            ))
         }
 
         // Implicit edges: owner → all depth-1 agents

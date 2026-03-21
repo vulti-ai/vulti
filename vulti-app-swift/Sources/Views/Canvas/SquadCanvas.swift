@@ -20,7 +20,6 @@ struct SquadCanvas: View {
     @State private var dragNodeStart: [String: CGPoint] = [:]
 
     // Edge hover — tracked here so delete button renders above nodes
-    @State private var hoveredEdgeId: String?
 
     // FitView
     @State private var didFitView = false
@@ -278,8 +277,7 @@ struct SquadCanvas: View {
             nodesLayer(layout: layout, size: size)
             arrowsLayer(layout: layout, size: size)
             handleDragLayer(layout: layout, size: size)
-            edgeHoverLayer(layout: layout, size: size)  // above handles so hover always works
-            edgeDeleteLayer(layout: layout, size: size)  // topmost so clicks always work
+            edgeDeleteLayer(layout: layout, size: size)  // topmost so hover/clicks always work
         }
         .coordinateSpace(name: "canvas")
     }
@@ -300,10 +298,11 @@ struct SquadCanvas: View {
         }
     }
 
-    // MARK: Edge hover layer — rendered ABOVE handles so hover always works
+    // MARK: Edge delete layer — one hover circle per deletable edge at its midpoint.
+    // Each edge gets its own independent hover target that can't overlap with others.
 
     @ViewBuilder
-    private func edgeHoverLayer(layout: LayoutResult, size: CGSize) -> some View {
+    private func edgeDeleteLayer(layout: LayoutResult, size: CGSize) -> some View {
         ForEach(layout.edges) { edge in
             if edge.isDeletable {
                 let fromPos = nodePos(edge.fromId, layout: layout, size: size)
@@ -311,66 +310,16 @@ struct SquadCanvas: View {
                 let fromType = layout.nodes.first(where: { $0.id == edge.fromId })?.type ?? .agent
                 let toType = layout.nodes.first(where: { $0.id == edge.toId })?.type ?? .agent
                 let anchors = edgeAnchors(fromId: edge.fromId, toId: edge.toId, from: fromPos, to: toPos, fromType: fromType, toType: toType)
+                let mid = CGPoint(x: (anchors.start.x + anchors.end.x) / 2,
+                                  y: (anchors.start.y + anchors.end.y) / 2)
 
-                BezierEdge.hitZonePath(from: anchors.start, to: anchors.end,
-                                       fromHandle: anchors.fromHandle, toHandle: anchors.toHandle)
-                    .stroke(.clear, lineWidth: 24)
-                    .contentShape(
-                        BezierEdge.hitZonePath(from: anchors.start, to: anchors.end,
-                                               fromHandle: anchors.fromHandle, toHandle: anchors.toHandle)
-                            .strokedPath(StrokeStyle(lineWidth: 24))
-                    )
-                    .onHover { hovering in
-                        hoveredEdgeId = hovering ? edge.id : nil
-                    }
-                    .allowsHitTesting(true)
+                EdgeDeleteButton(
+                    edgeId: edge.id,
+                    fromId: edge.fromId == CanvasLayout.ownerNodeId ? "owner" : edge.fromId,
+                    toId: edge.toId == CanvasLayout.ownerNodeId ? "owner" : edge.toId
+                )
+                .position(mid)
             }
-        }
-    }
-
-    // MARK: Edge delete layer — rendered ABOVE nodes so clicks always work
-
-    @ViewBuilder
-    private func edgeDeleteLayer(layout: LayoutResult, size: CGSize) -> some View {
-        if let edgeId = hoveredEdgeId,
-           let edge = layout.edges.first(where: { $0.id == edgeId }) {
-            let fromPos = nodePos(edge.fromId, layout: layout, size: size)
-            let toPos = nodePos(edge.toId, layout: layout, size: size)
-            let fromType = layout.nodes.first(where: { $0.id == edge.fromId })?.type ?? .agent
-            let toType = layout.nodes.first(where: { $0.id == edge.toId })?.type ?? .agent
-            let anchors = edgeAnchors(fromId: edge.fromId, toId: edge.toId, from: fromPos, to: toPos, fromType: fromType, toType: toType)
-            let mid = CGPoint(x: (anchors.start.x + anchors.end.x) / 2,
-                              y: (anchors.start.y + anchors.end.y) / 2)
-
-            Button {
-                let source = edge.fromId == CanvasLayout.ownerNodeId ? "owner" : edge.fromId
-                let target = edge.toId == CanvasLayout.ownerNodeId ? "owner" : edge.toId
-                if let rel = app.relationships.first(where: {
-                    ($0.fromAgentId == source || (source == "owner" && $0.fromAgentId == nil))
-                    && ($0.toAgentId == target || (target == "owner" && $0.toAgentId == nil))
-                }), let relId = rel.rawId {
-                    hoveredEdgeId = nil
-                    Task {
-                        try? await app.client.deleteRelationship(relId)
-                        await app.refreshRelationships()
-                    }
-                }
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8))
-                    .foregroundStyle(VultiTheme.inkDim)
-                    .frame(width: 24, height: 24)
-                    .background(VultiTheme.paperWarm, in: Circle())
-                    .overlay(Circle().stroke(VultiTheme.border))
-            }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-                if hovering { hoveredEdgeId = edgeId }
-                else if hoveredEdgeId == edgeId { hoveredEdgeId = nil }
-            }
-            .position(mid)
-            .transition(.scale.combined(with: .opacity))
-            .animation(.easeInOut(duration: 0.15), value: hoveredEdgeId)
         }
     }
 
@@ -490,10 +439,10 @@ struct SquadCanvas: View {
 
                 Circle()
                     .fill(Color.clear)
-                    .frame(width: 56, height: 56)
+                    .frame(width: 20, height: 20)
                     .contentShape(Circle())
                     .gesture(
-                        DragGesture(coordinateSpace: .named("canvas"))
+                        DragGesture(minimumDistance: 5, coordinateSpace: .named("canvas"))
                             .onChanged { value in
                                 if connectFrom == nil {
                                     connectFrom = node.id
@@ -533,6 +482,47 @@ struct SquadCanvas: View {
 }
 
 // MARK: - Dot grid
+
+/// Self-contained edge delete button — each edge gets its own hover state.
+/// A 40px hover zone at the edge midpoint. Shows a soft red × on hover.
+struct EdgeDeleteButton: View {
+    let edgeId: String
+    let fromId: String
+    let toId: String
+    @Environment(AppState.self) private var app
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            if let rel = app.relationships.first(where: {
+                ($0.fromAgentId == fromId || (fromId == "owner" && $0.fromAgentId == nil))
+                && ($0.toAgentId == toId || (toId == "owner" && $0.toAgentId == nil))
+            }), let relId = rel.rawId {
+                Task {
+                    try? await app.client.deleteRelationship(relId)
+                    await app.refreshRelationships()
+                }
+            }
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 7, weight: .medium))
+                .foregroundStyle(isHovered ? .red : .clear)
+                .frame(width: 20, height: 20)
+                .background(
+                    Circle()
+                        .fill(isHovered ? VultiTheme.paperWarm : .clear)
+                        .overlay(
+                            Circle().stroke(isHovered ? Color.red.opacity(0.4) : .clear, lineWidth: 1)
+                        )
+                )
+                .frame(width: 40, height: 40) // keep hover zone generous
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.15), value: isHovered)
+    }
+}
 
 struct CanvasGrid: View {
     var body: some View {

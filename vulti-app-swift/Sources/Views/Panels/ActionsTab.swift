@@ -209,7 +209,10 @@ struct RulesListView: View {
                             Task {
                                 if let rule = try? await app.client.createRule(
                                     condition: formCondition, action: formAction,
-                                    name: formName, agentId: agentId
+                                    name: formName.isEmpty ? nil : formName,
+                                    priority: formPriority,
+                                    cooldownMinutes: Int(formCooldown),
+                                    agentId: agentId
                                 ) {
                                     rules.insert(rule, at: 0)
                                     showForm = false; clearForm()

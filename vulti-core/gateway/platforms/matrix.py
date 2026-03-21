@@ -34,6 +34,9 @@ from gateway.platforms.base import (
 
 logger = logging.getLogger(__name__)
 
+# Suppress noisy nio response validation warnings (Continuwuity compat)
+logging.getLogger("nio.responses").setLevel(logging.ERROR)
+
 # Retry constants
 RETRY_DELAY_INITIAL = 2.0
 RETRY_DELAY_MAX = 60.0
@@ -325,6 +328,8 @@ class MatrixAdapter(BasePlatformAdapter):
 
                 while self._running:
                     resp = await client.sync(timeout=30000)
+                    if not hasattr(resp, "next_batch"):
+                        raise Exception(f"Sync returned {type(resp).__name__}: {getattr(resp, 'message', 'unknown error')}")
                     self._last_sync_activity = time.time()
                     backoff = RETRY_DELAY_INITIAL
 
@@ -333,6 +338,7 @@ class MatrixAdapter(BasePlatformAdapter):
             except Exception as e:
                 if self._running:
                     logger.warning("Matrix sync error for %s: %s (retry in %.0fs)", agent_id, e, backoff)
+                initial_done = False  # Re-do full sync on next attempt
 
             if self._running:
                 jitter = backoff * 0.2 * random.random()
@@ -363,24 +369,44 @@ class MatrixAdapter(BasePlatformAdapter):
     # Message routing helpers
     # ------------------------------------------------------------------
 
-    def _detect_mentioned_agents(self, text: str) -> List[str]:
+    def _detect_mentioned_agents(self, text: str, formatted_body: str = None) -> List[str]:
         """Detect agents mentioned in message text.
 
-        Matches both @agent_id syntax and plain-text agent names (case-insensitive).
+        Checks (in order):
+        1. Matrix HTML mentions in formatted_body (href containing @user:server)
+        2. @agent_id syntax in plain text (with prefix matching)
+        3. Plain-text agent name / display name matches
         """
         mentioned = []
-        # 1. @agent_id mentions (Matrix-style translated)
+
+        # 1. Extract user IDs from formatted_body HTML mentions
+        #    e.g. <a href="https://matrix.to/#/@flowwy-bot-vulti:server">...</a>
+        if formatted_body:
+            for mxid in re.findall(r'matrix\.to/#/(@[^"&]+)', formatted_body):
+                agent_id = self._matrix_to_agent.get(mxid)
+                if agent_id and agent_id not in mentioned:
+                    mentioned.append(agent_id)
+
+        if mentioned:
+            return mentioned
+
+        # 2. @agent_id mentions in plain text (Matrix-style translated)
         translated = self._translate_mentions(text)
         for match in re.finditer(r"@([a-z][a-z0-9\-]*)", translated):
             candidate = match.group(1)
             if candidate in self._agent_clients and candidate not in mentioned:
                 mentioned.append(candidate)
+                continue
+            # Prefix match: @flowwy → flowwy-bot
+            for agent_id in self._agent_clients:
+                if agent_id.startswith(candidate) and agent_id not in mentioned:
+                    mentioned.append(agent_id)
+                    break
 
-        # 2. Plain-text agent name mentions (e.g., "Hector" or "hector")
+        # 3. Plain-text agent name mentions (e.g., "Hector" or "hector")
         if not mentioned:
             text_lower = text.lower()
             for agent_id in self._agent_clients:
-                # Match agent_id as a word boundary
                 if re.search(r'\b' + re.escape(agent_id) + r'\b', text_lower):
                     if agent_id not in mentioned:
                         mentioned.append(agent_id)
@@ -539,10 +565,21 @@ class MatrixAdapter(BasePlatformAdapter):
             # Fallback: use all connected agents
             room_agents = [aid for aid, info in self._agent_clients.items() if info.get("client")]
 
-        mentioned = self._detect_mentioned_agents(event.body or "")
+        mentioned = self._detect_mentioned_agents(
+            event.body or "",
+            formatted_body=getattr(event, "formatted_body", None),
+        )
         thread_target = self._detect_thread_target(event)
 
+        # When specific agents are @-mentioned or thread-targeted, only dispatch
+        # to those agents — skip observers to prevent uninvited responses.
+        targeted = set(mentioned)
+        if thread_target:
+            targeted.add(thread_target)
+
         for aid in room_agents:
+            if targeted and aid not in targeted:
+                continue  # Skip non-targeted agents when someone is specifically addressed
             must_respond = (aid in mentioned) or (aid == thread_target)
             await self._dispatch_to_agent(room, event, aid, chat_type, response_required=must_respond)
 

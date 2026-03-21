@@ -239,18 +239,19 @@ struct AgentPanelHeader: View {
                 } else {
                     Menu(provider.name) {
                         ForEach(models, id: \.self) { model in
-                            let fullId = "\(provider.id)/\(model)"
+                            // Strip routing prefix (openrouter/, anthropic/anthropic/) — backend expects clean model ID
+                            let cleanId = Self.stripProviderPrefix(model)
                             Button {
-                                configModel = fullId
+                                configModel = cleanId
                                 Task {
                                     _ = try? await app.client.updateAgent(
-                                        agentId, updates: ["model": fullId]
+                                        agentId, updates: ["model": cleanId]
                                     )
                                 }
                             } label: {
                                 HStack {
-                                    Text(model)
-                                    if configModel == fullId || configModel == model {
+                                    Text(cleanId)
+                                    if configModel == cleanId || configModel == model {
                                         Image(systemName: "checkmark")
                                     }
                                 }
@@ -281,5 +282,16 @@ struct AgentPanelHeader: View {
     private func roleColorForAgent(_ agent: GatewayClient.AgentResponse) -> Color {
         let hex = CanvasLayout.roleColors[(agent.role ?? "").lowercased()] ?? CanvasLayout.defaultColor
         return Color(hex: hex)
+    }
+
+    /// Strip routing prefixes from model IDs — backend expects clean IDs like "anthropic/claude-opus-4"
+    static func stripProviderPrefix(_ model: String) -> String {
+        let prefixes = ["openrouter/", "openai/openai/", "anthropic/anthropic/"]
+        for prefix in prefixes {
+            if model.hasPrefix(prefix) {
+                return String(model.dropFirst(prefix.count))
+            }
+        }
+        return model
     }
 }

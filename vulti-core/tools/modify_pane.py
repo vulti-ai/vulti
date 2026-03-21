@@ -27,6 +27,7 @@ VALID_WIDGET_TYPES = {
     "markdown", "kv", "table", "image",
     "status", "stat_grid", "bar_chart", "progress",
     "button", "form", "toggle_list", "action_list", "empty",
+    "profile",
 }
 
 
@@ -75,17 +76,22 @@ def _ensure_ids(widgets: List[dict]) -> List[dict]:
 
 def modify_pane(args, **kw) -> str:
     action = (args.get("action") or "").strip().lower()
-    # Default to the tab the user is currently viewing in the Hub
-    default_tab = os.getenv("VULTI_HUB_CHANNEL", "home")
+    # Default tab: during active chat, default to "chat"; otherwise "home"
+    hub_channel = os.getenv("VULTI_HUB_CHANNEL", "")
+    default_tab = "chat" if _session_id_from_env() and hub_channel not in ("onboard", "onboard-role", "onboard-connections", "onboard-skills", "onboard-actions") else "home"
     tab = (args.get("tab") or default_tab).strip().lower()
     widgets = args.get("widgets") or []
     widget_id = args.get("widget_id") or ""
     widget_data = args.get("widget_data")
 
     agent_id = os.getenv("VULTI_AGENT_ID", "default")
+    session_id = _session_id_from_env() if tab == "chat" else ""
 
     if tab not in VALID_TABS:
         return json.dumps({"success": False, "error": f"Invalid tab '{tab}'. Valid: {', '.join(sorted(VALID_TABS))}"})
+
+    if tab == "chat" and not session_id:
+        return json.dumps({"success": False, "error": "No active session for 'chat' tab."})
 
     # Validate widget types
     for w in widgets:
@@ -93,14 +99,17 @@ def modify_pane(args, **kw) -> str:
         if wtype not in VALID_WIDGET_TYPES:
             return json.dumps({"success": False, "error": f"Unknown widget type '{wtype}'. Valid: {', '.join(sorted(VALID_WIDGET_TYPES))}"})
 
+    # Use the storage-key appropriate for the tab
+    storage_tab = "home" if tab == "home" else "chat"
+
     try:
         if action == "set":
             if not widgets:
                 return json.dumps({"success": False, "error": "widgets array required for 'set'"})
             widgets = _ensure_ids(widgets)
-            data = _load_widgets(agent_id)
-            data["tabs"][tab] = widgets
-            _save_widgets(agent_id, data)
+            data = _load_widgets(agent_id, storage_tab, session_id)
+            data["tabs"][storage_tab] = widgets
+            _save_widgets(agent_id, data, storage_tab, session_id)
             return json.dumps({
                 "success": True,
                 "message": f"Set {len(widgets)} widget(s) on '{tab}' tab.",
@@ -111,11 +120,11 @@ def modify_pane(args, **kw) -> str:
             if not widgets:
                 return json.dumps({"success": False, "error": "widgets array required for 'add'"})
             widgets = _ensure_ids(widgets)
-            data = _load_widgets(agent_id)
-            existing = data["tabs"].get(tab, [])
+            data = _load_widgets(agent_id, storage_tab, session_id)
+            existing = data["tabs"].get(storage_tab, [])
             existing.extend(widgets)
-            data["tabs"][tab] = existing
-            _save_widgets(agent_id, data)
+            data["tabs"][storage_tab] = existing
+            _save_widgets(agent_id, data, storage_tab, session_id)
             return json.dumps({
                 "success": True,
                 "message": f"Added {len(widgets)} widget(s) to '{tab}' tab ({len(existing)} total).",
@@ -125,17 +134,17 @@ def modify_pane(args, **kw) -> str:
         elif action == "remove":
             if not widget_id:
                 return json.dumps({"success": False, "error": "widget_id required for 'remove'"})
-            data = _load_widgets(agent_id)
-            existing = data["tabs"].get(tab, [])
+            data = _load_widgets(agent_id, storage_tab, session_id)
+            existing = data["tabs"].get(storage_tab, [])
             before = len(existing)
             existing = [w for w in existing if w.get("id") != widget_id]
             if len(existing) == before:
                 return json.dumps({"success": False, "error": f"Widget '{widget_id}' not found on '{tab}' tab."})
             if existing:
-                data["tabs"][tab] = existing
+                data["tabs"][storage_tab] = existing
             else:
-                data["tabs"].pop(tab, None)
-            _save_widgets(agent_id, data)
+                data["tabs"].pop(storage_tab, None)
+            _save_widgets(agent_id, data, storage_tab, session_id)
             result_widgets = existing if existing else None
             return json.dumps({
                 "success": True,
@@ -149,8 +158,8 @@ def modify_pane(args, **kw) -> str:
             if not widget_data and not widgets:
                 return json.dumps({"success": False, "error": "widget_data or widgets[0] required for 'update'"})
             update_with = widget_data if widget_data else (widgets[0] if widgets else {})
-            data = _load_widgets(agent_id)
-            existing = data["tabs"].get(tab, [])
+            data = _load_widgets(agent_id, storage_tab, session_id)
+            existing = data["tabs"].get(storage_tab, [])
             found = False
             for w in existing:
                 if w.get("id") == widget_id:
@@ -164,8 +173,8 @@ def modify_pane(args, **kw) -> str:
                     break
             if not found:
                 return json.dumps({"success": False, "error": f"Widget '{widget_id}' not found on '{tab}' tab."})
-            data["tabs"][tab] = existing
-            _save_widgets(agent_id, data)
+            data["tabs"][storage_tab] = existing
+            _save_widgets(agent_id, data, storage_tab, session_id)
             return json.dumps({
                 "success": True,
                 "message": f"Updated widget '{widget_id}' on '{tab}' tab.",
@@ -173,9 +182,9 @@ def modify_pane(args, **kw) -> str:
             })
 
         elif action == "list":
-            data = _load_widgets(agent_id)
+            data = _load_widgets(agent_id, storage_tab, session_id)
             if tab:
-                tab_widgets = data["tabs"].get(tab, [])
+                tab_widgets = data["tabs"].get(storage_tab, [])
                 return json.dumps({
                     "success": True,
                     "tab": tab,
@@ -190,15 +199,15 @@ def modify_pane(args, **kw) -> str:
                 })
 
         elif action == "clear":
-            data = _load_widgets(agent_id)
+            data = _load_widgets(agent_id, storage_tab, session_id)
             if tab:
-                data["tabs"].pop(tab, None)
+                data["tabs"].pop(storage_tab, None)
             else:
                 data["tabs"] = {}
-            _save_widgets(agent_id, data)
+            _save_widgets(agent_id, data, storage_tab, session_id)
             return json.dumps({
                 "success": True,
-                "message": f"Cleared widgets on '{tab}' tab. Default view restored." if tab else "Cleared all custom widgets.",
+                "message": f"Cleared widgets on '{tab}' tab." if tab else "Cleared all custom widgets.",
                 "pane_update": {"tab": tab, "widgets": None},
             })
 
@@ -235,8 +244,11 @@ MODIFY_PANE_SCHEMA = {
         "  toggle_list — Toggleable items (data: {items: [{id, label, description?, enabled, tags?}], on_toggle_message})\n"
         "  action_list — Items with buttons (data: {items: [{id, title, subtitle?, status?, actions: [{label, message, variant?}]}]})\n"
         "  empty       — Empty state (data: {icon?: clock|bolt|book|search, heading, subtext?, button?: {label, message}})\n\n"
-        "Widgets are placed on the agent's Home tab only.\n"
-        "Use clear to remove widgets and restore the default empty state."
+        "Two tabs:\n"
+        "  chat — Per-session widgets (default during conversations). Starts blank each chat, fills as you respond.\n"
+        "  home — Persistent default dashboard. Updated during onboarding, persists across chats.\n\n"
+        "During normal conversations, widgets go to 'chat' by default.\n"
+        "During onboarding, widgets go to 'home' by default."
     ),
     "parameters": {
         "type": "object",
@@ -247,7 +259,7 @@ MODIFY_PANE_SCHEMA = {
             },
             "tab": {
                 "type": "string",
-                "description": "Always 'home'. Only the Home tab supports custom widgets.",
+                "description": "'chat' (per-session, default during conversations) or 'home' (persistent dashboard, default during onboarding).",
             },
             "widgets": {
                 "type": "array",

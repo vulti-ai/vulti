@@ -17,85 +17,95 @@ struct OwnerView: View {
     @State private var showResetConfirmation = false
     @State private var isGeneratingAvatar = false
     @State private var isSavingMatrix = false
+    @State private var savedMatrixUsername = ""
+    @State private var savedMatrixPassword = ""
+
+    private var matrixCredsDirty: Bool {
+        matrixUsername != savedMatrixUsername || matrixPassword != savedMatrixPassword
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            // Avatar
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(VultiTheme.paperDeep)
-                        .frame(width: 64, height: 64)
-
-                    if !avatar.isEmpty,
-                       let data = Data(base64Encoded: avatar),
-                       let img = NSImage(data: data) {
-                        Image(nsImage: img)
-                            .resizable()
+        HStack(alignment: .top, spacing: 24) {
+            // Left column — Profile
+            VStack(alignment: .leading, spacing: 20) {
+                // Avatar
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(VultiTheme.paperDeep)
                             .frame(width: 64, height: 64)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    } else {
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 24))
-                            .foregroundStyle(VultiTheme.inkMuted)
-                    }
-                }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Avatar").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
-
-                    Button {
-                        isGeneratingAvatar = true
-                        Task {
-                            try? await app.client.generateOwnerAvatar()
-                            await app.refreshOwner()
-                            avatar = app.ownerInfo?.avatar ?? ""
-                            isGeneratingAvatar = false
+                        if !avatar.isEmpty,
+                           let data = Data(base64Encoded: avatar),
+                           let img = NSImage(data: data) {
+                            Image(nsImage: img)
+                                .resizable()
+                                .frame(width: 64, height: 64)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        } else {
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 24))
+                                .foregroundStyle(VultiTheme.inkMuted)
                         }
-                    } label: {
-                        HStack(spacing: 4) {
-                            if isGeneratingAvatar {
-                                ProgressView().controlSize(.mini)
-                            } else {
-                                Image(systemName: "wand.and.stars")
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Avatar").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
+
+                        Button {
+                            isGeneratingAvatar = true
+                            Task {
+                                try? await app.client.generateOwnerAvatar()
+                                await app.refreshOwner()
+                                avatar = app.ownerInfo?.avatar ?? ""
+                                isGeneratingAvatar = false
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                if isGeneratingAvatar {
+                                    ProgressView().controlSize(.mini)
+                                } else {
+                                    Image(systemName: "wand.and.stars")
+                                        .font(.system(size: 11))
+                                }
+                                Text(isGeneratingAvatar ? "Generating..." : "Generate Avatar")
                                     .font(.system(size: 11))
                             }
-                            Text(isGeneratingAvatar ? "Generating..." : "Generate Avatar")
-                                .font(.system(size: 11))
                         }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(VultiTheme.primary)
+                        .disabled(isGeneratingAvatar || name.isEmpty)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(VultiTheme.primary)
-                    .disabled(isGeneratingAvatar || name.isEmpty)
                 }
-            }
 
-            // Name
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Name").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
-                TextField("Your name", text: $name)
-                    .textFieldStyle(.vulti)
-                    .onSubmit { save() }
-            }
+                // Name
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Name").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
+                    TextField("Your name", text: $name)
+                        .textFieldStyle(.vulti)
+                        .onSubmit { save() }
+                }
 
-            // About
-            VStack(alignment: .leading, spacing: 4) {
-                Text("About").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
-                TextEditor(text: $about)
-                    .frame(minHeight: 60)
-                    .font(.system(size: 13))
-                    .foregroundStyle(VultiTheme.inkSoft)
-                    .scrollContentBackground(.hidden)
-                    .padding(4)
-                    .background(VultiTheme.paperDeep, in: RoundedRectangle(cornerRadius: 6))
-            }
+                // About
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("About").font(.system(size: 13, weight: .medium)).foregroundStyle(VultiTheme.inkDim)
+                    TextEditor(text: $about)
+                        .frame(minHeight: 60)
+                        .font(.system(size: 13))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                        .scrollContentBackground(.hidden)
+                        .padding(4)
+                        .background(VultiTheme.paperDeep, in: RoundedRectangle(cornerRadius: 6))
+                }
 
-            Button("Save") { save() }
-                .buttonStyle(.vultiSecondary)
+                Button("Save") { save() }
+                    .buttonStyle(.vultiSecondary)
+            }
+            .frame(maxWidth: 320)
 
             Divider()
 
-            // Matrix section
+            // Right column — Matrix
             VStack(alignment: .leading, spacing: 12) {
                 Text("MATRIX").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
 
@@ -130,21 +140,23 @@ struct OwnerView: View {
 
                         TextField("Username", text: $matrixUsername)
                             .textFieldStyle(.vulti)
-                        SecureField("Password", text: $matrixPassword)
+                        TextField("Password", text: $matrixPassword)
                             .textFieldStyle(.vulti)
 
-                        Button {
-                            saveMatrixCredentials()
-                        } label: {
-                            HStack(spacing: 6) {
-                                if isSavingMatrix {
-                                    ProgressView().controlSize(.small)
+                        if matrixCredsDirty {
+                            Button {
+                                saveMatrixCredentials()
+                            } label: {
+                                HStack(spacing: 6) {
+                                    if isSavingMatrix {
+                                        ProgressView().controlSize(.small)
+                                    }
+                                    Text("Save")
                                 }
-                                Text("Save")
                             }
+                            .buttonStyle(.vultiPrimary)
+                            .disabled(matrixUsername.isEmpty || matrixPassword.count < 8 || isSavingMatrix)
                         }
-                        .buttonStyle(.vultiPrimary)
-                        .disabled(matrixUsername.isEmpty || matrixPassword.count < 8 || isSavingMatrix)
                     }
                     .padding(12)
                     .background(.green.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
@@ -188,7 +200,7 @@ struct OwnerView: View {
                 } else {
                     TextField("Username", text: $matrixUsername)
                         .textFieldStyle(.vulti)
-                    SecureField("Password (min 8 chars)", text: $matrixPassword)
+                    TextField("Password (min 8 chars)", text: $matrixPassword)
                         .textFieldStyle(.vulti)
 
                     if !matrixStatus.isEmpty {
@@ -211,8 +223,8 @@ struct OwnerView: View {
                     .disabled(matrixUsername.isEmpty || matrixPassword.count < 8 || isCreatingMatrix)
                 }
             }
+            .frame(maxWidth: 320)
         }
-        .frame(maxWidth: 448)
         .task {
             await loadOwner()
             loadMatrixInfo()
@@ -260,11 +272,13 @@ struct OwnerView: View {
             // Map raw keys to display keys expected by the UI
             if let u = creds["username"] as? String {
                 matrixInfo["owner_username"] = u
-                if matrixUsername.isEmpty { matrixUsername = u }
+                matrixUsername = u
+                savedMatrixUsername = u
             }
             if let p = creds["password"] as? String {
                 matrixInfo["owner_password"] = p
-                if matrixPassword.isEmpty { matrixPassword = p }
+                matrixPassword = p
+                savedMatrixPassword = p
             }
 
             // Read server_name from conduit.toml for the Tailscale URL

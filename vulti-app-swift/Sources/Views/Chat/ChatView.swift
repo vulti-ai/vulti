@@ -137,6 +137,16 @@ struct ChatView: View {
                 }
             }
         }
+        .onChange(of: sessionId) {
+            // Notify scratch pad that the chat session changed
+            if let sid = sessionId {
+                NotificationCenter.default.post(
+                    name: .chatSessionChanged,
+                    object: nil,
+                    userInfo: ["sessionId": sid, "agentId": agentId]
+                )
+            }
+        }
     }
 
     // MARK: - Session Header Bar

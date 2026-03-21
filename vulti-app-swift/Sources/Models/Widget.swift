@@ -15,6 +15,7 @@ enum WidgetType: String, Codable {
     case toggleList = "toggle_list"
     case actionList = "action_list"
     case empty
+    case profile
 }
 
 struct PaneWidget: Identifiable, Codable {
@@ -94,16 +95,39 @@ struct WidgetData: Codable {
     // Values: "role", "soul", "user", "memories", "connections", "skills", "actions", "wallet", "analytics"
     var drill: String?
 
-    // layout size: "small" (1/3), "medium" (2/3), "large" (full width, default)
+    // layout size: "small" (1/3), "medium" (2/3), "half" (1/2), "large" (full width, default)
     var size: String?
+
+    // profile widget
+    var role: String?
+    var avatar: String?
+    var hasSoul: Bool?
+    var userCount: Int?
+    var memoryCount: Int?
+
+    // wallet widget
+    var cardName: String?
+    var cardLast4: String?
+    var cardExpiry: String?
+    var vaultId: String?
+    var vaultName: String?
 
     enum CodingKeys: String, CodingKey {
         case content, entries, columns, rows, src, alt, width, height
         case label, variant, detail, stats, orientation, items
         case percent, indeterminate, message, fields, drill, size
+        case role, avatar
         case submitLabel = "submit_label"
         case messageTemplate = "message_template"
         case onToggleMessage = "on_toggle_message"
+        case hasSoul = "has_soul"
+        case userCount = "user_count"
+        case memoryCount = "memory_count"
+        case cardName = "card_name"
+        case cardLast4 = "card_last4"
+        case cardExpiry = "card_expiry"
+        case vaultId = "vault_id"
+        case vaultName = "vault_name"
         // toggleItems and actionItems are decoded manually from "items"
     }
 
@@ -133,6 +157,16 @@ struct WidgetData: Codable {
         onToggleMessage = try? c.decode(String.self, forKey: .onToggleMessage)
         drill = try? c.decode(String.self, forKey: .drill)
         size = try? c.decode(String.self, forKey: .size)
+        role = try? c.decode(String.self, forKey: .role)
+        avatar = try? c.decode(String.self, forKey: .avatar)
+        hasSoul = try? c.decode(Bool.self, forKey: .hasSoul)
+        userCount = try? c.decode(Int.self, forKey: .userCount)
+        memoryCount = try? c.decode(Int.self, forKey: .memoryCount)
+        cardName = try? c.decode(String.self, forKey: .cardName)
+        cardLast4 = try? c.decode(String.self, forKey: .cardLast4)
+        cardExpiry = try? c.decode(String.self, forKey: .cardExpiry)
+        vaultId = try? c.decode(String.self, forKey: .vaultId)
+        vaultName = try? c.decode(String.self, forKey: .vaultName)
 
         // "items" is polymorphic: bar_chart uses [BarItem], toggle_list uses [ToggleItem],
         // action_list uses [ActionItem]. Try each in order.

@@ -49,6 +49,9 @@ struct WidgetView: View {
             ActionListWidgetContent(data: widget.data, onSend: onSendMessage)
         case .empty:
             EmptyView()
+        case .profile:
+            // Profile card — rendered as kv entries fallback in WidgetView
+            KvWidgetContent(data: widget.data)
         }
     }
 }
