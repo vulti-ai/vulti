@@ -598,9 +598,14 @@ class GatewayRunner:
     def _resolve_agent_for_source(self, source: SessionSource, message_text: str = "") -> tuple[Optional[str], str]:
         """Resolve which agent should handle a message.
 
+        Resolution order:
+        1. @mention in message text (e.g. "@kat hello")
+        2. Routing table in gateway.json (maps platform:chat_type:chat_id → agent)
+        3. None — caller must reject the message
+
         Returns (agent_id_or_None, cleaned_message_text).
-        Checks for @agent_id prefix. Returns None if no agent specified.
         """
+        # 1. Check for @mention prefix
         if message_text.startswith("@"):
             import re
             match = re.match(r"^@([a-z][a-z0-9\-]*)\s+", message_text)
@@ -618,6 +623,17 @@ class GatewayRunner:
                         return candidate, cleaned
                 except Exception:
                     pass
+
+        # 2. Check routing table (gateway.json)
+        try:
+            from gateway.config import resolve_agent_routing
+            routed = resolve_agent_routing(source)
+            if routed:
+                return routed, message_text
+        except Exception:
+            pass
+
+        # 3. No match
         return None, message_text
 
     def _session_key_for_source(self, source: SessionSource, agent_id: str = "") -> str:
@@ -1547,7 +1563,7 @@ class GatewayRunner:
                 return None
             return EmailAdapter(config)
 
-        elif platform == Platform.WEB:
+        elif platform == Platform.APP:
             from gateway.platforms.web import WebAdapter, check_web_requirements
             if not check_web_requirements():
                 logger.warning("Web: fastapi or uvicorn not installed. Run: pip install fastapi uvicorn")
@@ -1582,7 +1598,7 @@ class GatewayRunner:
 
         # Web users are pre-authenticated via token at the WebSocket layer,
         # so they are always authorized here.
-        if source.platform == Platform.WEB:
+        if source.platform == Platform.APP:
             return True
 
         user_id = source.user_id
@@ -1596,7 +1612,7 @@ class GatewayRunner:
             Platform.SLACK: "SLACK_ALLOWED_USERS",
             Platform.SIGNAL: "SIGNAL_ALLOWED_USERS",
             Platform.EMAIL: "EMAIL_ALLOWED_USERS",
-            Platform.WEB: "WEB_ALLOWED_USERS",
+            Platform.APP: "WEB_ALLOWED_USERS",
             Platform.MATRIX: "MATRIX_ALLOWED_USERS",
         }
         platform_allow_all_map = {
@@ -1606,7 +1622,7 @@ class GatewayRunner:
             Platform.SLACK: "SLACK_ALLOW_ALL_USERS",
             Platform.SIGNAL: "SIGNAL_ALLOW_ALL_USERS",
             Platform.EMAIL: "EMAIL_ALLOW_ALL_USERS",
-            Platform.WEB: "WEB_ALLOW_ALL_USERS",
+            Platform.APP: "WEB_ALLOW_ALL_USERS",
             Platform.MATRIX: "MATRIX_ALLOW_ALL_USERS",
         }
 
@@ -2575,7 +2591,7 @@ class GatewayRunner:
 
         # One-time prompt if no home channel is set for this platform
         # Skip for web (hub chat handles its own context)
-        if not history and source.platform and source.platform not in (Platform.LOCAL, Platform.WEB):
+        if not history and source.platform and source.platform not in (Platform.LOCAL, Platform.APP):
             platform_name = source.platform.value
             env_key = f"{platform_name.upper()}_HOME_CHANNEL"
             if not os.getenv(env_key):
@@ -3882,7 +3898,7 @@ class GatewayRunner:
                 Platform.SIGNAL: "vulti-signal",
                 Platform.HOMEASSISTANT: "vulti-homeassistant",
                 Platform.EMAIL: "vulti-email",
-                Platform.WEB: "vulti-cli",
+                Platform.APP: "vulti-cli",
             }
             platform_toolsets_config = {}
             try:
@@ -3904,7 +3920,7 @@ class GatewayRunner:
                 Platform.SIGNAL: "signal",
                 Platform.HOMEASSISTANT: "homeassistant",
                 Platform.EMAIL: "email",
-                Platform.WEB: "app",
+                Platform.APP: "app",
             }.get(source.platform, "telegram")
 
             config_toolsets = platform_toolsets_config.get(platform_config_key)
@@ -3914,7 +3930,7 @@ class GatewayRunner:
                 default_toolset = default_toolset_map.get(source.platform, "vulti-telegram")
                 enabled_toolsets = [default_toolset]
 
-            platform_key = "cli" if source.platform == Platform.LOCAL else ("app" if source.platform == Platform.WEB else source.platform.value)
+            platform_key = "cli" if source.platform == Platform.LOCAL else ("app" if source.platform == Platform.APP else source.platform.value)
 
             pr = self._provider_routing
             max_iterations = int(os.getenv("VULTI_MAX_ITERATIONS", "90"))
@@ -4903,7 +4919,7 @@ class GatewayRunner:
             Platform.SIGNAL: "vulti-signal",
             Platform.HOMEASSISTANT: "vulti-homeassistant",
             Platform.EMAIL: "vulti-email",
-            Platform.WEB: "vulti-cli",
+            Platform.APP: "vulti-cli",
         }
 
         # Try to load platform_toolsets from config
@@ -4928,7 +4944,7 @@ class GatewayRunner:
             Platform.SIGNAL: "signal",
             Platform.HOMEASSISTANT: "homeassistant",
             Platform.EMAIL: "email",
-            Platform.WEB: "web",
+            Platform.APP: "app",
         }.get(source.platform, "telegram")
         
         # Use config override if present (list of toolsets), otherwise hardcoded default
@@ -4961,14 +4977,14 @@ class GatewayRunner:
         # For web platform: use lightweight WebSocket tool_use events instead of
         # the progress queue (which sends full messages via send()/edit_message()).
         _web_tool_callback = None
-        if source.platform == Platform.WEB:
+        if source.platform == Platform.APP:
             tool_progress_enabled = False  # disable the queue-based progress
             # Get the WebSocket-specific callback set up by the web adapter
-            web_adapter = self.adapters.get(Platform.WEB)
+            web_adapter = self.adapters.get(Platform.APP)
             if web_adapter and hasattr(web_adapter, '_ws_tool_callbacks'):
                 # Look up by chat_id (e.g. "web:abc123") which contains the raw WS session_id
                 chat_id = source.chat_id or ""
-                ws_session_id = chat_id.replace("web:", "", 1) if chat_id.startswith("web:") else chat_id
+                ws_session_id = chat_id.replace("app:", "", 1) if chat_id.startswith("app:") else chat_id
                 _web_tool_callback = (
                     web_adapter._ws_tool_callbacks.get(ws_session_id)
                     or web_adapter._ws_tool_callbacks.get(chat_id)
@@ -5153,7 +5169,7 @@ class GatewayRunner:
 
             # Map platform enum to the platform hint key the agent understands.
             # Platform.LOCAL ("local") maps to "cli"; others pass through as-is.
-            platform_key = "cli" if source.platform == Platform.LOCAL else ("app" if source.platform == Platform.WEB else source.platform.value)
+            platform_key = "cli" if source.platform == Platform.LOCAL else ("app" if source.platform == Platform.APP else source.platform.value)
 
             # Load per-agent config overrides
             _agent_config = {}
@@ -5231,7 +5247,7 @@ class GatewayRunner:
                         # through edit_message() from the start (avoids the
                         # initial send() which commits a "message" type).
                         _pre_mid = None
-                        if source.platform == Platform.WEB:
+                        if source.platform == Platform.APP:
                             import uuid as _uuid
                             _pre_mid = _uuid.uuid4().hex[:12]
                         _stream_consumer = GatewayStreamConsumer(
@@ -5343,7 +5359,7 @@ class GatewayRunner:
             try:
                 from orchestrator.audit import emit as _audit_emit
                 _audit_agent = os.getenv("VULTI_AGENT_ID", "") or "unknown"
-                _audit_platform = "app" if platform_key in ("web", "matrix") else platform_key
+                _audit_platform = "app" if platform_key in ("app", "matrix") else platform_key
                 _audit_emit("message_received", agent_id=_audit_agent, details={
                     "platform": _audit_platform,
                     "message_preview": message[:200],

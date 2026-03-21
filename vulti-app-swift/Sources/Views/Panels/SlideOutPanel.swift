@@ -38,7 +38,7 @@ struct SlideOutPanel: View {
                 Text("New Agent")
                     .font(.system(size: 16, weight: .bold)).foregroundStyle(VultiTheme.inkSoft)
             case .audit:
-                Text("Audit Log")
+                Text("Activity")
                     .font(.system(size: 16, weight: .bold)).foregroundStyle(VultiTheme.inkSoft)
             }
 

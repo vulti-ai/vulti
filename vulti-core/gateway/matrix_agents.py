@@ -938,35 +938,50 @@ async def send_room_message(
     agent_id: str,
     room_id: str,
     body: str,
-) -> bool:
+    thread_id: Optional[str] = None,
+    msgtype: str = "m.text",
+) -> Optional[str]:
     """Send a text message to a Matrix room as the given agent.
 
-    Returns True on success.
+    Returns the event_id on success, None on failure.
+    When thread_id is provided, the message is sent as a reply in that thread.
     """
     import httpx
     import uuid
 
     creds = get_agent_matrix_credentials(agent_id)
     if not creds:
-        return False
+        return None
 
     headers = {"Authorization": f"Bearer {creds['access_token']}"}
     txn_id = str(uuid.uuid4())
+
+    msg_content: Dict[str, Any] = {
+        "msgtype": msgtype,
+        "body": body,
+    }
+
+    if thread_id:
+        msg_content["m.relates_to"] = {
+            "rel_type": "m.thread",
+            "event_id": thread_id,
+            "is_falling_back": True,
+            "m.in_reply_to": {"event_id": thread_id},
+        }
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.put(
                 f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}",
                 headers=headers,
-                json={
-                    "msgtype": "m.text",
-                    "body": body,
-                },
+                json=msg_content,
             )
-            return resp.status_code == 200
+            if resp.status_code == 200:
+                return resp.json().get("event_id")
+            return None
     except Exception as e:
         logger.warning("Matrix: failed to send message for %s in %s: %s", agent_id, room_id, e)
-        return False
+        return None
 
 
 async def create_squad_room(

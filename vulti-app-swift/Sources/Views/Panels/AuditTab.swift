@@ -1,8 +1,57 @@
 import SwiftUI
 
-/// Audit log with event type badges, agent/event filters.
-/// Loads from gateway via GatewayClient.
+// MARK: - Top-level tabbed audit panel
+
+enum AuditSubTab: String, CaseIterable {
+    case messages = "Messages"
+    case jobs = "Jobs"
+    case rules = "Rules"
+}
+
 struct AuditView: View {
+    @State private var activeTab: AuditSubTab = .messages
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Sub-tab bar
+            HStack(spacing: 0) {
+                ForEach(AuditSubTab.allCases, id: \.self) { tab in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { activeTab = tab }
+                    } label: {
+                        Text(tab.rawValue)
+                            .font(.system(size: 12, weight: activeTab == tab ? .semibold : .regular))
+                            .foregroundStyle(activeTab == tab ? VultiTheme.ink : VultiTheme.inkDim)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .bottom) {
+                        if activeTab == tab {
+                            Rectangle()
+                                .fill(VultiTheme.ink)
+                                .frame(height: 2)
+                        }
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+
+            Divider()
+
+            switch activeTab {
+            case .messages: AuditMessagesTab()
+            case .jobs: AuditJobsTab()
+            case .rules: AuditRulesTab()
+            }
+        }
+    }
+}
+
+// MARK: - Messages Tab (existing audit log)
+
+struct AuditMessagesTab: View {
     @Environment(AppState.self) private var app
     @State private var events: [GatewayClient.AuditEventResponse] = []
     @State private var agentFilter = "All"
@@ -11,12 +60,10 @@ struct AuditView: View {
     @State private var isLoading = false
     @State private var expandedEventIds: Set<String> = []
 
-    /// Unique event types extracted from loaded events
     private var eventTypes: [String] {
         Array(Set(events.compactMap(\.event))).sorted()
     }
 
-    /// Unique platforms extracted from loaded events
     private var platforms: [String] {
         Array(Set(events.compactMap(\.platform))).sorted()
     }
@@ -65,7 +112,6 @@ struct AuditView: View {
 
             Divider()
 
-            // Events list
             if filteredEvents.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "doc.text.magnifyingglass")
@@ -83,7 +129,8 @@ struct AuditView: View {
                                 event: event,
                                 agentName: agentName(for: event.agentId ?? ""),
                                 isExpanded: expandedEventIds.contains(event.id),
-                                onToggle: { toggleExpanded(event.id) }
+                                onToggle: { toggleExpanded(event.id) },
+                                onAgentTap: { app.openAgent($0) }
                             )
                             Divider()
                         }
@@ -126,6 +173,330 @@ struct AuditView: View {
     }
 }
 
+// MARK: - Jobs Tab (all agents' cron jobs)
+
+struct AuditJobsTab: View {
+    @Environment(AppState.self) private var app
+    @State private var agentJobs: [(agent: GatewayClient.AgentResponse, jobs: [GatewayClient.CronResponse])] = []
+    @State private var isLoading = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button { loadJobs() } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .rotationEffect(isLoading ? .degrees(360) : .degrees(0))
+                        .animation(isLoading ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isLoading)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(16)
+
+            Divider()
+
+            if agentJobs.isEmpty && !isLoading {
+                VStack(spacing: 8) {
+                    Image(systemName: "clock.badge.questionmark")
+                        .font(.system(size: 28))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                    Text("No jobs scheduled")
+                        .font(.system(size: 11)).foregroundStyle(VultiTheme.inkDim)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
+                        ForEach(agentJobs, id: \.agent.id) { entry in
+                            Section {
+                                if entry.jobs.isEmpty {
+                                    Text("No jobs")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(VultiTheme.inkMuted)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 8)
+                                } else {
+                                    ForEach(entry.jobs) { job in
+                                        AuditJobRow(job: job)
+                                        Divider()
+                                    }
+                                }
+                            } header: {
+                                AgentSectionHeader(agent: entry.agent, count: entry.jobs.count) {
+                                    app.openAgent(entry.agent.id)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear { loadJobs() }
+    }
+
+    private func loadJobs() {
+        isLoading = true
+        Task {
+            var results: [(agent: GatewayClient.AgentResponse, jobs: [GatewayClient.CronResponse])] = []
+            for agent in app.agentList {
+                let jobs = (try? await app.client.listCron(agentId: agent.id)) ?? []
+                if !jobs.isEmpty {
+                    results.append((agent: agent, jobs: jobs))
+                }
+            }
+            agentJobs = results
+            isLoading = false
+        }
+    }
+}
+
+struct AuditJobRow: View {
+    let job: GatewayClient.CronResponse
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Status indicator
+            Circle()
+                .fill(job.enabled ? .green : VultiTheme.inkMuted)
+                .frame(width: 6, height: 6)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(job.name ?? job.id)
+                    .font(.system(size: 11, weight: .medium))
+                if let schedule = job.schedule {
+                    Text(schedule)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(VultiTheme.inkDim)
+                }
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(job.status ?? "unknown")
+                    .font(.system(size: 9, weight: .medium))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(statusColor.opacity(0.15), in: Capsule())
+                    .foregroundStyle(statusColor)
+                if let lastRun = job.lastRun {
+                    Text(formatTimestamp(lastRun))
+                        .font(.system(size: 9).monospacedDigit())
+                        .foregroundStyle(VultiTheme.inkMuted)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private var statusColor: Color {
+        switch job.status ?? "" {
+        case "scheduled", "active": .green
+        case "paused": .orange
+        case "completed": .blue
+        case "error": .red
+        default: VultiTheme.inkDim
+        }
+    }
+
+    private func formatTimestamp(_ ts: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: ts) ?? ISO8601DateFormatter().date(from: ts)
+        guard let date else { return String(ts.prefix(16)) }
+        let display = DateFormatter()
+        if Calendar.current.isDateInToday(date) {
+            display.dateFormat = "HH:mm"
+        } else {
+            display.dateFormat = "MMM d HH:mm"
+        }
+        return display.string(from: date)
+    }
+}
+
+// MARK: - Rules Tab (all agents' rules)
+
+struct AuditRulesTab: View {
+    @Environment(AppState.self) private var app
+    @State private var agentRules: [(agent: GatewayClient.AgentResponse, rules: [GatewayClient.RuleResponse])] = []
+    @State private var isLoading = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button { loadRules() } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .rotationEffect(isLoading ? .degrees(360) : .degrees(0))
+                        .animation(isLoading ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isLoading)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(16)
+
+            Divider()
+
+            if agentRules.isEmpty && !isLoading {
+                VStack(spacing: 8) {
+                    Image(systemName: "ruler")
+                        .font(.system(size: 28))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                    Text("No rules configured")
+                        .font(.system(size: 11)).foregroundStyle(VultiTheme.inkDim)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
+                        ForEach(agentRules, id: \.agent.id) { entry in
+                            Section {
+                                if entry.rules.isEmpty {
+                                    Text("No rules")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(VultiTheme.inkMuted)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 8)
+                                } else {
+                                    ForEach(entry.rules) { rule in
+                                        AuditRuleRow(rule: rule)
+                                        Divider()
+                                    }
+                                }
+                            } header: {
+                                AgentSectionHeader(agent: entry.agent, count: entry.rules.count) {
+                                    app.openAgent(entry.agent.id)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear { loadRules() }
+    }
+
+    private func loadRules() {
+        isLoading = true
+        Task {
+            var results: [(agent: GatewayClient.AgentResponse, rules: [GatewayClient.RuleResponse])] = []
+            for agent in app.agentList {
+                let rules = (try? await app.client.listRules(agentId: agent.id)) ?? []
+                if !rules.isEmpty {
+                    results.append((agent: agent, rules: rules))
+                }
+            }
+            agentRules = results
+            isLoading = false
+        }
+    }
+}
+
+struct AuditRuleRow: View {
+    let rule: GatewayClient.RuleResponse
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill((rule.enabled ?? true) ? .green : VultiTheme.inkMuted)
+                .frame(width: 6, height: 6)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(rule.name ?? rule.id)
+                    .font(.system(size: 11, weight: .medium))
+                if let condition = rule.condition {
+                    Text(condition)
+                        .font(.system(size: 10))
+                        .foregroundStyle(VultiTheme.inkDim)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 2) {
+                if let count = rule.triggerCount, count > 0 {
+                    HStack(spacing: 2) {
+                        Text("\(count)")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        if let max = rule.maxTriggers {
+                            Text("/\(max)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(VultiTheme.inkMuted)
+                        }
+                    }
+                    .foregroundStyle(VultiTheme.inkDim)
+                }
+                if let lastTriggered = rule.lastTriggeredAt {
+                    Text(formatTimestamp(lastTriggered))
+                        .font(.system(size: 9).monospacedDigit())
+                        .foregroundStyle(VultiTheme.inkMuted)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private func formatTimestamp(_ ts: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: ts) ?? ISO8601DateFormatter().date(from: ts)
+        guard let date else { return String(ts.prefix(16)) }
+        let display = DateFormatter()
+        if Calendar.current.isDateInToday(date) {
+            display.dateFormat = "HH:mm"
+        } else {
+            display.dateFormat = "MMM d HH:mm"
+        }
+        return display.string(from: date)
+    }
+}
+
+// MARK: - Agent Section Header (Jobs & Rules tabs)
+
+struct AgentSectionHeader: View {
+    let agent: GatewayClient.AgentResponse
+    let count: Int
+    let onTap: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            AgentAvatar(agent: agent, size: 22)
+
+            Text(agent.name)
+                .font(.system(size: 12, weight: .semibold))
+
+            if let role = agent.role, !role.isEmpty {
+                Text(role)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(VultiTheme.inkDim)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(VultiTheme.paperDeep, in: Capsule())
+            }
+
+            Text("\(count)")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(VultiTheme.inkMuted)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(VultiTheme.paperDeep.opacity(0.6), in: Capsule())
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(VultiTheme.inkMuted)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(VultiTheme.paper)
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+    }
+}
+
 // MARK: - Event Row
 
 struct AuditEventRow: View {
@@ -133,6 +504,7 @@ struct AuditEventRow: View {
     let agentName: String
     let isExpanded: Bool
     let onToggle: () -> Void
+    var onAgentTap: ((String) -> Void)?
 
     private var badgeColor: Color {
         switch event.event ?? "" {
@@ -180,9 +552,12 @@ struct AuditEventRow: View {
                     .background(badgeColor.opacity(0.15), in: Capsule())
                     .foregroundStyle(badgeColor)
 
-                // Agent name
+                // Agent name (tappable)
                 Text(agentName)
                     .font(.system(size: 11, weight: .medium))
+                    .onTapGesture {
+                        if let agentId = event.agentId { onAgentTap?(agentId) }
+                    }
 
                 // Detail summary (target, sender, connection, etc.)
                 if !event.detailSummary.isEmpty {

@@ -20,7 +20,7 @@ struct MainView: View {
                     ToolbarButton(icon: "plus", tooltip: "New Agent") {
                         app.openCreate()
                     }
-                    ToolbarButton(icon: "clock.arrow.circlepath", tooltip: "Audit Log") {
+                    ToolbarButton(icon: "clock.arrow.circlepath", tooltip: "Activity") {
                         app.openAudit()
                     }
                     Spacer()

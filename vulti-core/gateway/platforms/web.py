@@ -50,7 +50,7 @@ class WebAdapter(BasePlatformAdapter):
     """
 
     def __init__(self, config: PlatformConfig):
-        super().__init__(config, Platform.WEB)
+        super().__init__(config, Platform.APP)
         self._host = config.extra.get("host", "0.0.0.0")
         self._port = config.extra.get("port", 8080)
         self._auth_token = config.extra.get("auth_token", "")
@@ -1104,8 +1104,8 @@ class WebAdapter(BasePlatformAdapter):
 
                         # Build source for gateway
                         source = SessionSource(
-                            platform=Platform.WEB,
-                            chat_id=f"web:{session_id}",
+                            platform=Platform.APP,
+                            chat_id=f"app:{session_id}",
                             chat_type="dm",
                             user_id="web_user",
                             user_name="Web User",
@@ -1210,6 +1210,9 @@ class WebAdapter(BasePlatformAdapter):
                             meta["preview"] = streamed[:100]
                             meta["updated_at"] = datetime.now().isoformat()
                             self._save_session_meta(session_id, meta)
+                # Sync to Matrix DM thread (fire-and-forget)
+                if streamed:
+                    self._fire_matrix_sync(session_id, event, streamed)
                 return
 
             if not response:
@@ -1239,6 +1242,9 @@ class WebAdapter(BasePlatformAdapter):
                     meta["updated_at"] = datetime.now().isoformat()
                     self._save_session_meta(session_id, meta)
 
+            # Sync to Matrix DM thread (fire-and-forget)
+            self._fire_matrix_sync(session_id, event, response)
+
         except Exception as e:
             import traceback
             logger.error("[web] Error handling message: %s\n%s", e, traceback.format_exc())
@@ -1259,6 +1265,36 @@ class WebAdapter(BasePlatformAdapter):
                     await ws.send_text(json.dumps({"type": "typing", "active": False}))
                 except Exception:
                     pass
+
+    def _fire_matrix_sync(self, session_id: str, event: MessageEvent, response: str) -> None:
+        """Fire-and-forget sync of a web chat exchange to a Matrix DM thread."""
+        agent_id = getattr(event, "_agent_id", None)
+        if not agent_id:
+            return
+        user_text = event.text or ""
+        if not user_text or not response:
+            return
+
+        # Get session name for thread root label
+        meta = self._get_session_meta(session_id)
+        session_name = (meta or {}).get("name")
+
+        async def _do_sync():
+            try:
+                from gateway.matrix_sync import sync_message_to_matrix
+                await sync_message_to_matrix(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    user_text=user_text,
+                    agent_response=response,
+                    session_name=session_name,
+                )
+            except Exception as e:
+                logger.debug("[web] Matrix sync failed: %s", e)
+
+        task = asyncio.create_task(_do_sync())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     # --- Tool progress for WebSocket clients ---
 
@@ -1360,7 +1396,7 @@ class WebAdapter(BasePlatformAdapter):
     ) -> SendResult:
         """Send a message to a web client via WebSocket."""
         # chat_id format: "web:{session_id}"
-        session_id = chat_id.replace("web:", "", 1) if chat_id.startswith("web:") else chat_id
+        session_id = chat_id.replace("app:", "", 1) if chat_id.startswith("app:") else chat_id
         ws = self._connections.get(session_id)
         if not ws:
             return SendResult(success=False, error="Client not connected")
@@ -1407,7 +1443,7 @@ class WebAdapter(BasePlatformAdapter):
         content: str,
     ) -> SendResult:
         """Edit a message (used for streaming token updates)."""
-        session_id = chat_id.replace("web:", "", 1) if chat_id.startswith("web:") else chat_id
+        session_id = chat_id.replace("app:", "", 1) if chat_id.startswith("app:") else chat_id
         ws = self._connections.get(session_id)
         if not ws:
             return SendResult(success=False, error="Client not connected")
@@ -1428,7 +1464,7 @@ class WebAdapter(BasePlatformAdapter):
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         """Get info about a web chat session."""
-        session_id = chat_id.replace("web:", "", 1) if chat_id.startswith("web:") else chat_id
+        session_id = chat_id.replace("app:", "", 1) if chat_id.startswith("app:") else chat_id
         meta = self._get_session_meta(session_id)
         return {
             "name": meta.get("name", "Web Chat") if meta else "Web Chat",
@@ -1437,7 +1473,7 @@ class WebAdapter(BasePlatformAdapter):
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         """Send typing indicator."""
-        session_id = chat_id.replace("web:", "", 1) if chat_id.startswith("web:") else chat_id
+        session_id = chat_id.replace("app:", "", 1) if chat_id.startswith("app:") else chat_id
         ws = self._connections.get(session_id)
         if ws:
             try:
@@ -2346,7 +2382,7 @@ class WebAdapter(BasePlatformAdapter):
             "matrix": {"name": "Matrix", "icon": "matrix", "category": "Messaging"},
         }
         for pid, info in platforms.items():
-            if pid == "web":
+            if pid in ("app", "web"):
                 continue
             meta = platform_meta.get(pid, {"name": pid.title(), "icon": pid, "category": "Platform"})
             details = {}

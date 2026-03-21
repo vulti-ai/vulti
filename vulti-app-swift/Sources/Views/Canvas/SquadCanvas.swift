@@ -30,6 +30,9 @@ struct SquadCanvas: View {
     // Measured node sizes — reported by AgentNode via onNodeSize callback
     @State private var nodeSizes: [String: CGSize] = [:]
 
+    // Matrix server name fetched from gateway integrations
+    @State private var matrixServerName: String?
+
     // Outward padding from edge for handle position
     private let handlePad: CGFloat = 4
 
@@ -255,6 +258,16 @@ struct SquadCanvas: View {
                     fitView(layout: layout, size: geo.size)
                     didFitView = true
                 }
+                // Fetch Matrix server name
+                Task {
+                    if let integrations = try? await app.client.listIntegrations(),
+                       let matrix = integrations.first(where: { $0.id == "matrix" }),
+                       let details = matrix.details,
+                       let serverName = details["server_name"]?.value as? String,
+                       !serverName.isEmpty, serverName != "localhost" {
+                        matrixServerName = serverName
+                    }
+                }
             }
             .onChange(of: app.agentList.count) {
                 fitView(layout: layout, size: geo.size)
@@ -281,6 +294,7 @@ struct SquadCanvas: View {
     private func canvasContent(layout: LayoutResult, size: CGSize) -> some View {
         ZStack {
             CanvasGrid()
+            groupBoundary(layout: layout, size: size)
             edgesLayer(layout: layout, size: size)
             connectPreview(layout: layout, size: size)
             nodesLayer(layout: layout, size: size)
@@ -289,6 +303,80 @@ struct SquadCanvas: View {
             edgeDeleteLayer(layout: layout, size: size)  // topmost so hover/clicks always work
         }
         .coordinateSpace(name: "canvas")
+    }
+
+    // MARK: Group boundary — dotted rounded rect enclosing all nodes
+
+    private var boundaryGradient: AngularGradient {
+        AngularGradient(
+            colors: [
+                Color(hex: "#E8607A"),
+                Color(hex: "#F28B6D"),
+                Color(hex: "#F0A84A"),
+                Color(hex: "#4AC6B7"),
+                Color(hex: "#6B8BEB"),
+                Color(hex: "#9D7AEA"),
+                Color(hex: "#E8607A"),
+            ],
+            center: .center
+        )
+    }
+
+    @ViewBuilder
+    private func groupBoundary(layout: LayoutResult, size: CGSize) -> some View {
+        if layout.nodes.count > 1 {
+            let labelText = matrixServerName ?? ""
+            let hasLabel = !labelText.isEmpty
+            let padding: CGFloat = 60
+            let topExtra: CGFloat = hasLabel ? 30 : 0
+            let positions = layout.nodes.map { nodePos($0.id, layout: layout, size: size) }
+            let nodeSizesList = layout.nodes.map { node -> CGSize in
+                if node.type == .owner { return ownerSize }
+                return nodeSizes[node.id] ?? CGSize(width: 120, height: 90)
+            }
+
+            let minX = zip(positions, nodeSizesList).map { $0.0.x - $0.1.width / 2 }.min()! - padding
+            let maxX = zip(positions, nodeSizesList).map { $0.0.x + $0.1.width / 2 }.max()! + padding
+            let minY = zip(positions, nodeSizesList).map { $0.0.y - $0.1.height / 2 }.min()! - padding - topExtra
+            let maxY = zip(positions, nodeSizesList).map { $0.0.y + $0.1.height / 2 }.max()! + padding
+
+            let rect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+
+            // Dotted boundary
+            RoundedRectangle(cornerRadius: 24)
+                .stroke(
+                    boundaryGradient.opacity(0.5),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])
+                )
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .allowsHitTesting(false)
+
+            // Label centered on top edge
+            if hasLabel {
+                Text(labelText)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(VultiTheme.inkMuted)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(VultiTheme.paper.opacity(0.9))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(
+                                boundaryGradient.opacity(0.5),
+                                style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])
+                            )
+                    )
+                    .help("Connect here: https://matrix.org/ecosystem/clients/")
+                    .onTapGesture {
+                        NSWorkspace.shared.open(URL(string: "https://matrix.org/ecosystem/clients/")!)
+                    }
+                    .position(x: rect.midX, y: rect.minY)
+            }
+        }
     }
 
     // MARK: Edges layer — bezier curves only (no hit testing)

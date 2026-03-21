@@ -42,7 +42,7 @@ class Platform(Enum):
     SIGNAL = "signal"
     HOMEASSISTANT = "homeassistant"
     EMAIL = "email"
-    WEB = "web"
+    APP = "app"
     MATRIX = "matrix"
 
 
@@ -225,7 +225,7 @@ class GatewayConfig:
             if config.token or config.api_key:
                 connected.append(platform)
             # Web uses enabled flag only (token auth in adapter)
-            elif platform == Platform.WEB:
+            elif platform == Platform.APP:
                 connected.append(platform)
             # WhatsApp uses enabled flag only (bridge handles auth)
             elif platform == Platform.WHATSAPP:
@@ -716,14 +716,14 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
     # Web — enabled by default (core UI for Vulti)
     web_disabled = os.getenv("WEB_DISABLED", "").lower() in ("true", "1", "yes")
     if not web_disabled:
-        if Platform.WEB not in config.platforms:
-            config.platforms[Platform.WEB] = PlatformConfig()
-        config.platforms[Platform.WEB].enabled = True
+        if Platform.APP not in config.platforms:
+            config.platforms[Platform.APP] = PlatformConfig()
+        config.platforms[Platform.APP].enabled = True
         # Generate a persistent auth token if none is configured
         web_token = os.getenv("WEB_AUTH_TOKEN", "")
         if not web_token:
             web_token = _get_or_create_web_token()
-        config.platforms[Platform.WEB].extra.update({
+        config.platforms[Platform.APP].extra.update({
             "port": int(os.getenv("WEB_PORT", "8080")),
             "host": os.getenv("WEB_HOST", "127.0.0.1"),
             "auth_token": web_token,
