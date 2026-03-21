@@ -399,7 +399,7 @@ class SessionEntry:
         )
 
 
-def build_session_key(source: SessionSource, group_sessions_per_user: bool = True, agent_id: str = "default") -> str:
+def build_session_key(source: SessionSource, group_sessions_per_user: bool = True, agent_id: str = "") -> str:
     """Build a deterministic session key from a message source.
 
     This is the single source of truth for session key construction.

@@ -342,8 +342,10 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         })
 
         # Set agent identity — the env var bridge for multi-agent
-        from cron.jobs import _get_default_agent_id
-        cron_agent_id = job.get("agent") or _get_default_agent_id()
+        cron_agent_id = job.get("agent")
+        if not cron_agent_id:
+            logger.warning("Cron job '%s' has no agent assigned, skipping", job.get("id", "?"))
+            return None
         os.environ["VULTI_AGENT_ID"] = cron_agent_id
         os.environ["VULTI_AGENT_HOP_COUNT"] = "0"
 

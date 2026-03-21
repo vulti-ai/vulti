@@ -9,6 +9,14 @@ when they discover they don't have access to a connection they need.
 import json
 import os
 
+def _current_agent_id() -> str:
+    """Return the active agent ID, preferring AgentContext (coroutine-safe)."""
+    try:
+        from orchestrator.agent_context import AgentContext
+        return AgentContext.current_agent_id()
+    except ImportError:
+        return os.getenv("VULTI_AGENT_ID", "")
+
 from orchestrator.permissions import (
     add_allowed_connection,
     get_allowed_connections,
@@ -27,7 +35,7 @@ def request_connection(args, **kw):
     if not connection_name:
         return json.dumps({"success": False, "error": "connection_name is required"})
 
-    agent_id = os.getenv("VULTI_AGENT_ID", "default")
+    agent_id = _current_agent_id()
 
     # Check if connection even exists
     try:
@@ -135,7 +143,7 @@ def manage_own_connections(args, **kw):
     if not connection_names:
         return json.dumps({"success": False, "error": "connection_names is required"})
 
-    agent_id = os.getenv("VULTI_AGENT_ID", "default")
+    agent_id = _current_agent_id()
 
     try:
         from vulti_cli.config import get_vulti_home

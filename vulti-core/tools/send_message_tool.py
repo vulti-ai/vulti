@@ -66,7 +66,7 @@ def send_message_tool(args, **kw):
 def _handle_agent_send(target_agent_id: str, message: str) -> str:
     """Send a message to another agent via the inter-agent bus."""
     hop_count = int(os.getenv("VULTI_AGENT_HOP_COUNT", "0"))
-    sender_agent_id = os.getenv("VULTI_AGENT_ID", "default")
+    sender_agent_id = os.getenv("VULTI_AGENT_ID", "")
 
     # Block relaying to agents in the same group chat — they get the message independently
     _group_chat = os.getenv("VULTI_GROUP_CHAT_AGENTS", "")
@@ -132,7 +132,7 @@ def _handle_list():
     try:
         from vulti_cli.agent_registry import AgentRegistry
         registry = AgentRegistry()
-        current_agent = os.getenv("VULTI_AGENT_ID", "default")
+        current_agent = os.getenv("VULTI_AGENT_ID", "")
         agents = [
             f"agent:{a.id} — {a.name} ({a.description})"
             for a in registry.list_agents()
@@ -657,7 +657,7 @@ async def _send_matrix(extra, chat_id, message):
 
         if not access_token or not user_id:
             # Try loading from agent credentials
-            agent_id = os.getenv("VULTI_AGENT_ID", "default")
+            agent_id = os.getenv("VULTI_AGENT_ID", "")
             try:
                 from gateway.matrix_agents import get_agent_matrix_credentials
                 creds = get_agent_matrix_credentials(agent_id)
@@ -703,7 +703,7 @@ def _check_send_message():
         return True
     # Also check if any agent context is set (we're in the orchestrator)
     agent_id = os.getenv("VULTI_AGENT_ID", "")
-    if agent_id and agent_id != "default":
+    if agent_id:
         return True
     try:
         from gateway.status import is_gateway_running

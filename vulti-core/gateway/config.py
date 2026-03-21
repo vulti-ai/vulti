@@ -490,9 +490,9 @@ def load_agent_routing() -> dict:
 
     Example:
         {
-            "telegram:dm:*": "default",
+            "telegram:dm:*": "kat",
             "telegram:group:-1001234567890": "researcher",
-            "*": "default"
+            "*": "janitor"
         }
     """
     _home = get_vulti_home()
@@ -507,7 +507,7 @@ def load_agent_routing() -> dict:
     return {}
 
 
-def resolve_agent_routing(source, routing_table: dict = None) -> str:
+def resolve_agent_routing(source, routing_table: dict = None) -> Optional[str]:
     """Resolve which agent should handle a message based on routing rules.
 
     Args:
@@ -515,15 +515,13 @@ def resolve_agent_routing(source, routing_table: dict = None) -> str:
         routing_table: Dict of pattern -> agent_id. If None, loads from config.
 
     Returns:
-        agent_id string. Falls back to the registry's default agent.
+        agent_id string, or None if no routing rule matches.
     """
-    from vulti_cli.agent_registry import get_default_agent_id
-
     if routing_table is None:
         routing_table = load_agent_routing()
 
     if not routing_table:
-        return get_default_agent_id()
+        return None
 
     platform = source.platform.value if hasattr(source.platform, 'value') else str(source.platform)
     chat_type = getattr(source, 'chat_type', 'dm') or 'dm'
@@ -536,7 +534,7 @@ def resolve_agent_routing(source, routing_table: dict = None) -> str:
         if _routing_pattern_matches(pattern, source_key):
             return agent_id
 
-    return get_default_agent_id()
+    return None
 
 
 def _routing_pattern_matches(pattern: str, source_key: str) -> bool:

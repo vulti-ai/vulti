@@ -18,18 +18,23 @@ from typing import Optional, Dict, List, Any
 logger = logging.getLogger(__name__)
 
 
-def _get_default_agent_id() -> str:
-    """Lazy import to avoid circular dependencies."""
-    try:
-        from vulti_cli.agent_registry import get_default_agent_id
-        return get_default_agent_id()
-    except Exception:
-        return "default"
-
-
 def _current_agent_id() -> str:
-    """Return the active agent ID from env var or registry default."""
-    return os.getenv("VULTI_AGENT_ID") or _get_default_agent_id()
+    """Return the active agent ID from AgentContext or env var.
+
+    Raises ValueError if no agent context is available — cron jobs
+    must always have an explicit agent assignment.
+    """
+    try:
+        from orchestrator.agent_context import AgentContext
+        ctx_id = AgentContext.current_agent_id()
+        if ctx_id:
+            return ctx_id
+    except ImportError:
+        pass
+    agent_id = os.getenv("VULTI_AGENT_ID")
+    if agent_id:
+        return agent_id
+    raise ValueError("No agent context — cron job must specify an agent")
 
 
 from vulti_time import now as _vulti_now

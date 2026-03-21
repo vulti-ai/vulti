@@ -15,7 +15,6 @@ import os
 from typing import Optional
 
 from orchestrator.agent_context import AgentContext
-from orchestrator.agent_registry import get_default_agent_id
 from orchestrator.audit import emit as audit_emit
 
 logger = logging.getLogger(__name__)
@@ -36,7 +35,10 @@ def vulti_run_job(job: dict) -> tuple:
     from cron.scheduler import run_job as upstream_run_job
 
     # Resolve agent identity for this job
-    agent_id = job.get("agent") or get_default_agent_id()
+    agent_id = job.get("agent")
+    if not agent_id:
+        logger.warning("Cron job '%s' has no agent assigned, skipping", job.get("id", "?"))
+        return (False, "", "", "No agent assigned to cron job")
 
     audit_emit("cron_execute", agent_id=agent_id, details={
         "job_id": job.get("id"),

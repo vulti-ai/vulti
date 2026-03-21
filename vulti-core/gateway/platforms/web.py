@@ -1638,7 +1638,7 @@ class WebAdapter(BasePlatformAdapter):
                 "role": a.role,
                 "url": f"http://{self._host}:{self._port}",
                 "status": "connected" if self._running and a.status == "active" else a.status,
-                "platforms": connected if a.id == registry.default_agent_id else [],
+                "platforms": connected if a.status == "active" else [],
                 "avatar": a.avatar,
                 "description": a.description,
                 "createdAt": a.created_at,

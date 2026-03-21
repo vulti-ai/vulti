@@ -85,7 +85,7 @@ def get_agent_soul(agent_id: Optional[str] = None) -> str:
     vulti_home = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))
 
     # Per-agent soul
-    if agent_id and agent_id != "default":
+    if agent_id:
         agent_soul = vulti_home / "agents" / agent_id / "SOUL.md"
         if agent_soul.exists():
             try:

@@ -2,9 +2,9 @@
 Agent routing — resolves which agent should handle an incoming message.
 
 Supports three resolution strategies in priority order:
-1. @mention syntax: ``@agent-id message text``
+1. @mention syntax: ``@agent-id message text`` (or ``@everyone``)
 2. Routing table: maps (platform, chat_id) → agent_id
-3. Default agent: falls back to the registry's default agent
+3. Unrouted: returns None — caller must reject the message
 
 The routing table is stored in ~/.vulti/gateway.json under the
 ``agent_routing`` key.
@@ -21,8 +21,11 @@ from orchestrator.agent_registry import AgentRegistry
 
 logger = logging.getLogger(__name__)
 
-# Matches @agent-id at the start of a message
+# Matches @agent-id at the start of a message (also matches @everyone)
 _MENTION_RE = re.compile(r"^@([a-z][a-z0-9\-]{0,31})\b\s*(.*)", re.DOTALL)
+
+# Sentinel returned when @everyone is used
+EVERYONE = "__everyone__"
 
 
 def load_agent_routing(vulti_home: Optional[Path] = None) -> Dict[str, str]:
@@ -54,7 +57,7 @@ def resolve_agent_for_message(
     message_text: str,
     registry: AgentRegistry,
     routing_table: Optional[Dict[str, str]] = None,
-) -> Tuple[str, str]:
+) -> Tuple[Optional[str], str]:
     """Determine which agent should handle a message.
 
     Args:
@@ -65,14 +68,18 @@ def resolve_agent_for_message(
         routing_table: Optional pre-loaded routing table.
 
     Returns:
-        Tuple of (agent_id, cleaned_message_text).
-        If an @mention was found, the mention prefix is stripped from the message.
+        Tuple of (agent_id_or_None, cleaned_message_text).
+        Returns EVERYONE sentinel for @everyone mentions.
+        Returns None if no agent could be resolved — caller must reject.
     """
-    # 1. Check for @agent mention
+    # 1. Check for @mention
     match = _MENTION_RE.match(message_text)
     if match:
         mentioned_id = match.group(1)
         rest = match.group(2)
+        # @everyone → broadcast to all active agents
+        if mentioned_id == "everyone":
+            return EVERYONE, rest
         if registry.get_agent(mentioned_id) is not None:
             return mentioned_id, rest
 
@@ -83,5 +90,5 @@ def resolve_agent_for_message(
         if routed and registry.get_agent(routed) is not None:
             return routed, message_text
 
-    # 3. Fall back to default agent
-    return registry.default_agent_id, message_text
+    # 3. No match — return None (no default fallback)
+    return None, message_text

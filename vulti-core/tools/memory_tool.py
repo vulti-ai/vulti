@@ -47,7 +47,7 @@ def _resolve_memory_dir() -> Path:
     try:
         from orchestrator.agent_context import AgentContext
         ctx_id = AgentContext.current_agent_id()
-        if ctx_id and ctx_id != "default":
+        if ctx_id:
             agent_id = ctx_id
     except ImportError:
         pass

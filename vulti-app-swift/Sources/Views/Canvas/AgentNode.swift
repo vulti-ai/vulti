@@ -102,15 +102,8 @@ struct AgentNode: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(VultiTheme.paper.opacity(0.85))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(roleColor, lineWidth: borderWidth)
-                .animation(.easeInOut(duration: 0.12), value: borderWidth)
-        )
         .overlay {
-            if isThinking {
-                ThinkingBorderEffect(cornerRadius: 10, lineWidth: 2)
-            }
+            ThinkingBorderEffect(cornerRadius: 10, lineWidth: 2)
         }
         .shadow(color: .black.opacity(isHovered ? 0.18 : 0.12), radius: isHovered ? 24 : 18, y: isHovered ? 12 : 8)
         .animation(.easeInOut(duration: 0.12), value: isHovered)

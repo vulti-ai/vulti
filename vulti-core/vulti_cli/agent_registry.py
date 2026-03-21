@@ -36,27 +36,9 @@ logger = logging.getLogger(__name__)
 
 # Validation
 _AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9\-]{0,31}$")
-_RESERVED_IDS = frozenset({"agent", "agents", "api", "ws", "system", "interagent"})
+_RESERVED_IDS = frozenset({"agent", "agents", "api", "ws", "system", "interagent", "everyone", "default"})
 
-DEFAULT_AGENT_ID = "default"
 JANITOR_AGENT_ID = "janitor"
-
-
-def get_default_agent_id() -> str:
-    """Read the default agent ID from the registry, falling back to DEFAULT_AGENT_ID.
-
-    This is a lightweight standalone reader that doesn't require instantiating
-    the full AgentRegistry. Use it anywhere a fallback agent ID is needed
-    instead of hardcoding "default".
-    """
-    from vulti_cli.config import get_vulti_home
-    registry_path = get_vulti_home() / "agents" / "registry.json"
-    try:
-        with open(registry_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get("default_agent", DEFAULT_AGENT_ID)
-    except (OSError, json.JSONDecodeError):
-        return DEFAULT_AGENT_ID
 
 
 @dataclass
@@ -107,9 +89,9 @@ class AgentRegistry:
                 )
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Failed to load agent registry: %s", e)
-                self._data = {"version": 1, "default_agent": DEFAULT_AGENT_ID, "agents": {}}
+                self._data = {"version": 2, "agents": {}}
         else:
-            self._data = {"version": 1, "default_agent": DEFAULT_AGENT_ID, "agents": {}}
+            self._data = {"version": 2, "agents": {}}
         return self._data
 
     def _save(self) -> None:
@@ -131,6 +113,10 @@ class AgentRegistry:
         """List all registered agents."""
         data = self._load()
         return [AgentMeta.from_dict(v) for v in data.get("agents", {}).values()]
+
+    def list_active_agents(self) -> list[AgentMeta]:
+        """List agents with status 'active'."""
+        return [a for a in self.list_agents() if a.status == "active"]
 
     def get_agent(self, agent_id: str) -> Optional[AgentMeta]:
         """Get a single agent by ID. Returns None if not found."""
@@ -203,14 +189,11 @@ class AgentRegistry:
         return meta
 
     def delete_agent(self, agent_id: str) -> bool:
-        """Delete an agent and all its data. Cannot delete the default agent."""
+        """Delete an agent and all its data."""
         data = self._load()
 
         if agent_id not in data.get("agents", {}):
             return False
-
-        if agent_id == data.get("default_agent", DEFAULT_AGENT_ID):
-            raise ValueError(f"Cannot delete the default agent '{agent_id}'")
 
         if agent_id == JANITOR_AGENT_ID:
             raise ValueError("Cannot delete the janitor system agent")
@@ -287,15 +270,6 @@ class AgentRegistry:
         return self.agent_home(agent_id) / "gateway.json"
 
     # ------------------------------------------------------------------
-    # Default agent
-    # ------------------------------------------------------------------
-
-    @property
-    def default_agent_id(self) -> str:
-        data = self._load()
-        return data.get("default_agent", DEFAULT_AGENT_ID)
-
-    # ------------------------------------------------------------------
     # Migration from single-agent layout
     # ------------------------------------------------------------------
 
@@ -310,12 +284,12 @@ class AgentRegistry:
     def migrate_single_agent(self) -> str:
         """Migrate existing single-agent installation to multi-agent layout.
 
-        Moves config, soul, memories, cron into agents/default/.
+        Moves config, soul, memories, cron into agents/vulti/.
         Leaves symlinks at old locations for backward compatibility.
 
         Returns the agent_id of the migrated agent.
         """
-        agent_id = DEFAULT_AGENT_ID
+        agent_id = "vulti"
         agent_home = self.agent_home(agent_id)
 
         logger.info("Migrating single-agent installation to multi-agent layout...")
@@ -376,8 +350,7 @@ class AgentRegistry:
         # Create registry
         now = datetime.now(timezone.utc).isoformat()
         self._data = {
-            "version": 1,
-            "default_agent": agent_id,
+            "version": 2,
             "agents": {
                 agent_id: {
                     "id": agent_id,
@@ -392,7 +365,7 @@ class AgentRegistry:
         }
         self._save()
 
-        logger.info("Migration complete. Default agent: '%s'", agent_id)
+        logger.info("Migration complete. Agent: '%s'", agent_id)
         return agent_id
 
     def ensure_initialized(self) -> None:
@@ -400,14 +373,48 @@ class AgentRegistry:
         if self.needs_migration():
             self.migrate_single_agent()
         elif not self._registry_path.exists():
-            # Fresh install -- create default agent
             self._seed_fresh_install()
+
+        # v1 → v2: remove default_agent concept
+        self._migrate_v1_to_v2()
 
         # Ensure janitor exists (covers migrations and upgrades)
         self._seed_janitor()
 
         # Migrate allowed_connections from registry to per-agent permissions.json
         self._migrate_permissions()
+
+    def _migrate_v1_to_v2(self) -> None:
+        """Remove default_agent key from v1 registries."""
+        data = self._load()
+        if data.get("version", 1) >= 2:
+            return
+
+        data.pop("default_agent", None)
+        data["version"] = 2
+        self._save()
+
+        # Backfill agent field on cron jobs that lack one
+        for agent_id in data.get("agents", {}):
+            jobs_path = self.agent_cron_dir(agent_id) / "jobs.json"
+            if not jobs_path.exists():
+                continue
+            try:
+                jobs = json.loads(jobs_path.read_text(encoding="utf-8"))
+                changed = False
+                for job in jobs if isinstance(jobs, list) else jobs.values():
+                    if not job.get("agent"):
+                        job["agent"] = agent_id
+                        changed = True
+                if changed:
+                    jobs_path.write_text(
+                        json.dumps(jobs, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8",
+                    )
+            except Exception:
+                pass
+
+        logger.info("Migrated registry v1 → v2: removed default_agent concept")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -456,33 +463,17 @@ class AgentRegistry:
             soul_path.write_text(soul_md or DEFAULT_SOUL_MD, encoding="utf-8")
 
     def _seed_fresh_install(self) -> None:
-        """Create registry with a default agent and janitor for fresh installations."""
-        agent_id = DEFAULT_AGENT_ID
-        agent_home = self.agent_home(agent_id)
+        """Create empty registry with janitor for fresh installations.
 
-        for subdir in ("memories", "cron", "sessions", "skills"):
-            (agent_home / subdir).mkdir(parents=True, exist_ok=True)
-
-        self._seed_defaults(agent_id)
-
-        now = datetime.now(timezone.utc).isoformat()
+        No default agent is created — the user must create their first agent
+        explicitly through onboarding.
+        """
         self._data = {
-            "version": 1,
-            "default_agent": agent_id,
-            "agents": {
-                agent_id: {
-                    "id": agent_id,
-                    "name": "Vulti",
-                    "status": "active",
-                    "created_at": now,
-                    "created_from": None,
-                    "avatar": None,
-                    "description": "Primary agent",
-                }
-            },
+            "version": 2,
+            "agents": {},
         }
         self._save()
-        logger.info("Fresh install: created default agent '%s'", agent_id)
+        logger.info("Fresh install: created empty registry (no default agent)")
 
         # Seed the janitor system agent
         self._seed_janitor()

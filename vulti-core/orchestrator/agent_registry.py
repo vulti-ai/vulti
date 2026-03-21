@@ -11,6 +11,4 @@ vulti_cli.agent_registry is removed.
 from vulti_cli.agent_registry import (  # noqa: F401
     AgentMeta,
     AgentRegistry,
-    DEFAULT_AGENT_ID,
-    get_default_agent_id,
 )

@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 from orchestrator.agent_context import AgentContext
 from orchestrator.agent_factory import AgentFactory
 from orchestrator.agent_registry import AgentRegistry
-from orchestrator.gateway.routing import load_agent_routing, resolve_agent_for_message
+from orchestrator.gateway.routing import EVERYONE, load_agent_routing, resolve_agent_for_message
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class VultiGatewayRunner:
         self._runner._handle_message = self._handle_message_with_agent_routing
 
         # Also patch _resolve_agent_for_source so the base _handle_message
-        # uses proper routing instead of the stub that returns "default".
+        # uses proper routing instead of the stub that returns None.
         self._runner._resolve_agent_for_source = self._resolve_agent_for_source
 
     async def _handle_message_with_agent_routing(self, event) -> Optional[str]:
@@ -92,6 +92,33 @@ class VultiGatewayRunner:
         # Update event text if @mention was stripped
         if clean_text != (event.text or ""):
             event.text = clean_text
+
+        # Unrouted — no agent specified
+        if agent_id is None:
+            active = self.registry.list_active_agents()
+            handles = ", ".join(f"@{a.id}" for a in active) if active else "(no active agents)"
+            return (
+                f"No agent specified. Tag an agent with @handle, or use @everyone to address all agents.\n"
+                f"Available: {handles}"
+            )
+
+        # @everyone — fan out to all active agents
+        if agent_id == EVERYONE:
+            active = self.registry.list_active_agents()
+            if not active:
+                return "No active agents to broadcast to."
+            responses = []
+            for agent in active:
+                event._agent_id = agent.id
+                event.target_agent_id = agent.id
+                try:
+                    with AgentContext.scope(agent.id, hop_count=0):
+                        resp = await self._original_handle_message(event)
+                    if resp:
+                        responses.append(f"**@{agent.id}:** {resp}")
+                except Exception as e:
+                    responses.append(f"**@{agent.id}:** (error: {e})")
+            return "\n\n".join(responses) if responses else None
 
         # Store agent_id on event for downstream access
         event._agent_id = agent_id

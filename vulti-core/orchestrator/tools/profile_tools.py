@@ -15,7 +15,7 @@ from tools.registry import registry
 
 def update_own_profile(args, **kw):
     """Update this agent's own profile metadata (role, name, description, avatar)."""
-    agent_id = os.getenv("VULTI_AGENT_ID", "default")
+    agent_id = os.getenv("VULTI_AGENT_ID", "")
 
     # Only allow safe fields
     allowed = {"role", "name", "description", "avatar"}

@@ -595,19 +595,21 @@ class GatewayRunner:
     def exit_reason(self) -> Optional[str]:
         return self._exit_reason
 
-    def _resolve_agent_for_source(self, source: SessionSource, message_text: str = "") -> tuple[str, str]:
+    def _resolve_agent_for_source(self, source: SessionSource, message_text: str = "") -> tuple[Optional[str], str]:
         """Resolve which agent should handle a message.
 
-        Returns (agent_id, cleaned_message_text).
-        Checks for @agent_id prefix first (set by platform adapters for DMs),
-        then falls back to the registry's default_agent.
+        Returns (agent_id_or_None, cleaned_message_text).
+        Checks for @agent_id prefix. Returns None if no agent specified.
         """
-        # Check for @agent_id prefix (e.g., "@kat hello" from a DM routed by the Matrix adapter)
         if message_text.startswith("@"):
             import re
             match = re.match(r"^@([a-z][a-z0-9\-]*)\s+", message_text)
             if match:
                 candidate = match.group(1)
+                # @everyone → broadcast sentinel
+                if candidate == "everyone":
+                    from orchestrator.gateway.routing import EVERYONE
+                    return EVERYONE, message_text[match.end():]
                 try:
                     from vulti_cli.agent_registry import AgentRegistry
                     reg = AgentRegistry()
@@ -616,20 +618,16 @@ class GatewayRunner:
                         return candidate, cleaned
                 except Exception:
                     pass
-        try:
-            from vulti_cli.agent_registry import get_default_agent_id
-            return get_default_agent_id(), message_text
-        except Exception:
-            return "default", message_text
+        return None, message_text
 
-    def _session_key_for_source(self, source: SessionSource, agent_id: str = "default") -> str:
+    def _session_key_for_source(self, source: SessionSource, agent_id: str = "") -> str:
         """Resolve the current session key for a source, honoring gateway config when available."""
         if hasattr(self, "session_store") and self.session_store is not None:
             try:
                 session_key = self.session_store._generate_session_key(source)
                 if isinstance(session_key, str) and session_key:
                     # Replace agent:main or agent:default prefix if agent_id differs
-                    if agent_id != "default" and session_key.startswith("agent:default:"):
+                    if agent_id and session_key.startswith("agent:default:"):
                         session_key = f"agent:{agent_id}:{session_key[len('agent:default:'):]}"
                     elif agent_id != "main" and session_key.startswith("agent:main:"):
                         session_key = f"agent:{agent_id}:{session_key[len('agent:main:'):]}"
@@ -1227,10 +1225,9 @@ class GatewayRunner:
                             registration_token=self._continuwuity.registration_token,
                         )
                         logger.info("Matrix: sync_agents_to_matrix returned %d agents: %s", len(agent_matrix_ids), list(agent_matrix_ids.keys()))
-                        # Inject primary agent credentials into Matrix platform config
-                        from vulti_cli.agent_registry import get_default_agent_id
-                        default_agent_id = get_default_agent_id() or next(iter(agent_matrix_ids), "")
-                        logger.info("Matrix: default_agent_id=%s", default_agent_id)
+                        # Inject first available agent credentials into Matrix platform config
+                        default_agent_id = next(iter(agent_matrix_ids), "")
+                        logger.info("Matrix: primary_agent_id=%s", default_agent_id)
                         creds = get_agent_matrix_credentials(default_agent_id)
                         if creds:
                             logger.info("Matrix: got creds for %s, setting up topology...", default_agent_id)
@@ -1701,6 +1698,45 @@ class GatewayRunner:
             # Store resolved agent_id on event so command handlers can access it
             event._agent_id = _resolved_agent_id
 
+        # --- Handle unrouted messages: return to sender ---
+        if not _resolved_agent_id:
+            try:
+                from vulti_cli.agent_registry import AgentRegistry
+                _reg = AgentRegistry()
+                _active = _reg.list_active_agents()
+                _handles = ", ".join(f"@{a.id}" for a in _active) if _active else "(no active agents)"
+            except Exception:
+                _handles = "(unable to list agents)"
+            return (
+                f"No agent specified. Tag an agent with @handle, or use @everyone to address all agents.\n"
+                f"Available: {_handles}"
+            )
+
+        # --- Handle @everyone: fan out to all active agents ---
+        from orchestrator.gateway.routing import EVERYONE
+        if _resolved_agent_id == EVERYONE:
+            try:
+                from vulti_cli.agent_registry import AgentRegistry
+                _reg = AgentRegistry()
+                _active = _reg.list_active_agents()
+            except Exception:
+                _active = []
+            if not _active:
+                return "No active agents to broadcast to."
+            _fan_responses = []
+            for _agent in _active:
+                # Create a copy of the event tagged to this specific agent
+                _fan_event = event
+                _fan_event._agent_id = _agent.id
+                _fan_event.target_agent_id = _agent.id
+                try:
+                    _resp = await self._handle_message(_fan_event)
+                    if _resp:
+                        _fan_responses.append(f"**@{_agent.id}:** {_resp}")
+                except Exception as e:
+                    _fan_responses.append(f"**@{_agent.id}:** (error: {e})")
+            return "\n\n".join(_fan_responses) if _fan_responses else None
+
         # Set agent identity env var so tools know which agent they serve.
         os.environ["VULTI_AGENT_ID"] = _resolved_agent_id
         # For group chats, tell tools which agents are in the same chat (to prevent relay)
@@ -2004,18 +2040,17 @@ class GatewayRunner:
             except Exception:
                 self._identity_agent_registry = None
         _id_reg = self._identity_agent_registry
-        _primary_agent_id = _id_reg.default_agent_id if _id_reg else "default"
-        if _resolved_agent_id != _primary_agent_id and _id_reg:
+        if _id_reg:
             agent_meta = _id_reg.get_agent(_resolved_agent_id)
             if agent_meta:
                 other_agents = [
-                    f"  - agent:{a.id} -- {a.name} ({a.description})"
+                    f"  - @{a.id} -- {a.name} ({a.description})"
                     for a in _id_reg.list_agents()
                     if a.id != _resolved_agent_id and a.status == "active"
                 ]
                 identity_block = (
                     f"## Agent Identity\n"
-                    f"You are **{agent_meta.name}** (agent ID: {agent_meta.id}).\n"
+                    f"You are **{agent_meta.name}** (handle: @{agent_meta.id}).\n"
                 )
                 if agent_meta.description:
                     identity_block += f"Your role: {agent_meta.description}\n"
@@ -2026,22 +2061,6 @@ class GatewayRunner:
                         + "\n".join(other_agents) + "\n"
                     )
                 context_prompt = identity_block + "\n" + context_prompt
-        elif _id_reg:
-            # Even for default agent, list other agents if they exist
-            other_agents = [
-                a for a in _id_reg.list_agents()
-                if a.id != _resolved_agent_id and a.status == "active"
-            ]
-            if other_agents:
-                agent_lines = [
-                    f"  - agent:{a.id} -- {a.name} ({a.description})"
-                    for a in other_agents
-                ]
-                context_prompt += (
-                    "\n\n## Inter-Agent Communication\n"
-                    "You can message other agents using send_message(target=\"agent:<id>\"):\n"
-                    + "\n".join(agent_lines) + "\n"
-                )
 
         # If the previous session expired and was auto-reset, prepend a notice
         # so the agent knows this is a fresh conversation (not an intentional /reset).
@@ -4856,11 +4875,11 @@ class GatewayRunner:
         session_id: str,
         session_key: str = None,
         _interrupt_depth: int = 0,
-        agent_id: str = "default",
+        agent_id: str = "",
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
-        
+
         Returns the full result dict from run_conversation, including:
           - "final_response": str (the text to send back)
           - "messages": list (full conversation including tool calls)
@@ -5138,7 +5157,7 @@ class GatewayRunner:
 
             # Load per-agent config overrides
             _agent_config = {}
-            if agent_id != "default":
+            if agent_id:
                 try:
                     from vulti_cli.config import load_config as _load_agent_config
                     _agent_config = _load_agent_config(agent_id=agent_id)
@@ -5323,13 +5342,7 @@ class GatewayRunner:
             # Audit: log the owner<>agent exchange
             try:
                 from orchestrator.audit import emit as _audit_emit
-                _audit_agent = os.getenv("VULTI_AGENT_ID", "")
-                if not _audit_agent or _audit_agent == "default":
-                    try:
-                        from orchestrator.agent_registry import get_default_agent_id
-                        _audit_agent = get_default_agent_id()
-                    except Exception:
-                        _audit_agent = "default"
+                _audit_agent = os.getenv("VULTI_AGENT_ID", "") or "unknown"
                 _audit_platform = "app" if platform_key in ("web", "matrix") else platform_key
                 _audit_emit("message_received", agent_id=_audit_agent, details={
                     "platform": _audit_platform,

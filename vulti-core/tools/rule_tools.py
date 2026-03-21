@@ -180,7 +180,7 @@ def rule(
                         "condition": existing.get("condition", ""),
                         "action": existing.get("action", ""),
                         "created_at": existing.get("created_at"),
-                        "agent": existing.get("agent", "default"),
+                        "agent": existing.get("agent", ""),
                     },
                 },
                 indent=2,
