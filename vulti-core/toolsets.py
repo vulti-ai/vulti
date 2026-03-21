@@ -54,6 +54,10 @@ _VULTI_CORE_TOOLS = [
     "session_search",
     # Clarifying questions
     "clarify",
+    # Agent self-profile management
+    "update_own_profile",
+    # Connection self-management
+    "manage_own_connections",
     # Code execution + delegation
     "execute_code", "delegate_task",
     # Cronjob management
@@ -149,8 +153,8 @@ TOOLSETS = {
     },
 
     "connections": {
-        "description": "Connection access management - request permission to use external service connections",
-        "tools": ["request_connection"],
+        "description": "Connection access management and agent self-management",
+        "tools": ["request_connection", "manage_own_connections", "update_own_profile"],
         "includes": []
     },
 

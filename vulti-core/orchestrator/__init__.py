@@ -74,3 +74,7 @@ def _register_vulti_tools():
         import orchestrator.tools.permission_tools  # noqa: F401
     except ImportError:
         pass
+    try:
+        import orchestrator.tools.profile_tools  # noqa: F401
+    except ImportError:
+        pass

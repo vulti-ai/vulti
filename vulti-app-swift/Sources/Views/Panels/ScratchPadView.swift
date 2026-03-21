@@ -466,6 +466,12 @@ struct ScratchPadView: View {
             LiveConnectionsWidget(agentId: agentId)
         } else if drill == "analytics" && widget.type == .statGrid {
             LiveAnalyticsWidget(agentId: agentId)
+        } else if drill == "jobs" {
+            LiveJobsWidget(agentId: agentId)
+        } else if drill == "rules" {
+            LiveRulesWidget(agentId: agentId)
+        } else if drill == "skills" {
+            LiveSkillsWidget(agentId: agentId)
         } else {
             staticWidgetBody(widget)
         }
@@ -708,7 +714,7 @@ struct ProfileCardContent: View {
                     Text(agent?.name ?? agentId)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
-                    if let role = data.role ?? agent?.role, !role.isEmpty {
+                    if let role = agent?.role ?? data.role, !role.isEmpty {
                         Text(role)
                             .font(.system(size: 12))
                             .foregroundStyle(VultiTheme.inkMuted)
@@ -727,6 +733,7 @@ struct ProfileCardContent: View {
                 Spacer()
             }
         }
+        .task { await app.refreshAgents() }
     }
 
     private func drillLink(_ title: String, icon: String, count: Int?, target: DrillTarget) -> some View {

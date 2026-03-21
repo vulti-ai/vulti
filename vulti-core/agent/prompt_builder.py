@@ -295,7 +295,12 @@ def build_skills_system_prompt(
     # Supports sub-categories: skills/mlops/training/axolotl/SKILL.md
     # -> category "mlops/training", skill "axolotl"
     skills_by_category: dict[str, list[tuple[str, str]]] = {}
-    for skill_file in skills_dir.rglob("SKILL.md"):
+    # Walk with followlinks=True so agent skill symlinks are traversed
+    _skill_files = []
+    for root, _dirs, files in os.walk(skills_dir, followlinks=True):
+        if "SKILL.md" in files:
+            _skill_files.append(Path(root) / "SKILL.md")
+    for skill_file in _skill_files:
         is_compatible, _, desc = _parse_skill_file(skill_file)
         if not is_compatible:
             continue
@@ -360,6 +365,25 @@ def build_skills_system_prompt(
             else:
                 index_lines.append(f"    - {name}")
 
+    # Check if we're showing a curated subset vs the full catalog
+    is_curated = skills_dir != global_skills_dir
+    total_skill_count = sum(len(v) for v in skills_by_category.values())
+
+    if is_curated:
+        # Count global skills for the hint
+        global_count = 0
+        if global_skills_dir.exists():
+            for _root, _dirs, _files in os.walk(global_skills_dir, followlinks=True):
+                if "SKILL.md" in _files:
+                    global_count += 1
+        discovery_hint = (
+            f"\nYou have {total_skill_count} installed skill(s) out of {global_count} available. "
+            "If none of your installed skills match the task, use skills_list() to browse "
+            "the full catalog and install what you need with skill_manage(action='install')."
+        )
+    else:
+        discovery_hint = "\nIf none match, proceed normally without loading a skill."
+
     return (
         "## Skills (mandatory)\n"
         "Before replying, scan the skills below. If one clearly matches your task, "
@@ -372,8 +396,7 @@ def build_skills_system_prompt(
         "<available_skills>\n"
         + "\n".join(index_lines) + "\n"
         "</available_skills>\n"
-        "\n"
-        "If none match, proceed normally without loading a skill."
+        + discovery_hint
     )
 
 

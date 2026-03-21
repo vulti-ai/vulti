@@ -488,105 +488,158 @@ struct AgentConnectionsTab: View {
     }
 }
 
-// MARK: - Tab: Skills (installed + browse — matches original)
+// MARK: - Tab: Skills (two-column: installed left, available right — matches connections pattern)
 
 struct AgentSkillsTab: View {
     let agentId: String
     @Environment(AppState.self) private var app
     @State private var installed: [GatewayClient.SkillResponse] = []
-    @State private var available: [GatewayClient.SkillResponse] = []
-    @State private var isBrowsing = false
+    @State private var allAvailable: [GatewayClient.SkillResponse] = []
     @State private var searchText = ""
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Button(isBrowsing ? "Done" : "Add Skills") {
-                    isBrowsing.toggle()
-                    if isBrowsing {
-                        Task {
-                            if let list = try? await app.client.listAvailableSkills() {
-                                available = list
-                            }
-                        }
-                    }
-                }
-                .buttonStyle(.vultiSecondary)
+    private var installedNames: Set<String> {
+        Set(installed.map(\.name))
+    }
 
-                if isBrowsing {
-                    TextField("Search skills...", text: $searchText)
-                        .textFieldStyle(.vulti)
-                }
-                Spacer()
-            }
-
-            if isBrowsing {
-                let filtered = searchText.isEmpty ? available :
-                    available.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
-                ForEach(filtered, id: \.name) { skill in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(skill.name).font(.system(size: 13, weight: .medium))
-                                if let cat = skill.category {
-                                    Text(cat).font(.system(size: 10))
-                                        .padding(.horizontal, 6).padding(.vertical, 2)
-                                        .background(VultiTheme.paperDeep, in: Capsule())
-                                }
-                            }
-                            if let desc = skill.description {
-                                Text(desc).font(.system(size: 11)).foregroundStyle(VultiTheme.inkDim).lineLimit(1)
-                            }
-                        }
-                        Spacer()
-                        Button("Install") {
-                            Task {
-                                try? await app.client.installSkill(agentId: agentId, name: skill.name)
-                                if let list = try? await app.client.listAgentSkills(agentId: agentId) {
-                                    installed = list
-                                }
-                            }
-                        }
-                        .font(.system(size: 12))
-                        .buttonStyle(.bordered)
-                    }
-                }
-            } else {
-                ForEach(installed, id: \.name) { skill in
-                    HStack {
-                        Text(skill.name).font(.system(size: 13, weight: .medium))
-                        if let cat = skill.category {
-                            Text(cat).font(.system(size: 10))
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(VultiTheme.paperDeep, in: Capsule())
-                        }
-                        Spacer()
-                        Button {
-                            Task {
-                                try? await app.client.removeSkill(agentId: agentId, name: skill.name)
-                                if let list = try? await app.client.listAgentSkills(agentId: agentId) {
-                                    installed = list
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 10))
-                                .foregroundStyle(VultiTheme.inkDim)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Remove skill")
-                    }
-                }
-                if installed.isEmpty {
-                    Text("No skills installed")
-                        .font(.system(size: 13)).foregroundStyle(VultiTheme.inkMuted)
-                }
+    private var notInstalled: [GatewayClient.SkillResponse] {
+        var filtered = allAvailable.filter { !installedNames.contains($0.name) }
+        if !searchText.isEmpty {
+            let q = searchText.lowercased()
+            filtered = filtered.filter {
+                $0.name.lowercased().contains(q) ||
+                ($0.description?.lowercased().contains(q) ?? false) ||
+                ($0.category?.lowercased().contains(q) ?? false)
             }
         }
-        .task {
-            if let list = try? await app.client.listAgentSkills(agentId: agentId) {
-                installed = list
+        return filtered
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            // Left: Installed
+            VStack(alignment: .leading, spacing: 8) {
+                Text("INSTALLED (\(installed.count))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkMuted)
+
+                if installed.isEmpty {
+                    Text("No skills installed")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                        .padding(.top, 4)
+                } else {
+                    ForEach(installed, id: \.name) { skill in
+                        HStack(spacing: 6) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                HStack(spacing: 4) {
+                                    Text(skill.name)
+                                        .font(.system(size: 12, weight: .medium))
+                                    if let cat = skill.category {
+                                        Text(cat)
+                                            .font(.system(size: 9))
+                                            .padding(.horizontal, 4).padding(.vertical, 1)
+                                            .background(VultiTheme.paperDeep, in: Capsule())
+                                            .foregroundStyle(VultiTheme.inkMuted)
+                                    }
+                                }
+                                if let desc = skill.description {
+                                    Text(desc)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(VultiTheme.inkDim)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                            Button {
+                                Task {
+                                    try? await app.client.removeSkill(agentId: agentId, name: skill.name)
+                                    await reload()
+                                }
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.red.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(12)
+
+            Rectangle()
+                .fill(VultiTheme.border)
+                .frame(width: 1)
+
+            // Right: Available (not yet installed)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AVAILABLE (\(notInstalled.count))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkMuted)
+
+                TextField("Search...", text: $searchText)
+                    .textFieldStyle(.vulti)
+                    .controlSize(.small)
+
+                if notInstalled.isEmpty {
+                    Text(searchText.isEmpty ? "All skills installed" : "No matching skills")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkDim)
+                        .padding(.top, 4)
+                } else {
+                    ForEach(notInstalled, id: \.name) { skill in
+                        HStack(spacing: 6) {
+                            Button {
+                                Task {
+                                    try? await app.client.installSkill(agentId: agentId, name: skill.name)
+                                    await reload()
+                                }
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.green.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
+                            VStack(alignment: .leading, spacing: 1) {
+                                HStack(spacing: 4) {
+                                    Text(skill.name)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(VultiTheme.inkDim)
+                                    if let cat = skill.category {
+                                        Text(cat)
+                                            .font(.system(size: 9))
+                                            .padding(.horizontal, 4).padding(.vertical, 1)
+                                            .background(VultiTheme.paperDeep, in: Capsule())
+                                            .foregroundStyle(VultiTheme.inkMuted)
+                                    }
+                                }
+                                if let desc = skill.description {
+                                    Text(desc)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(VultiTheme.inkFaint)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(12)
+        }
+        .task { await reload() }
+    }
+
+    private func reload() async {
+        if let list = try? await app.client.listAgentSkills(agentId: agentId) {
+            installed = list
+        }
+        if let list = try? await app.client.listAvailableSkills() {
+            allAvailable = list
         }
     }
 }

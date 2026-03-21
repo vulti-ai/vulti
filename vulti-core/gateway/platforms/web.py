@@ -3196,7 +3196,10 @@ class WebAdapter(BasePlatformAdapter):
             from vulti_cli.config import get_vulti_home
             global_skills = get_vulti_home() / "skills"
             if global_skills.exists():
-                available_count = len([d for d in global_skills.iterdir() if d.is_dir()])
+                # Count actual skills (dirs containing SKILL.md), not category folders
+                for _root, _dirs, _files in os.walk(str(global_skills)):
+                    if "SKILL.md" in _files:
+                        available_count += 1
         except Exception:
             pass
         installed_count = len(installed_names)

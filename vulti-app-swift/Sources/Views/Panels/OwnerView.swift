@@ -1240,9 +1240,14 @@ struct CreateAgentView: View {
                     model: selectedModel
                 )
 
+                // Every agent gets matrix connection by default (we run our own server)
+                _ = try? await app.client.updateAgent(agent.id, updates: [
+                    "allowedConnections": "matrix"
+                ])
+
                 await app.refreshAgents()
 
-                // Matrix onboarding (fire-and-forget)
+                // Matrix onboarding (fire-and-forget — registers agent on homeserver, creates DM)
                 Task { try? await app.client.onboardAgentToMatrix(agentId: agent.id) }
 
                 await MainActor.run {

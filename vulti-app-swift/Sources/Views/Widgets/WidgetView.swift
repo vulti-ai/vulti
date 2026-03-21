@@ -355,42 +355,74 @@ struct LiveRulesWidget: View {
     }
 }
 
-/// Live skills widget — fetches real installed/available counts from the API.
+/// Live skills widget — two-column layout matching connections widget.
 struct LiveSkillsWidget: View {
     let agentId: String
     @Environment(AppState.self) private var app
     @State private var installed: [GatewayClient.SkillResponse] = []
-    @State private var availableCount: Int = 0
+    @State private var allAvailable: [GatewayClient.SkillResponse] = []
+
+    private var installedNames: Set<String> {
+        Set(installed.map(\.name))
+    }
+    private var notInstalled: [GatewayClient.SkillResponse] {
+        allAvailable.filter { !installedNames.contains($0.name) }
+    }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(installed.isEmpty ? .secondary : .green)
-                .frame(width: 8, height: 8)
-            Text("\(installed.count) installed / \(availableCount) available")
-                .font(.system(size: 13))
-            if !installed.isEmpty {
-                Spacer()
-                Text(skillDetail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(VultiTheme.inkDim)
-                    .lineLimit(1)
+        HStack(alignment: .top, spacing: 0) {
+            // Left: Installed
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Installed (\(installed.count))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkMuted)
+                ForEach(installed, id: \.name) { skill in
+                    HStack {
+                        Text(skill.name)
+                            .font(.system(size: 11))
+                        Spacer()
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.green)
+                    }
+                    .padding(.vertical, 1)
+                }
+                if installed.isEmpty {
+                    Text("None")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkDim)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            Rectangle()
+                .fill(VultiTheme.border)
+                .frame(width: 1)
+                .padding(.horizontal, 8)
+
+            // Right: Available
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Available (\(notInstalled.count))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkMuted)
+                ForEach(notInstalled.prefix(8), id: \.name) { skill in
+                    Text(skill.name)
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkDim)
+                        .padding(.vertical, 1)
+                }
+                if notInstalled.count > 8 {
+                    Text("+\(notInstalled.count - 8) more")
+                        .font(.system(size: 10))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .task {
             installed = (try? await app.client.listAgentSkills(agentId: agentId)) ?? []
-            let all = (try? await app.client.listAvailableSkills()) ?? []
-            availableCount = all.count
+            allAvailable = (try? await app.client.listAvailableSkills()) ?? []
         }
-    }
-
-    private var skillDetail: String {
-        let names = installed.prefix(3).map(\.name)
-        var detail = names.joined(separator: ", ")
-        if installed.count > 3 {
-            detail += " +\(installed.count - 3)"
-        }
-        return detail
     }
 }
 

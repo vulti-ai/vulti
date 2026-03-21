@@ -6,7 +6,6 @@
 	let agentSkills = $state<Skill[]>([]);
 	let availableSkills = $state<Skill[]>([]);
 	let loading = $state(false);
-	let showBrowser = $state(false);
 	let searchQuery = $state('');
 	let selectedCategory = $state('');
 
@@ -82,153 +81,270 @@
 </script>
 
 <div class="flex h-full flex-col">
-	<div class="flex shrink-0 items-center justify-end border-b border-border px-6 py-2">
-		<button
-			class="rounded-lg bg-primary animate-rainbow px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
-			onclick={() => showBrowser = !showBrowser}
-		>
-			{showBrowser ? 'Done' : '+ Add Skills'}
-		</button>
+	<!-- Header -->
+	<div class="flex shrink-0 items-center justify-between border-b border-border px-6 py-2">
+		<p class="text-xs text-ink-muted">Manage skills for this agent.</p>
+		<div class="flex items-center gap-3">
+			{#if agentSkills.length > 0}
+				<span class="rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] font-medium text-green-600">{agentSkills.length} installed</span>
+			{/if}
+			<span class="text-[10px] text-ink-faint">{availableSkills.length} available</span>
+		</div>
 	</div>
 
-	<div class="flex-1 overflow-y-auto">
-		{#if showBrowser}
-			<!-- Skill browser -->
-			<div class="border-b border-border px-6 py-2">
-				<div class="flex gap-2">
+	{#if loading}
+		<div class="flex-1 flex items-center justify-center">
+			<p class="text-xs text-ink-muted">Loading...</p>
+		</div>
+	{:else}
+		<!-- Two-column layout -->
+		<div class="flex flex-1 overflow-hidden">
+			<!-- Left: Installed -->
+			<div class="col installed-col">
+				<div class="col-header">
+					<span class="col-title">Installed</span>
+					<span class="col-count">{agentSkills.length}</span>
+				</div>
+				<div class="col-body">
+					{#if agentSkills.length === 0}
+						<div class="empty-state">
+							<p class="text-xs text-ink-muted">No skills installed</p>
+							<p class="text-[10px] text-ink-faint mt-1">Add from available skills &rarr;</p>
+						</div>
+					{:else}
+						{#each agentSkills as skill (skill.name)}
+							<div class="skill-row installed">
+								<div class="min-w-0 flex-1">
+									<div class="flex items-center gap-2">
+										<span class="text-sm font-medium text-ink">{skill.name}</span>
+										{#if skill.category}
+											<span class="cat-badge">{skill.category}</span>
+										{/if}
+									</div>
+									{#if skill.description}
+										<p class="mt-0.5 text-xs text-ink-muted truncate">{skill.description}</p>
+									{/if}
+								</div>
+								<button
+									class="action-btn remove"
+									onclick={() => remove(skill.name)}
+									title="Remove skill"
+								>
+									<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+										<path d="M5 12h14" />
+									</svg>
+								</button>
+							</div>
+						{/each}
+					{/if}
+				</div>
+			</div>
+
+			<!-- Divider -->
+			<div class="col-divider"></div>
+
+			<!-- Right: Available -->
+			<div class="col available-col">
+				<div class="col-header">
+					<span class="col-title">Available</span>
+					<span class="col-count">{installable().length}</span>
+				</div>
+				<!-- Search/filter -->
+				<div class="filter-bar">
 					<input
 						type="text"
-						placeholder="Search skills..."
-						class="skill-input flex-1"
+						placeholder="Search..."
+						class="filter-input"
 						bind:value={searchQuery}
 					/>
-					<select class="skill-select" bind:value={selectedCategory}>
-						<option value="">All categories</option>
+					<select class="filter-select" bind:value={selectedCategory}>
+						<option value="">All</option>
 						{#each categories() as cat}
 							<option value={cat}>{cat}</option>
 						{/each}
 					</select>
 				</div>
-			</div>
-			<div class="px-6 py-2">
-				{#each installable() as skill}
-					<div class="skill-row">
-						<div class="flex-1 min-w-0">
-							<div class="flex items-center gap-2">
-								<span class="text-sm font-medium text-ink">{skill.name}</span>
-								{#if skill.category}
-									<span class="text-[10px] rounded bg-ink/5 px-1.5 py-0.5 text-ink-muted">{skill.category}</span>
-								{/if}
-							</div>
-							{#if skill.description}
-								<p class="mt-0.5 text-xs text-ink-muted truncate">{skill.description}</p>
-							{/if}
-						</div>
-						<button
-							class="shrink-0 rounded-md bg-primary animate-rainbow px-3 py-1 text-xs font-semibold text-white transition-all hover:shadow-sm"
-							onclick={() => install(skill.name)}
-						>Install</button>
-					</div>
-				{:else}
-					<p class="py-6 text-center text-xs text-ink-muted">
-						{searchQuery || selectedCategory ? 'No matching skills found.' : 'All skills installed.'}
-					</p>
-				{/each}
-			</div>
-
-		{:else}
-			<!-- Installed skills list -->
-			{#if loading}
-				<div class="py-12 text-center text-xs text-ink-muted">Loading...</div>
-			{:else if agentSkills.length === 0}
-				<div class="flex flex-col items-center justify-center py-16 px-6">
-					<div class="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-ink/5">
-						<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-ink-muted">
-							<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-							<path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-						</svg>
-					</div>
-					<p class="text-sm font-medium text-ink-dim">No skills installed</p>
-					<p class="mt-1 text-xs text-ink-muted">Add skills to give this agent specialized abilities</p>
-				</div>
-			{:else}
-				<div class="px-6 py-2">
-					{#each agentSkills as skill}
-						<div class="skill-row">
-							<div class="flex-1 min-w-0">
+				<div class="col-body">
+					{#each installable() as skill (skill.name)}
+						<div class="skill-row available">
+							<button
+								class="action-btn add"
+								onclick={() => install(skill.name)}
+								title="Install skill"
+							>
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+									<path d="M12 5v14M5 12h14" />
+								</svg>
+							</button>
+							<div class="min-w-0 flex-1">
 								<div class="flex items-center gap-2">
-									<span class="text-sm font-medium text-ink">{skill.name}</span>
+									<span class="text-sm font-medium text-ink-dim">{skill.name}</span>
 									{#if skill.category}
-										<span class="text-[10px] rounded bg-ink/5 px-1.5 py-0.5 text-ink-muted">{skill.category}</span>
+										<span class="cat-badge">{skill.category}</span>
 									{/if}
 								</div>
 								{#if skill.description}
-									<p class="mt-0.5 text-xs text-ink-muted truncate">{skill.description}</p>
+									<p class="mt-0.5 text-xs text-ink-faint truncate">{skill.description}</p>
 								{/if}
 							</div>
-							<button
-								class="shrink-0 rounded-md px-2 py-1 text-xs text-ink-muted hover:bg-red-50 hover:text-red-600 transition-colors"
-								onclick={() => remove(skill.name)}
-								title="Remove skill"
-							>
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-									<path d="M18 6 6 18M6 6l12 12" />
-								</svg>
-							</button>
+						</div>
+					{:else}
+						<div class="empty-state">
+							<p class="text-xs text-ink-muted">
+								{searchQuery || selectedCategory ? 'No matching skills.' : 'All skills installed.'}
+							</p>
 						</div>
 					{/each}
 				</div>
-			{/if}
-		{/if}
-	</div>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <style>
+	.col {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+	}
+
+	.col-divider {
+		width: 1px;
+		flex-shrink: 0;
+		background: var(--color-border);
+	}
+
+	.col-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.5rem 0.75rem;
+		border-bottom: 1px solid var(--color-border);
+		flex-shrink: 0;
+	}
+
+	.col-title {
+		font-size: 0.6875rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--color-ink-muted);
+	}
+
+	.col-count {
+		font-size: 0.625rem;
+		font-weight: 500;
+		color: var(--color-ink-faint);
+		background: var(--color-ink-faint, rgba(0,0,0,0.05));
+		background: rgba(128, 128, 128, 0.1);
+		padding: 0.125rem 0.375rem;
+		border-radius: 9999px;
+	}
+
+	.filter-bar {
+		display: flex;
+		gap: 0.375rem;
+		padding: 0.375rem 0.75rem;
+		border-bottom: 1px solid var(--color-border);
+		flex-shrink: 0;
+	}
+
+	.filter-input {
+		flex: 1;
+		padding: 0.25rem 0.5rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-border);
+		background: transparent;
+		font-size: 0.6875rem;
+		color: var(--color-ink);
+		outline: none;
+	}
+	.filter-input:focus {
+		border-color: var(--color-primary);
+	}
+
+	.filter-select {
+		appearance: none;
+		padding: 0.25rem 0.5rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-border);
+		background: transparent;
+		font-size: 0.6875rem;
+		color: var(--color-ink-dim);
+		outline: none;
+		max-width: 7rem;
+	}
+
+	.col-body {
+		flex: 1;
+		overflow-y: auto;
+		padding: 0.375rem;
+	}
+
 	.skill-row {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		padding: 8px 0;
-		border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+		gap: 0.5rem;
+		padding: 0.5rem 0.5rem;
+		border-radius: 0.375rem;
+		transition: background 100ms ease;
 	}
-	.skill-row:last-child {
-		border-bottom: none;
-	}
-	:global(.dark) .skill-row {
-		border-bottom-color: rgba(255, 255, 255, 0.04);
+	.skill-row:hover {
+		background: var(--color-surface-hover);
 	}
 
-	.skill-input {
-		padding: 5px 10px;
-		border-radius: 6px;
-		border: 1px solid rgba(0, 0, 0, 0.08);
-		background: rgba(0, 0, 0, 0.02);
-		font-size: 12px;
-		color: var(--ink, #333);
-		outline: none;
-	}
-	.skill-input:focus {
-		border-color: rgba(0, 0, 0, 0.2);
-	}
-	:global(.dark) .skill-input {
-		border-color: rgba(255, 255, 255, 0.1);
-		background: rgba(255, 255, 255, 0.04);
-		color: rgba(255, 255, 255, 0.8);
+	.skill-row.installed {
+		border-bottom: 1px solid rgba(128, 128, 128, 0.06);
 	}
 
-	.skill-select {
-		appearance: none;
-		padding: 5px 10px;
-		border-radius: 6px;
-		border: 1px solid rgba(0, 0, 0, 0.08);
-		background: rgba(0, 0, 0, 0.02);
-		font-size: 12px;
-		color: var(--ink-dim, #555);
-		outline: none;
+	.cat-badge {
+		font-size: 0.5625rem;
+		padding: 0.0625rem 0.375rem;
+		border-radius: 9999px;
+		background: rgba(128, 128, 128, 0.08);
+		color: var(--color-ink-faint);
+		white-space: nowrap;
 	}
-	:global(.dark) .skill-select {
-		border-color: rgba(255, 255, 255, 0.1);
-		background: rgba(255, 255, 255, 0.04);
-		color: rgba(255, 255, 255, 0.7);
+
+	.action-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.5rem;
+		height: 1.5rem;
+		border-radius: 0.375rem;
+		flex-shrink: 0;
+		transition: all 100ms ease;
+	}
+
+	.action-btn.add {
+		color: #22c55e;
+		border: 1px solid #22c55e40;
+		background: #22c55e08;
+	}
+	.action-btn.add:hover {
+		background: #22c55e20;
+		border-color: #22c55e80;
+	}
+
+	.action-btn.remove {
+		color: var(--color-ink-faint);
+		border: 1px solid transparent;
+	}
+	.action-btn.remove:hover {
+		color: #ef4444;
+		border-color: #ef444440;
+		background: #ef444410;
+	}
+
+	.empty-state {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding: 2rem 1rem;
+		text-align: center;
 	}
 </style>
