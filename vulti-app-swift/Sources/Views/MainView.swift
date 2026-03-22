@@ -12,35 +12,19 @@ struct MainView: View {
 
             // Left toolbar (matches screenshot: top-left, stacked, paper material)
             if app.panelMode == nil {
-                // Left toolbar
-                VStack(spacing: 8) {
+                // Top toolbar — settings left, activity right
+                HStack {
                     ToolbarButton(icon: "gear", tooltip: "Settings") {
                         app.openSettings()
                     }
-                    ToolbarButton(icon: "plus", tooltip: "New Agent") {
-                        app.openCreate()
-                    }
+                    Spacer()
                     ToolbarButton(icon: "clock.arrow.circlepath", tooltip: "Activity") {
                         app.openAudit()
                     }
-                    Spacer()
                 }
-                .padding(.leading, 20)
+                .padding(.horizontal, 20)
                 .padding(.top, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // Top-right refresh button
-                VStack {
-                    HStack {
-                        Spacer()
-                        ToolbarButton(icon: "arrow.clockwise", tooltip: "Refresh") {
-                            Task { await app.refreshAgents() }
-                        }
-                    }
-                    Spacer()
-                }
-                .padding(.trailing, 20)
-                .padding(.top, 20)
+                .frame(maxHeight: .infinity, alignment: .top)
             }
         }
         .overlay {

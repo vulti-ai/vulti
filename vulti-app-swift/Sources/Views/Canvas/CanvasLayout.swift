@@ -20,6 +20,7 @@ struct CanvasLayout {
     static let defaultColor = "#9D7AEA"
     static let ownerColor = "#E8607A"
     static let ownerNodeId = "__owner__"
+    static let addNodeId = "__add__"
 
     struct LayoutNode: Identifiable {
         let id: String
@@ -32,7 +33,7 @@ struct CanvasLayout {
         let status: String?
         let role: String?
 
-        enum NodeType { case owner, agent }
+        enum NodeType { case owner, agent, add }
     }
 
     struct LayoutEdge: Identifiable {
@@ -70,7 +71,17 @@ struct CanvasLayout {
         )
         nodes.append(ownerNode)
 
-        guard !agents.isEmpty else { return (nodes, edges) }
+        guard !agents.isEmpty else {
+            // Even with no agents, show the add-node below the owner
+            let addY = topMargin + min(180, (height - topMargin - 80) / 1.5)
+            nodes.append(LayoutNode(
+                id: addNodeId, type: .add,
+                x: width / 2, y: addY,
+                label: "+", sublabel: "New Agent",
+                color: Color(hex: defaultColor), status: nil, role: nil
+            ))
+            return (nodes, edges)
+        }
 
         // Build managedBy map (only "manages" relationships)
         var managedBy: [String: String] = [:]
@@ -136,14 +147,17 @@ struct CanvasLayout {
             let y = topMargin + CGFloat(depth) * verticalSpacing
 
             if depth == 1 {
-                // Root agents — center across full width
-                let count = group.count
-                let rowWidth = nodeSpacing * CGFloat(count - 1)
+                // Root agents + add-node — center across full width
+                let totalCount = group.count + 1  // +1 for the add node
+                let rowWidth = nodeSpacing * CGFloat(totalCount - 1)
                 let startX = width / 2 - rowWidth / 2
                 for (i, agent) in group.enumerated() {
-                    let x = count == 1 ? width / 2 : startX + CGFloat(i) * nodeSpacing
+                    let x = totalCount == 1 ? width / 2 : startX + CGFloat(i) * nodeSpacing
                     positionMap[agent.id] = CGPoint(x: x, y: y)
                 }
+                // Position the add node as the last item in the row
+                let addX = totalCount == 1 ? width / 2 : startX + CGFloat(group.count) * nodeSpacing
+                positionMap[addNodeId] = CGPoint(x: addX, y: y)
             } else {
                 // Sub-agents — group by parent, center each group under parent's X
                 var byParent: [String: [AgentEntry]] = [:]
@@ -164,6 +178,21 @@ struct CanvasLayout {
                     }
                 }
             }
+        }
+
+        // Add "+" placeholder node from position map
+        if let addPos = positionMap[addNodeId] {
+            nodes.append(LayoutNode(
+                id: addNodeId,
+                type: .add,
+                x: addPos.x,
+                y: addPos.y,
+                label: "+",
+                sublabel: "New Agent",
+                color: Color(hex: defaultColor),
+                status: nil,
+                role: nil
+            ))
         }
 
         // Build layout nodes from positions

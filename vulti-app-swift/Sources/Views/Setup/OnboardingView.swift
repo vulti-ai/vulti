@@ -17,6 +17,7 @@ struct OnboardingView: View {
     @State private var providers: [GatewayClient.ProviderResponse] = []
     @State private var secrets: [GatewayClient.SecretResponse] = []
     @State private var selectedModel = ""
+    @State private var selectedProviderId = ""
 
     // AI provider key
     @State private var showAddAIKey = false
@@ -52,6 +53,7 @@ struct OnboardingView: View {
         ("Venice", "VENICE_API_KEY"),
         ("OpenRouter", "OPENROUTER_API_KEY"),
         ("Anthropic", "ANTHROPIC_API_KEY"),
+        ("Claude Code OAuth", "CLAUDE_CODE_OAUTH_TOKEN"),
         ("OpenAI", "OPENAI_API_KEY"),
         ("DeepSeek", "DEEPSEEK_API_KEY"),
         ("Google AI", "GOOGLE_API_KEY"),
@@ -294,6 +296,10 @@ struct OnboardingView: View {
 
     // MARK: - Step 2: Intelligence (AI provider — mandatory)
 
+    private var selectedProviderObj: GatewayClient.ProviderResponse? {
+        authenticatedProviders.first { $0.id == selectedProviderId }
+    }
+
     private var intelligenceStep: some View {
         VStack(spacing: 14) {
             if authenticatedProviders.isEmpty {
@@ -307,43 +313,89 @@ struct OnboardingView: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-            } else {
-                // Model picker grouped by provider
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(authenticatedProviders, id: \.id) { provider in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(provider.name)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(VultiTheme.inkDim)
-                                .textCase(.uppercase)
 
-                            ForEach(provider.models ?? [], id: \.self) { m in
-                                let modelId = stripProviderPrefix(m)
-                                HStack(spacing: 8) {
-                                    Image(systemName: selectedModel == modelId ? "circle.inset.filled" : "circle")
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(selectedModel == modelId ? VultiTheme.primary : VultiTheme.inkDim)
-                                    Text(modelId)
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(selectedModel == modelId ? VultiTheme.inkSoft : VultiTheme.inkDim)
-                                }
-                                .padding(.vertical, 4)
-                                .padding(.horizontal, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    selectedModel == modelId
-                                        ? VultiTheme.primary.opacity(0.08)
-                                        : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 6)
-                                )
-                                .contentShape(Rectangle())
-                                .onTapGesture { selectedModel = modelId }
+            } else if selectedProviderId.isEmpty {
+                // Step 1: Pick a provider
+                Text("Choose your AI provider")
+                    .font(.system(size: 12))
+                    .foregroundStyle(VultiTheme.inkMuted)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(authenticatedProviders, id: \.id) { provider in
+                        HStack(spacing: 10) {
+                            Image(systemName: "circle")
+                                .font(.system(size: 14))
+                                .foregroundStyle(VultiTheme.inkDim)
+                            Text(provider.name)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(VultiTheme.inkSoft)
+                            Spacer()
+                            Text("\(provider.models?.count ?? 0) models")
+                                .font(.system(size: 11))
+                                .foregroundStyle(VultiTheme.inkMuted)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11))
+                                .foregroundStyle(VultiTheme.inkMuted)
+                        }
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 12)
+                        .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedProviderId = provider.id
+                            // Auto-select first model
+                            if let first = provider.models?.first {
+                                selectedModel = stripProviderPrefix(first)
                             }
                         }
                     }
                 }
+
+            } else if let provider = selectedProviderObj {
+                // Step 2: Pick a model from the selected provider
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button {
+                            selectedProviderId = ""
+                            selectedModel = ""
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(VultiTheme.primary)
+                        }
+                        .buttonStyle(.plain)
+
+                        Text(provider.name)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(VultiTheme.inkDim)
+                            .textCase(.uppercase)
+                    }
+
+                    ForEach(provider.models ?? [], id: \.self) { m in
+                        let modelId = stripProviderPrefix(m)
+                        HStack(spacing: 8) {
+                            Image(systemName: selectedModel == modelId ? "circle.inset.filled" : "circle")
+                                .font(.system(size: 13))
+                                .foregroundStyle(selectedModel == modelId ? VultiTheme.primary : VultiTheme.inkDim)
+                            Text(modelId)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(selectedModel == modelId ? VultiTheme.inkSoft : VultiTheme.inkDim)
+                        }
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            selectedModel == modelId
+                                ? VultiTheme.primary.opacity(0.08)
+                                : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture { selectedModel = modelId }
+                    }
+                }
                 .padding(12)
-                .frame(maxWidth: .infinity, maxHeight: 240, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
                 .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
             }
 
@@ -375,6 +427,7 @@ struct OnboardingView: View {
                     .disabled(authenticatedProviders.isEmpty || selectedModel.isEmpty)
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: selectedProviderId)
     }
 
     /// Strip provider routing prefix (e.g. "openrouter/anthropic/claude-opus-4" → "anthropic/claude-opus-4")

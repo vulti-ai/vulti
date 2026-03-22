@@ -154,41 +154,43 @@ struct AgentPanelHeader: View {
 
                     modelPicker
 
-                    if showDeleteConfirm {
-                        HStack(spacing: 6) {
-                            Text("Delete?")
-                                .font(.system(size: 11))
-                                .foregroundStyle(VultiTheme.inkMuted)
-                            Button(isDeleting ? "..." : "Yes") {
-                                isDeleting = true
-                                Task {
-                                    try? await app.client.deleteAgent(agentId)
-                                    await app.refreshAgents()
-                                    await MainActor.run {
-                                        isDeleting = false
-                                        showDeleteConfirm = false
-                                        app.closePanel()
+                    if agentId != "hector" {
+                        if showDeleteConfirm {
+                            HStack(spacing: 6) {
+                                Text("Delete?")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(VultiTheme.inkMuted)
+                                Button(isDeleting ? "..." : "Yes") {
+                                    isDeleting = true
+                                    Task {
+                                        try? await app.client.deleteAgent(agentId)
+                                        await app.refreshAgents()
+                                        await MainActor.run {
+                                            isDeleting = false
+                                            showDeleteConfirm = false
+                                            app.closePanel()
+                                        }
                                     }
                                 }
-                            }
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(.red, in: RoundedRectangle(cornerRadius: 4))
-                            .buttonStyle(.plain)
-                            .disabled(isDeleting)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(.red, in: RoundedRectangle(cornerRadius: 4))
+                                .buttonStyle(.plain)
+                                .disabled(isDeleting)
 
-                            Button("No") { showDeleteConfirm = false }
-                                .font(.system(size: 11))
-                                .foregroundStyle(VultiTheme.inkMuted)
+                                Button("No") { showDeleteConfirm = false }
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(VultiTheme.inkMuted)
+                                    .buttonStyle(.plain)
+                            }
+                        } else {
+                            Button("Delete") { showDeleteConfirm = true }
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(VultiTheme.coral)
                                 .buttonStyle(.plain)
                         }
-                    } else {
-                        Button("Delete") { showDeleteConfirm = true }
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(VultiTheme.coral)
-                            .buttonStyle(.plain)
                     }
                 }
             }

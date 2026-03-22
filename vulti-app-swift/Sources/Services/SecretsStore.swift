@@ -55,7 +55,7 @@ final class SecretsStore {
     // MARK: - Providers (matches list_providers)
 
     static let providerDefs: [(name: String, envKeys: [String], models: [String])] = [
-        ("Anthropic", ["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"],
+        ("Anthropic", ["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
          ["claude-opus-4.6", "claude-sonnet-4.6", "claude-haiku-4.5"]),
         ("OpenRouter", ["OPENROUTER_API_KEY"],
          ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "google/gemini-2.5-pro",
@@ -122,7 +122,7 @@ final class SecretsStore {
 
     private static func categorize(_ key: String) -> String {
         let k = key.uppercased()
-        if ["ANTHROPIC", "OPENROUTER", "OPENAI", "DEEPSEEK", "GEMINI", "GOOGLE_API"].contains(where: { k.hasPrefix($0) }) {
+        if ["ANTHROPIC", "CLAUDE_CODE", "OPENROUTER", "OPENAI", "DEEPSEEK", "GEMINI", "GOOGLE_API"].contains(where: { k.hasPrefix($0) }) {
             return "LLM Providers"
         }
         if ["TELEGRAM", "DISCORD", "SLACK", "SIGNAL", "WHATSAPP", "MATRIX"].contains(where: { k.hasPrefix($0) }) {

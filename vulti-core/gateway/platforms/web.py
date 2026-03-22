@@ -2799,6 +2799,16 @@ class WebAdapter(BasePlatformAdapter):
 
         provider_defs = [
             {
+                "id": "claude-code",
+                "name": "Claude Code (OAuth)",
+                "env_keys": ["CLAUDE_CODE_OAUTH_TOKEN"],
+                "models": [
+                    "anthropic/claude-opus-4",
+                    "anthropic/claude-sonnet-4",
+                    "anthropic/claude-haiku-4.5",
+                ],
+            },
+            {
                 "id": "anthropic",
                 "name": "Anthropic",
                 "env_keys": ["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"],
@@ -2806,6 +2816,16 @@ class WebAdapter(BasePlatformAdapter):
                     "anthropic/claude-opus-4.6",
                     "anthropic/claude-sonnet-4.6",
                     "anthropic/claude-haiku-4.5",
+                ],
+            },
+            {
+                "id": "venice",
+                "name": "Venice",
+                "env_keys": ["VENICE_API_KEY"],
+                "models": [
+                    "venice/llama-3.3-70b",
+                    "venice/deepseek-r1-671b",
+                    "venice/qwen-2.5-vl",
                 ],
             },
             {

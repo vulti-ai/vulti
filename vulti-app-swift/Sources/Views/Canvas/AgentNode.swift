@@ -110,6 +110,46 @@ struct AgentNode: View {
     }
 }
 
+// MARK: - Add Agent Node (placeholder card)
+
+/// "+" card that sits in the agent grid as a placeholder to create a new agent.
+struct AddAgentNode: View {
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "plus")
+                .font(.system(size: 20, weight: .ultraLight))
+                .foregroundStyle(VultiTheme.rainbowGradient)
+                .frame(width: 36, height: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(VultiTheme.paperWarm.opacity(0.5))
+                )
+
+            Text("New Agent")
+                .font(.system(size: 13, weight: .ultraLight))
+                .foregroundStyle(VultiTheme.rainbowGradient)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 20)
+        .frame(minWidth: 100)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(VultiTheme.paper.opacity(0.4))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(VultiTheme.rainbowGradient, lineWidth: isHovered ? 1 : 0.5)
+        )
+        .shadow(color: .black.opacity(isHovered ? 0.14 : 0.08), radius: isHovered ? 20 : 14, y: isHovered ? 10 : 6)
+        .scaleEffect(isHovered ? 1.04 : 1.0)
+        .animation(.easeInOut(duration: 0.12), value: isHovered)
+        .onHover { isHovered = $0 }
+    }
+}
+
 // MARK: - Handle
 
 enum HandlePosition: Hashable {

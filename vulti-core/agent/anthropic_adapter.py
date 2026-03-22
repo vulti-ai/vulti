@@ -339,8 +339,34 @@ def resolve_anthropic_token() -> Optional[str]:
         return token
 
     # 2. CLAUDE_CODE_OAUTH_TOKEN (used by Claude Code for setup-tokens)
+    #    Accepts either a plain token string or a JSON blob with credentials.
     cc_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
     if cc_token:
+        # Try parsing as JSON (e.g. {"claudeAiOauth": {"accessToken": "...", ...}})
+        if cc_token.startswith("{"):
+            try:
+                import json as _json
+                cc_data = _json.loads(cc_token)
+                # Handle {"claudeAiOauth": {...}} wrapper
+                if "claudeAiOauth" in cc_data:
+                    cc_data = cc_data["claudeAiOauth"]
+                if isinstance(cc_data, dict) and cc_data.get("accessToken"):
+                    # Check expiry
+                    expires_at = cc_data.get("expiresAt", 0)
+                    import time as _time
+                    if expires_at > _time.time() * 1000:  # expiresAt is in ms
+                        logger.debug("Using CLAUDE_CODE_OAUTH_TOKEN (parsed JSON, valid)")
+                        return cc_data["accessToken"]
+                    # Expired — try refresh if we have a refresh token
+                    if cc_data.get("refreshToken"):
+                        logger.debug("CLAUDE_CODE_OAUTH_TOKEN expired, attempting refresh")
+                        refreshed = _refresh_oauth_token(cc_data)
+                        if refreshed:
+                            return refreshed
+                    logger.debug("CLAUDE_CODE_OAUTH_TOKEN expired, no valid refresh")
+            except (ValueError, KeyError, TypeError):
+                pass  # Not valid JSON, treat as plain token below
+
         preferred = _prefer_refreshable_claude_code_token(cc_token, creds)
         if preferred:
             return preferred

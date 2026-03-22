@@ -366,38 +366,45 @@ struct OwnerView: View {
 
 /// Settings panel with General + Connections subtabs.
 struct SettingsView: View {
-    @State private var subtab = "General"
-
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                ForEach(["General", "Connections"], id: \.self) { tab in
-                    Button {
-                        subtab = tab
-                    } label: {
-                        Text(tab)
-                            .font(.system(size: 13, weight: .medium))
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 16)
-                            .overlay(alignment: .bottom) {
-                                if subtab == tab {
-                                    Rectangle().fill(.tint).frame(height: 2)
-                                }
-                            }
-                            .foregroundStyle(subtab == tab ? VultiTheme.inkSoft : VultiTheme.inkDim)
-                    }
-                    .buttonStyle(.plain)
+        HStack(spacing: 0) {
+            // Left: General
+            VStack(spacing: 0) {
+                HStack {
+                    Text("General")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                    Spacer()
                 }
-                Spacer()
-            }
-            .padding(.horizontal, 8)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
 
-            Divider()
+                Divider()
 
-            ScrollView {
-                if subtab == "General" {
+                ScrollView {
                     GeneralSettingsView().padding(24)
-                } else {
+                }
+            }
+
+            // Divider
+            Rectangle()
+                .fill(VultiTheme.border)
+                .frame(width: 1)
+
+            // Right: Connections
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Connections")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+
+                Divider()
+
+                ScrollView {
                     ConnectionsSettingsView().padding(24)
                 }
             }

@@ -36,7 +36,7 @@ struct AgentDetailView: View {
                 )
                 .frame(width: showScratchPad
                        ? geo.size.width / 3
-                       : ((isOnboarding || isWizard) ? geo.size.width / 3 : geo.size.width))
+                       : ((isOnboarding || isWizard) ? geo.size.width / 2 : geo.size.width))
 
                 if (isOnboarding || isWizard) && !showScratchPad {
                     Spacer()

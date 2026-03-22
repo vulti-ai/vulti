@@ -272,10 +272,18 @@ def resolve_runtime_provider(
         from agent.anthropic_adapter import resolve_anthropic_token
         token = resolve_anthropic_token()
         if not token:
-            raise AuthError(
-                "No Anthropic credentials found. Set ANTHROPIC_TOKEN or ANTHROPIC_API_KEY, "
-                "run 'claude setup-token', or authenticate with 'claude /login'."
+            # Fall back to OpenRouter if available, instead of hard failing
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "Anthropic credentials not found or expired, falling back to OpenRouter"
             )
+            fallback = _resolve_openrouter_runtime(
+                requested_provider=requested_provider,
+                explicit_api_key=explicit_api_key,
+                explicit_base_url=explicit_base_url,
+            )
+            fallback["requested_provider"] = requested_provider
+            return fallback
         return {
             "provider": "anthropic",
             "api_mode": "anthropic_messages",

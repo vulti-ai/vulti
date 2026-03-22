@@ -479,6 +479,12 @@ struct SquadCanvas: View {
                                 }
                         )
                     }
+
+                case .add:
+                    AddAgentNode()
+                        .highPriorityGesture(
+                            TapGesture().onEnded { app.openCreate() }
+                        )
                 }
             }
             .position(pos)
