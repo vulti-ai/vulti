@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 _AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9\-]{0,31}$")
 _RESERVED_IDS = frozenset({"agent", "agents", "api", "ws", "system", "interagent", "everyone", "default"})
 
-JANITOR_AGENT_ID = "janitor"
+HECTOR_AGENT_ID = "hector"
 
 
 @dataclass
@@ -195,8 +195,8 @@ class AgentRegistry:
         if agent_id not in data.get("agents", {}):
             return False
 
-        if agent_id == JANITOR_AGENT_ID:
-            raise ValueError("Cannot delete the janitor system agent")
+        if agent_id == HECTOR_AGENT_ID:
+            raise ValueError("Cannot delete the hector system agent")
 
         # Remove directory
         agent_home = self.agent_home(agent_id)
@@ -278,8 +278,14 @@ class AgentRegistry:
         # If agents dir already has a registry, no migration needed
         if self._registry_path.exists():
             return False
-        # If there are config files at the root level, migration is needed
-        return (self._home / "config.yaml").exists() or (self._home / "SOUL.md").exists()
+        # If the agents directory already exists (e.g. after a reset), skip migration
+        if (self._home / "agents").exists():
+            return False
+        # Only real files (not symlinks) at root indicate a genuine old single-agent install.
+        # The migration itself leaves symlinks, so symlinks should not re-trigger it.
+        config_real = (self._home / "config.yaml").exists() and not (self._home / "config.yaml").is_symlink()
+        soul_real = (self._home / "SOUL.md").exists() and not (self._home / "SOUL.md").is_symlink()
+        return config_real or soul_real
 
     def migrate_single_agent(self) -> str:
         """Migrate existing single-agent installation to multi-agent layout.
@@ -378,8 +384,8 @@ class AgentRegistry:
         # v1 → v2: remove default_agent concept
         self._migrate_v1_to_v2()
 
-        # Ensure janitor exists (covers migrations and upgrades)
-        self._seed_janitor()
+        # Ensure hector exists (covers migrations and upgrades)
+        self._seed_hector()
 
         # Migrate allowed_connections from registry to per-agent permissions.json
         self._migrate_permissions()
@@ -463,7 +469,7 @@ class AgentRegistry:
             soul_path.write_text(soul_md or DEFAULT_SOUL_MD, encoding="utf-8")
 
     def _seed_fresh_install(self) -> None:
-        """Create empty registry with janitor for fresh installations.
+        """Create empty registry with hector for fresh installations.
 
         No default agent is created — the user must create their first agent
         explicitly through onboarding.
@@ -475,51 +481,56 @@ class AgentRegistry:
         self._save()
         logger.info("Fresh install: created empty registry (no default agent)")
 
-        # Seed the janitor system agent
-        self._seed_janitor()
+        # Seed the hector system agent
+        self._seed_hector()
 
-    def _seed_janitor(self) -> None:
-        """Create the janitor system agent if it doesn't already exist."""
-        janitor_id = JANITOR_AGENT_ID
+    def _seed_hector(self) -> None:
+        """Create the hector system agent if it doesn't already exist."""
+        hector_id = HECTOR_AGENT_ID
         data = self._load()
 
-        if janitor_id in data.get("agents", {}):
+        if hector_id in data.get("agents", {}):
             return  # Already exists
 
-        from vulti_cli.default_soul import JANITOR_CRON_JOBS, JANITOR_SOUL_MD
+        from vulti_cli.default_soul import HECTOR_CRON_JOBS, HECTOR_SOUL_MD
 
         # Create directory structure
-        agent_home = self.agent_home(janitor_id)
+        agent_home = self.agent_home(hector_id)
         for subdir in ("memories", "cron", "sessions", "skills"):
             (agent_home / subdir).mkdir(parents=True, exist_ok=True)
 
-        self._seed_defaults(janitor_id, soul_md=JANITOR_SOUL_MD)
+        self._seed_defaults(hector_id, soul_md=HECTOR_SOUL_MD)
+
+        # Write role.txt
+        role_path = agent_home / "role.txt"
+        if not role_path.exists():
+            role_path.write_text("wizard", encoding="utf-8")
 
         # Seed default cron jobs
-        self._seed_janitor_cron(janitor_id)
+        self._seed_hector_cron(hector_id)
 
         # Register
         now = datetime.now(timezone.utc).isoformat()
         if "agents" not in data:
             data["agents"] = {}
-        data["agents"][janitor_id] = {
-            "id": janitor_id,
-            "name": "Janitor",
-            "role": "ops",
+        data["agents"][hector_id] = {
+            "id": hector_id,
+            "name": "Hector",
+            "role": "wizard",
             "status": "active",
             "created_at": now,
             "created_from": None,
-            "avatar": "⚙",
-            "description": "System health agent. Runs daily checks, cleans up, and reports issues.",
+            "avatar": "🧙",
+            "description": "System wizard. Runs daily checks, cleans up, and reports issues.",
         }
         self._save()
-        logger.info("Seeded janitor agent '%s'", janitor_id)
+        logger.info("Seeded hector agent '%s'", hector_id)
 
-    def _seed_janitor_cron(self, agent_id: str) -> None:
-        """Seed default cron jobs for the janitor agent."""
+    def _seed_hector_cron(self, agent_id: str) -> None:
+        """Seed default cron jobs for the hector agent."""
         import uuid
 
-        from vulti_cli.default_soul import JANITOR_CRON_JOBS
+        from vulti_cli.default_soul import HECTOR_CRON_JOBS
 
         jobs_path = self.agent_cron_dir(agent_id) / "jobs.json"
         if jobs_path.exists():
@@ -527,7 +538,7 @@ class AgentRegistry:
 
         now = datetime.now(timezone.utc).isoformat()
         jobs = []
-        for template in JANITOR_CRON_JOBS:
+        for template in HECTOR_CRON_JOBS:
             job = {
                 "id": uuid.uuid4().hex[:12],
                 "name": template["name"],
@@ -553,7 +564,7 @@ class AgentRegistry:
                 "last_run_at": None,
                 "last_status": None,
                 "last_error": None,
-                "deliver": "local",
+                "deliver": "matrix",
                 "origin": None,
                 "agent": agent_id,
             }

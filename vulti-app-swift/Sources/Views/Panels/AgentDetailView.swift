@@ -9,17 +9,35 @@ struct AgentDetailView: View {
     @State private var pollTimer: Timer?
     @State private var currentSessionId: String? = nil
 
+    private var isOnboarding: Bool {
+        app.agent(byId: agentId)?.status == "onboarding"
+    }
+
+    private var showScratchPad: Bool {
+        scratchPadHasContent
+    }
+
     var body: some View {
         GeometryReader { geo in
             HStack(spacing: 0) {
+                if isOnboarding && !showScratchPad {
+                    Spacer()
+                }
+
                 ChatView(
                     agentId: agentId,
                     autoIntrospect: true,
                     viewingContext: expandedWidget?.contextLabel
                 )
-                .frame(width: scratchPadHasContent ? geo.size.width / 3 : geo.size.width)
+                .frame(width: showScratchPad
+                       ? geo.size.width / 3
+                       : (isOnboarding ? geo.size.width / 3 : geo.size.width))
 
-                if scratchPadHasContent {
+                if isOnboarding && !showScratchPad {
+                    Spacer()
+                }
+
+                if showScratchPad {
                     // Static 1px divider
                     Rectangle()
                         .fill(VultiTheme.border)

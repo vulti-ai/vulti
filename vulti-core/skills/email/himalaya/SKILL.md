@@ -4,6 +4,11 @@ description: CLI to manage emails via IMAP/SMTP. Use himalaya to list, read, wri
 version: 1.0.0
 author: community
 license: MIT
+connection:
+  name: email
+  type: email
+  description: "Email account (IMAP/SMTP)"
+  tags: [email, imap, smtp]
 metadata:
   vulti:
     tags: [Email, IMAP, SMTP, CLI, Communication]
@@ -16,6 +21,12 @@ prerequisites:
 
 Himalaya is a CLI email client that lets you manage emails from the terminal using IMAP, SMTP, Notmuch, or Sendmail backends.
 
+## Configuration
+
+Vulti manages your himalaya config automatically. Email accounts are stored as connections and scoped per-agent. The `HIMALAYA_CONFIG` environment variable is set at runtime to point to your agent-specific config.
+
+You only see accounts that are in your connection allowlist. Use `himalaya account list` to see available accounts.
+
 ## References
 
 - `references/configuration.md` (config file setup + IMAP/SMTP authentication)
@@ -24,8 +35,7 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 ## Prerequisites
 
 1. Himalaya CLI installed (`himalaya --version` to verify)
-2. A configuration file at `~/.config/himalaya/config.toml`
-3. IMAP/SMTP credentials configured (password stored securely)
+2. Email connections configured in Vulti Hub (type: email)
 
 ### Installation
 

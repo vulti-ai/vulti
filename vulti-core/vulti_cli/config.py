@@ -88,12 +88,12 @@ def _secure_file(path):
 
 
 def _ensure_default_soul_md(home: Path) -> None:
-    """Seed a default SOUL.md into VULTI_HOME if the user doesn't have one yet."""
-    soul_path = home / "SOUL.md"
-    if soul_path.exists():
-        return
-    soul_path.write_text(DEFAULT_SOUL_MD, encoding="utf-8")
-    _secure_file(soul_path)
+    """Legacy — no-op. Each agent gets its own SOUL.md during creation.
+
+    A root-level SOUL.md falsely triggers single-agent migration, so we
+    never create one.  Kept as a stub for callers that still reference it.
+    """
+    pass
 
 
 def ensure_vulti_home():

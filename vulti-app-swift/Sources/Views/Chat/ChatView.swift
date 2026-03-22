@@ -37,7 +37,16 @@ struct ChatView: View {
 
             // Messages area
             let visibleMessages = ws.messages.filter { $0.content != "[status check]" }
-            if visibleMessages.isEmpty && !ws.isStreaming {
+            let hasAgentReply = visibleMessages.contains { $0.role == "assistant" }
+            let isWaitingFirstReply = (ws.isTyping || ws.isStreaming) && !hasAgentReply && ws.streamingContent.isEmpty
+            let agentIsOnboarding = app.agent(byId: agentId)?.status == "onboarding"
+
+            if (visibleMessages.isEmpty && agentIsOnboarding) || isWaitingFirstReply {
+                // Show crafting animation for onboarding agents or while waiting for first AI reply
+                Spacer()
+                CraftingAnimation()
+                Spacer()
+            } else if visibleMessages.isEmpty && !ws.isStreaming {
                 Spacer()
                 Text("Start a conversation with \(agentId)")
                     .font(.system(size: 13))
@@ -390,6 +399,13 @@ struct ChatView: View {
     /// Trigger introspection — creates a new session and sends a hidden trigger message.
     private func triggerIntrospect() {
         Task {
+            // Re-check for a fresh session — one may have been created since we last loaded
+            let freshSessions = (try? await app.client.listSessions(agentId: agentId)) ?? []
+            if let existing = freshSessions.first(where: { isSessionFresh($0) }) {
+                switchToSession(existing)
+                return
+            }
+
             let dateStr = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)
             let sessionName = isNewAgent ? "Onboarding" : "Check-in: \(dateStr)"
             do {
@@ -614,6 +630,68 @@ struct ThinkingAvatar: View {
         .onAppear {
             withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
                 rotation = 360
+            }
+        }
+    }
+}
+
+// MARK: - Crafting Animation
+
+/// Full-screen rainbow shimmer shown while waiting for the first AI response.
+struct CraftingAnimation: View {
+    @State private var rotation: Double = 0
+    @State private var pulse: CGFloat = 0.8
+
+    private let rainbowColors: [Color] = [
+        Color(hex: "#F28B6D"),  // coral
+        Color(hex: "#F0A84A"),  // amber
+        Color(hex: "#4AC6B7"),  // teal
+        Color(hex: "#7BC4F0"),  // sky
+        Color(hex: "#B094EF"),  // violet
+        Color(hex: "#F28B6D"),  // coral wrap
+    ]
+
+    var body: some View {
+        VStack(spacing: 24) {
+            // Spinning rainbow ring
+            ZStack {
+                Circle()
+                    .stroke(
+                        AngularGradient(
+                            colors: rainbowColors,
+                            center: .center,
+                            angle: .degrees(rotation)
+                        ),
+                        lineWidth: 4
+                    )
+                    .frame(width: 80, height: 80)
+
+                Circle()
+                    .fill(VultiTheme.paperDeep.opacity(0.6))
+                    .frame(width: 68, height: 68)
+
+                Image(systemName: "sparkles")
+                    .font(.system(size: 28))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [VultiTheme.primary, VultiTheme.teal],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .scaleEffect(pulse)
+            }
+
+            Text("Crafting your agent...")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(VultiTheme.inkSoft)
+        }
+        .onAppear {
+            withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+                rotation = 360
+            }
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                pulse = 1.1
             }
         }
     }

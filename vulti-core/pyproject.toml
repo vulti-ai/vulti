@@ -13,8 +13,8 @@ license = { text = "MIT" }
 dependencies = [
   # Hermes Agent — the upstream single-agent runtime (provides AIAgent,
   # tool registry, gateway, platform adapters, skills, memory, cron).
-  # Pin to a specific tag for reproducible builds.
-  "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@v2026.3.17",
+  # Track main branch to pick up fixes between releases.
+  "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@main",
   # Vulti-specific deps not covered by hermes-agent
   "pyyaml",
   "python-dotenv",

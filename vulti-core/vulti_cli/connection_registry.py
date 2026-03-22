@@ -382,6 +382,16 @@ def inject_credentials(agent_id: Optional[str] = None):
         originals[key] = os.environ.get(key)
         os.environ[key] = value
 
+    # Generate per-agent himalaya config if agent has email connections
+    try:
+        from tools.himalaya_config import generate_himalaya_config
+        himalaya_path = generate_himalaya_config(agent_id)
+        if himalaya_path:
+            originals["HIMALAYA_CONFIG"] = os.environ.get("HIMALAYA_CONFIG")
+            os.environ["HIMALAYA_CONFIG"] = str(himalaya_path)
+    except Exception:
+        pass
+
     try:
         yield
     finally:

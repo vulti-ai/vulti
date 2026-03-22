@@ -69,11 +69,12 @@ class MatrixAdapter(BasePlatformAdapter):
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.MATRIX)
 
-        self.homeserver_url: str = config.extra.get("homeserver_url", "http://127.0.0.1:6167")
-        self.user_id: str = config.extra.get("user_id", "")
-        self.password: str = config.extra.get("password", "")
-        self.access_token: str = config.extra.get("access_token", "")
-        self.server_name: str = config.extra.get("server_name", "localhost")
+        extra = config.extra if config and config.extra else {}
+        self.homeserver_url: str = extra.get("homeserver_url") or "http://127.0.0.1:6167"
+        self.user_id: str = extra.get("user_id") or ""
+        self.password: str = extra.get("password") or ""
+        self.access_token: str = extra.get("access_token") or ""
+        self.server_name: str = extra.get("server_name") or "localhost"
 
         # Primary client (used for the main sync loop)
         self._client = None  # nio.AsyncClient

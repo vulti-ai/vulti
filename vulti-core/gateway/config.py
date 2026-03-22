@@ -522,7 +522,7 @@ def load_agent_routing() -> dict:
         {
             "telegram:dm:*": "kat",
             "telegram:group:-1001234567890": "researcher",
-            "*": "janitor"
+            "*": "hector"
         }
     """
     _home = get_vulti_home()

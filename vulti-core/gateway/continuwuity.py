@@ -210,7 +210,7 @@ async def _try_cargo_install(target_path: Path) -> Optional[Path]:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            cargo, "build", "--release",
+            cargo, "build", "--release", "-p", "conduwuit",
             cwd=str(build_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

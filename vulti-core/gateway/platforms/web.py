@@ -2004,11 +2004,15 @@ class WebAdapter(BasePlatformAdapter):
             except Exception as e:
                 errors.append(f"agent {agent_id}: {e}")
 
-        # 2. Wipe the entire ~/.vulti/ directory
-        _safe_rmtree(home)
-
-        # 3. Recreate the empty home directory so the app can keep running
-        home.mkdir(parents=True, exist_ok=True)
+        # 2. Wipe ~/.vulti/ except bin/ (installed binaries), .env (credentials), models/ (large downloads)
+        preserve = {"bin", "models", ".env", "auth.json", "auth.lock", "web_token"}
+        for item in home.iterdir():
+            if item.name in preserve:
+                continue
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                item.unlink(missing_ok=True)
 
         return {
             "ok": True,
@@ -2702,21 +2706,63 @@ class WebAdapter(BasePlatformAdapter):
             })
         return secrets
 
+    # Map of env var keys → connection entries to auto-create
+    _ENV_TO_CONNECTION = {
+        "OPENROUTER_API_KEY": ("openrouter", "api_key", "OpenRouter — LLM provider", ["llm", "ai"]),
+        "ANTHROPIC_API_KEY": ("anthropic", "api_key", "Anthropic — Claude models", ["llm", "ai"]),
+        "OPENAI_API_KEY": ("openai", "api_key", "OpenAI — GPT models", ["llm", "ai"]),
+        "DEEPSEEK_API_KEY": ("deepseek", "api_key", "DeepSeek — LLM provider", ["llm", "ai"]),
+        "GOOGLE_API_KEY": ("google-ai", "api_key", "Google AI — Gemini models", ["llm", "ai"]),
+        "VENICE_API_KEY": ("venice", "api_key", "Venice — LLM provider", ["llm", "ai"]),
+        "FIRECRAWL_API_KEY": ("firecrawl", "api_key", "Firecrawl — web scraping", ["web", "scraping"]),
+        "FAL_KEY": ("fal-ai", "api_key", "FAL.ai — image generation", ["media", "images"]),
+        "BROWSERBASE_API_KEY": ("browserbase", "api_key", "Browserbase — browser automation", ["web", "browser"]),
+        "ELEVENLABS_API_KEY": ("elevenlabs", "api_key", "ElevenLabs — text-to-speech", ["voice", "tts"]),
+        "TELEGRAM_BOT_TOKEN": ("telegram", "api_key", "Telegram — bot messaging", ["messaging", "bot"]),
+        "BLAND_API_KEY": ("bland-ai", "api_key", "Bland.ai — AI phone calls", ["voice", "ai"]),
+        "WANDB_API_KEY": ("wandb", "api_key", "Weights & Biases — ML tracking", ["analytics", "ml"]),
+        "HONCHO_API_KEY": ("honcho", "api_key", "Honcho — memory and personalization", ["memory", "ai"]),
+        "TINKER_API_KEY": ("tinker", "api_key", "Tinker — tool provider", ["tools"]),
+    }
+
     def _add_secret(self, key: str, value: str) -> dict:
-        """Add or update an API key in ~/.vulti/.env."""
+        """Add or update an API key in ~/.vulti/.env and create a connection entry."""
         key = key.strip()
         value = value.strip()
         if not key or not value:
             raise HTTPException(status_code=400, detail="Both key and value are required")
 
-        # Validate key name format
         import re
         if not re.match(r'^[A-Z][A-Z0-9_]*$', key):
             raise HTTPException(status_code=400, detail="Key must be uppercase alphanumeric with underscores")
 
         from vulti_cli.config import save_env_value
         save_env_value(key, value)
+
+        # Auto-create connection entry if this is a known key
+        if key in self._ENV_TO_CONNECTION:
+            self._ensure_connection(*self._ENV_TO_CONNECTION[key])
+
+        # Always ensure matrix connection exists (default messaging bus)
+        self._ensure_connection("matrix", "custom", "Matrix — agent communication bus", ["messaging", "internal"])
+
         return {"ok": True, "key": key}
+
+    def _ensure_connection(self, name: str, conn_type: str, description: str, tags: list) -> None:
+        """Create a connection entry if it doesn't already exist."""
+        try:
+            from vulti_cli.connection_registry import ConnectionRegistry, ConnectionEntry
+            registry = ConnectionRegistry(self._get_vulti_home())
+            if registry.get(name) is not None:
+                return
+            # Don't re-add if user explicitly deleted it
+            if name in registry._get_deleted():
+                return
+            registry.add(name, ConnectionEntry(
+                name=name, type=conn_type, description=description, tags=tags,
+            ))
+        except Exception as e:
+            logger.debug("Could not auto-create connection '%s': %s", name, e)
 
     def _delete_secret(self, key: str) -> dict:
         """Remove an API key from ~/.vulti/.env."""

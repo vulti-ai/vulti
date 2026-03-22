@@ -91,6 +91,12 @@ def modify_pane(args, **kw) -> str:
     if tab == "chat" and not session_id:
         return json.dumps({"success": False, "error": "No active session for 'chat' tab."})
 
+    # Coerce widgets — agents sometimes pass a bare string instead of a dict
+    widgets = [
+        w if isinstance(w, dict) else {"type": str(w)}
+        for w in widgets
+    ]
+
     # Validate widget types
     for w in widgets:
         wtype = w.get("type", "")

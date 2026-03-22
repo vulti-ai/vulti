@@ -86,6 +86,17 @@ struct SetupView: View {
         }
         .onAppear { startLogTail() }
         .onDisappear { logTask?.cancel() }
+        .task {
+            // Keep polling health — the gateway may come up after a long first-time build
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                if await app.client.checkHealth() {
+                    app.isGatewayRunning = true
+                    await app.refreshAgents()
+                    break
+                }
+            }
+        }
     }
 
     private func startLogTail() {

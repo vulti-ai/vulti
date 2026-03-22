@@ -37,8 +37,17 @@ struct ScratchPadView: View {
     @State private var suppressPoll = false
     @State private var draggingRowId: String?
     @State private var refreshTick: Int = 0
+    @State private var hasSoulRevealed = false
     /// Cached rows — rebuilt when widgets change, reorderable by drag
     @State private var rows: [WidgetRow] = []
+
+    private var isOnboarding: Bool {
+        app.agent(byId: agentId)?.status == "onboarding"
+    }
+
+    private var availableTabs: [PaneTab] {
+        isOnboarding ? [.chat] : PaneTab.allCases
+    }
 
     private var widgets: [PaneWidget] {
         activeTab == .chat ? chatWidgets : homeWidgets
@@ -57,6 +66,7 @@ struct ScratchPadView: View {
             }
         }
         .onAppear {
+            if isOnboarding { activeTab = .chat }
             Task { await loadWidgets() }
             startPolling()
         }
@@ -91,7 +101,7 @@ struct ScratchPadView: View {
 
     private var tabHeader: some View {
         HStack(spacing: 0) {
-            ForEach(PaneTab.allCases, id: \.self) { tab in
+            ForEach(availableTabs, id: \.self) { tab in
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { activeTab = tab }
                 } label: {
@@ -708,9 +718,14 @@ struct ScratchPadView: View {
                 // Home widgets
                 let homeAll = (tabs["home"] ?? []).compactMap { $0.toPaneWidget() }
                 let filteredHome = deletedIds.isEmpty ? homeAll : homeAll.filter { !deletedIds.contains($0.id) }
+                let hadHomeWidgets = !homeWidgets.isEmpty
                 if Set(filteredHome.map(\.id)) != Set(homeWidgets.map(\.id))
                     || filteredHome.map(\.id) != homeWidgets.map(\.id) {
                     withAnimation(.spring(duration: 0.3)) { homeWidgets = filteredHome }
+                }
+                // Auto-switch to Home tab when agent creates home content for the first time
+                if !hadHomeWidgets && !filteredHome.isEmpty {
+                    withAnimation(.easeInOut(duration: 0.2)) { activeTab = .home }
                 }
 
                 // Chat widgets
@@ -722,13 +737,22 @@ struct ScratchPadView: View {
                     withAnimation(.spring(duration: 0.3)) { chatWidgets = filteredChat }
                 }
                 // Auto-switch to Chat tab when agent adds the first chat widget
-                if !hadChatWidgets && !filteredChat.isEmpty {
+                if !hadChatWidgets && !filteredChat.isEmpty && hadHomeWidgets {
                     withAnimation(.easeInOut(duration: 0.2)) { activeTab = .chat }
                 }
             }
 
             // Bump tick so live widgets re-fetch data
             refreshTick += 1
+
+            // Auto-switch to Home when soul first appears (agent finished setting up identity)
+            if !hasSoulRevealed && activeTab == .chat {
+                if let soul = try? await app.client.getSoul(agentId: agentId),
+                   !soul.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    hasSoulRevealed = true
+                    withAnimation(.easeInOut(duration: 0.2)) { activeTab = .home }
+                }
+            }
 
             if (!homeWidgets.isEmpty || !chatWidgets.isEmpty) && !hasContent {
                 hasContent = true

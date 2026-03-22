@@ -281,10 +281,14 @@ def _transcribe_local(file_path: str, model_name: str) -> Dict[str, Any]:
 
     try:
         from faster_whisper import WhisperModel
+        # Cache models inside ~/.vulti/models/ so factory reset preserves them
+        _models_dir = Path(os.getenv("VULTI_HOME", Path.home() / ".vulti")) / "models"
+        _models_dir.mkdir(parents=True, exist_ok=True)
         # Lazy-load the model (downloads on first use, ~150 MB for 'base')
         if _local_model is None or _local_model_name != model_name:
             logger.info("Loading faster-whisper model '%s' (first load downloads the model)...", model_name)
-            _local_model = WhisperModel(model_name, device="auto", compute_type="auto")
+            _local_model = WhisperModel(model_name, device="auto", compute_type="auto",
+                                        download_root=str(_models_dir))
             _local_model_name = model_name
 
         segments, info = _local_model.transcribe(file_path, beam_size=5)

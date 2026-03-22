@@ -9,9 +9,9 @@ struct OnboardingView: View {
     @State private var step = 0
 
     // Step 1 — Identity
-    @State private var name = ""
-    @State private var password = ""
-    @State private var aboutMe = ""
+    @State private var name = "JP"
+    @State private var password = "test1234"
+    @State private var aboutMe = "Builder and founder living in Melbourne"
 
     // Step 2+3 — Providers
     @State private var providers: [GatewayClient.ProviderResponse] = []
@@ -184,6 +184,7 @@ struct OnboardingView: View {
             secrets = (try? await app.client.listSecrets()) ?? []
             autoSelectFirstModel()
             checkTailscale()
+            checkWhisperInstalled()
             await fetchHomeserverURL()
         }
     }
@@ -209,7 +210,7 @@ struct OnboardingView: View {
         case 2: return messagingSubStep == 0 ? "Download Element X" : "Sign In"
         case 3: return "Intelligence"
         case 4: return "Providers"
-        case 5: return "Create Agents"
+        case 5: return "Meet Hector"
         default: return ""
         }
     }
@@ -223,7 +224,7 @@ struct OnboardingView: View {
             : "Sign in manually to Element X with your credentials."
         case 3: return "Connect an AI provider so your agents can think. This is required."
         case 4: return "Optional providers for speech, phone calls, and image generation."
-        case 5: return "Set up your system agent and create your first assistant."
+        case 5: return "Hector is your wizard — he manages connections, keeps agents healthy, and maintains system integrity."
         default: return ""
         }
     }
@@ -968,109 +969,87 @@ struct OnboardingView: View {
         return nsImage
     }
 
-    // MARK: - Step 5: Create Agents
+    // MARK: - Step 5: Meet Hector
 
-    @State private var janitorEnabled = false
-    @State private var isActivatingJanitor = false
+    @State private var hectorEnabled = false
+    @State private var isActivatingHector = false
 
-    private var janitorExists: Bool {
-        app.agentList.contains { $0.id == "janitor" && $0.status == "active" }
+    private var hectorExists: Bool {
+        app.agentList.contains { $0.id == "hector" && $0.status == "active" }
     }
 
     private var completeStep: some View {
         VStack(spacing: 20) {
 
-            // ── Janitor ──
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Text("⚙")
-                        .font(.system(size: 20))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Janitor")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(VultiTheme.inkSoft)
-                        Text("System agent that keeps your workspace healthy — runs daily checks, cleans up sessions, and reports issues.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(VultiTheme.inkMuted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
-                if janitorEnabled || janitorExists {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(VultiTheme.teal)
-                            .font(.system(size: 13))
-                        Text("Active")
-                            .font(.system(size: 12))
-                            .foregroundStyle(VultiTheme.teal)
-                    }
-                    .padding(.leading, 28)
-                } else {
-                    Button {
-                        activateJanitor()
-                    } label: {
-                        if isActivatingJanitor {
-                            ProgressView()
-                                .controlSize(.small)
-                                .frame(width: 80)
-                        } else {
-                            Text("Turn On")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                    }
-                    .buttonStyle(.vultiSecondary)
-                    .disabled(isActivatingJanitor)
-                    .padding(.leading, 28)
+            // ── Hector ──
+            HStack(spacing: 8) {
+                Text("🧙")
+                    .font(.system(size: 20))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hector")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                    Text("He'll set up your first connections — email, files, calendar — and help you create your first agent.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
-            // ── Create first agent ──
-            VStack(spacing: 8) {
-                Text("Now create your first agent.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(VultiTheme.inkSoft)
-
+            if hectorEnabled || hectorExists {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(VultiTheme.teal)
+                        .font(.system(size: 13))
+                    Text("Active")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.teal)
+                }
+            } else {
                 Button {
-                    Persistence.onboardingComplete = true
-                    app.onboardingComplete = true
-                    Task {
-                        await app.refreshAgents()
-                        await MainActor.run {
-                            app.openCreate()
-                        }
-                    }
+                    activateHector()
                 } label: {
-                    Text("Create Agent")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(maxWidth: .infinity)
+                    if isActivatingHector {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Start Hector")
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                    }
                 }
                 .buttonStyle(.vultiPrimary)
                 .controlSize(.large)
+                .disabled(isActivatingHector)
             }
         }
     }
 
     // MARK: - Actions
 
-    private func activateJanitor() {
-        isActivatingJanitor = true
+    private func activateHector() {
+        isActivatingHector = true
         Task {
             do {
-                // Janitor is auto-seeded by the registry, just needs Matrix onboarding
-                _ = try? await app.client.updateAgent("janitor", updates: [
+                // Hector is auto-seeded by the registry, just needs Matrix onboarding
+                _ = try? await app.client.updateAgent("hector", updates: [
                     "allowedConnections": "matrix"
                 ])
-                try? await app.client.installSkill(agentId: "janitor", name: "matrix")
-                try? await app.client.onboardAgentToMatrix(agentId: "janitor")
-                try? await app.client.finalizeOnboarding(agentId: "janitor", role: "ops")
+                try? await app.client.installSkill(agentId: "hector", name: "matrix")
+                try? await app.client.onboardAgentToMatrix(agentId: "hector")
+                try? await app.client.finalizeOnboarding(agentId: "hector", role: "wizard")
                 await app.refreshAgents()
                 await MainActor.run {
-                    janitorEnabled = true
-                    isActivatingJanitor = false
+                    hectorEnabled = true
+                    isActivatingHector = false
+                    // Complete onboarding and open a chat with Hector
+                    Persistence.onboardingComplete = true
+                    app.onboardingComplete = true
+                    app.openAgent("hector")
                 }
             }
         }
@@ -1190,6 +1169,21 @@ struct OnboardingView: View {
             secrets = (try? await app.client.listSecrets()) ?? []
             autoSelectFirstModel()
             await MainActor.run { completion() }
+        }
+    }
+
+    private func checkWhisperInstalled() {
+        Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lc", "python3 -c 'import faster_whisper' 2>/dev/null"]
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            try? process.run()
+            process.waitUntilExit()
+            await MainActor.run {
+                whisperDownloaded = process.terminationStatus == 0
+            }
         }
     }
 
