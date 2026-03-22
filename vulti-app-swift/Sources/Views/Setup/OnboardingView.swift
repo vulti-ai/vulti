@@ -1195,16 +1195,19 @@ struct OnboardingView: View {
 
     private func downloadWhisper() {
         isDownloadingWhisper = true
-        Task {
-            // pip install faster-whisper in the gateway's Python environment
+        Task.detached {
+            // Use login shell so the gateway's venv pip is on PATH
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["pip", "install", "-U", "faster-whisper", "--quiet"]
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lc", "pip3 install -U faster-whisper --quiet"]
             do {
                 try process.run()
                 process.waitUntilExit()
                 await MainActor.run {
                     whisperDownloaded = process.terminationStatus == 0
+                    if !whisperDownloaded {
+                        self.error = "Whisper install failed (exit \(process.terminationStatus))"
+                    }
                     isDownloadingWhisper = false
                 }
             } catch {
