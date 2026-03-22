@@ -27,4 +27,10 @@ enum Persistence {
         get { defaults.string(forKey: "vulti-theme") ?? "dark" }
         set { defaults.set(newValue, forKey: "vulti-theme") }
     }
+
+    // vulti_onboarding_complete
+    static var onboardingComplete: Bool {
+        get { defaults.bool(forKey: "vulti_onboarding_complete") }
+        set { defaults.set(newValue, forKey: "vulti_onboarding_complete") }
+    }
 }

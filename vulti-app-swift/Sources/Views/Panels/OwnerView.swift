@@ -642,6 +642,10 @@ struct GeneralSettingsView: View {
             try? await app.client.resetEverything()
             await app.refreshAgents()
             showResetConfirm = false
+            // Close settings panel, reset onboarding flag, go back to home → onboarding
+            app.closePanel()
+            Persistence.onboardingComplete = false
+            app.onboardingComplete = false
         }
     }
 

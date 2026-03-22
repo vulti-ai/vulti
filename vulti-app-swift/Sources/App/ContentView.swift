@@ -16,10 +16,12 @@ struct ContentView: View {
 
             if !app.hasToken {
                 LoginView()
-            } else if app.isGatewayRunning {
-                MainView()
-            } else {
+            } else if !app.isGatewayRunning {
                 SetupView()
+            } else if !app.onboardingComplete {
+                OnboardingView()
+            } else {
+                MainView()
             }
 
             // Notifications overlay (top-right, max 3)
@@ -35,6 +37,7 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: app.hasToken)
         .animation(.easeInOut(duration: 0.2), value: app.isGatewayRunning)
+        .animation(.easeInOut(duration: 0.25), value: app.onboardingComplete)
         .animation(.easeInOut(duration: 0.15), value: app.notifications.count)
     }
 }

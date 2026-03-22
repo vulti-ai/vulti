@@ -20,6 +20,7 @@ final class AppState {
     // MARK: - UI State
     var hasToken = false
     var isGatewayRunning = false
+    var onboardingComplete = Persistence.onboardingComplete
     var activeAgentId: String?
     var panelMode: PanelMode?
     var notifications: [AppNotification] = []
@@ -64,6 +65,11 @@ final class AppState {
         guard hasToken else { return }
         isGatewayRunning = await client.checkHealth()
         await refreshAgents()
+        // Auto-complete onboarding for existing users who already have an owner profile
+        if !onboardingComplete, let name = ownerInfo?.name, !name.isEmpty {
+            Persistence.onboardingComplete = true
+            onboardingComplete = true
+        }
         startRefreshTimer()
     }
 

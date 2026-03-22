@@ -1983,22 +1983,13 @@ class WebAdapter(BasePlatformAdapter):
         home = self._get_vulti_home().resolve()
 
         def _safe_rmtree(path: Path) -> None:
-            """Only delete if path is strictly inside the vulti home directory."""
+            """Only delete if path is the vulti home directory or inside it."""
             resolved = path.resolve()
-            if not str(resolved).startswith(str(home) + "/") and resolved != home:
+            if resolved != home and not str(resolved).startswith(str(home) + "/"):
                 logger.warning("Reset safety: refusing to delete '%s' (outside %s)", resolved, home)
                 return
             if resolved.exists():
                 shutil.rmtree(resolved, ignore_errors=True)
-
-        def _safe_unlink(path: Path) -> None:
-            """Only delete if path is strictly inside the vulti home directory."""
-            resolved = path.resolve()
-            if not str(resolved).startswith(str(home) + "/"):
-                logger.warning("Reset safety: refusing to delete '%s' (outside %s)", resolved, home)
-                return
-            if resolved.exists():
-                resolved.unlink(missing_ok=True)
 
         registry = self._get_agent_registry()
         deleted_agents = []
@@ -2013,57 +2004,11 @@ class WebAdapter(BasePlatformAdapter):
             except Exception as e:
                 errors.append(f"agent {agent_id}: {e}")
 
-        # 2. Delete all connections
-        try:
-            from vulti_cli.connection_registry import ConnectionRegistry
-            conn_reg = ConnectionRegistry(home)
-            connections = conn_reg.load()
-            for name in list(connections.keys()):
-                conn_reg.remove(name)
-        except Exception as e:
-            errors.append(f"connections: {e}")
+        # 2. Wipe the entire ~/.vulti/ directory
+        _safe_rmtree(home)
 
-        # 3. Wipe directories (all paths verified inside ~/.vulti/)
-        for dirname in (
-            "skills",           # All skills (bundled + user-created)
-            "cron",             # Legacy global cron
-            "rules",            # Legacy global rules
-            "memories",         # Owner memories
-            "continuwuity",     # Matrix/Conduit server data
-            "audit",            # Audit log
-            "logs",             # Logs
-            "web",              # Web session/widget files
-            "sessions",         # Session files
-            "whatsapp",         # WhatsApp state
-            "x_bookmarks",      # X/Twitter bookmarks
-            "browser_screenshots",  # Browser automation screenshots
-            "audio_cache",      # TTS/STT cache
-            "images",           # Generated images
-            "sandboxes",        # Sandbox environments
-            "hooks",            # Custom hooks
-            "pairing",          # Device pairing
-        ):
-            _safe_rmtree(home / dirname)
-
-        # 4. Wipe files (all paths verified inside ~/.vulti/)
-        for filename in (
-            "connections_deleted.json",
-            "connections.yaml",
-            "sessions.db", "sessions.db-shm", "sessions.db-wal",
-            "state.db", "state.db-shm", "state.db-wal",
-            "gateway_state.json",
-            "channel_directory.json",
-            "owner.json",
-            "SOUL.md",
-            "google_token.json", "google_oauth_pending.json",
-            "x_oauth2_token.json",
-            "gmail_archiver_state.json", "gmail_attachment_state.json",
-            "telegram_user_session.session", "telegram_user_session.session-journal",
-            "processes.json",
-            "interrupt_debug.log",
-            ".hermes_history",
-        ):
-            _safe_unlink(home / filename)
+        # 3. Recreate the empty home directory so the app can keep running
+        home.mkdir(parents=True, exist_ok=True)
 
         return {
             "ok": True,
