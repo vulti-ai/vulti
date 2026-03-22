@@ -26,6 +26,7 @@ struct ScratchPadView: View {
     let sessionId: String?
     @Binding var expandedWidget: DrillTarget?
     @Binding var hasContent: Bool
+    var onHide: (() -> Void)?
 
     @Environment(AppState.self) private var app
 
@@ -130,6 +131,15 @@ struct ScratchPadView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(VultiTheme.border.opacity(0.3), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let onHide {
+                Button { onHide() } label: {
+                    Text("Hide Panel")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(VultiTheme.primary)
                 }
                 .buttonStyle(.plain)
             }

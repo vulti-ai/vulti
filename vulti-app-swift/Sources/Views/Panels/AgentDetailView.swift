@@ -8,19 +8,24 @@ struct AgentDetailView: View {
     @State private var expandedWidget: DrillTarget? = nil
     @State private var pollTimer: Timer?
     @State private var currentSessionId: String? = nil
+    @State private var scratchPadHidden = true
 
     private var isOnboarding: Bool {
         app.agent(byId: agentId)?.status == "onboarding"
     }
 
+    private var isWizard: Bool {
+        app.agent(byId: agentId)?.role == "wizard"
+    }
+
     private var showScratchPad: Bool {
-        scratchPadHasContent
+        scratchPadHasContent && !scratchPadHidden
     }
 
     var body: some View {
         GeometryReader { geo in
             HStack(spacing: 0) {
-                if isOnboarding && !showScratchPad {
+                if (isOnboarding || isWizard) && !showScratchPad {
                     Spacer()
                 }
 
@@ -31,9 +36,9 @@ struct AgentDetailView: View {
                 )
                 .frame(width: showScratchPad
                        ? geo.size.width / 3
-                       : (isOnboarding ? geo.size.width / 3 : geo.size.width))
+                       : ((isOnboarding || isWizard) ? geo.size.width / 3 : geo.size.width))
 
-                if isOnboarding && !showScratchPad {
+                if (isOnboarding || isWizard) && !showScratchPad {
                     Spacer()
                 }
 
@@ -47,12 +52,33 @@ struct AgentDetailView: View {
                         agentId: agentId,
                         sessionId: currentSessionId,
                         expandedWidget: $expandedWidget,
-                        hasContent: $scratchPadHasContent
+                        hasContent: $scratchPadHasContent,
+                        onHide: { withAnimation(.spring(duration: 0.3)) { scratchPadHidden = true } }
                     )
                 }
+
+                // removed — toggle is in the overlay
             }
         }
-        .animation(.spring(duration: 0.4), value: scratchPadHasContent)
+        .overlay(alignment: .topTrailing) {
+            if scratchPadHasContent && scratchPadHidden {
+                Button {
+                    withAnimation(.spring(duration: 0.3)) { scratchPadHidden = false }
+                } label: {
+                    Text("Show Panel")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(VultiTheme.primary)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 10)
+                .padding(.trailing, 16)
+            }
+        }
+        .animation(.spring(duration: 0.4), value: showScratchPad)
+        .onAppear {
+            // All agents start hidden; regular agents auto-reveal when soul appears
+            scratchPadHidden = true
+        }
         .onAppear { startWidgetPolling() }
         .onDisappear { stopWidgetPolling() }
         .onReceive(NotificationCenter.default.publisher(for: .chatSessionChanged)) { notification in
@@ -78,20 +104,28 @@ struct AgentDetailView: View {
         pollTimer = nil
     }
 
+    @State private var soulRevealed = false
+
     private func checkForWidgets() {
-        guard !scratchPadHasContent else {
-            // Already showing — stop polling from here, ScratchPadView takes over
-            pollTimer?.invalidate()
-            pollTimer = nil
-            return
-        }
         Task {
-            if let pane = try? await app.client.getPaneWidgets(agentId: agentId, sessionId: currentSessionId),
-               let tabs = pane.tabs {
-                let hasWidgets = tabs.values.contains { !$0.isEmpty }
-                if hasWidgets {
+            // Check for pane widget content
+            if !scratchPadHasContent {
+                if let pane = try? await app.client.getPaneWidgets(agentId: agentId, sessionId: currentSessionId),
+                   let tabs = pane.tabs {
+                    let hasWidgets = tabs.values.contains { !$0.isEmpty }
+                    if hasWidgets {
+                        await MainActor.run { scratchPadHasContent = true }
+                    }
+                }
+            }
+
+            // Auto-reveal panel when soul appears (non-wizard agents only)
+            if scratchPadHidden && !soulRevealed && !isWizard {
+                if let soul = try? await app.client.getSoul(agentId: agentId),
+                   !soul.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     await MainActor.run {
-                        scratchPadHasContent = true
+                        soulRevealed = true
+                        withAnimation(.spring(duration: 0.4)) { scratchPadHidden = false }
                     }
                 }
             }

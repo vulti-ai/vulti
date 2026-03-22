@@ -2868,7 +2868,7 @@ class WebAdapter(BasePlatformAdapter):
         home = self._get_vulti_home()
         tokens = []
 
-        # Google OAuth
+        # Google OAuth — only show if token file exists
         google_token = home / "google_token.json"
         if google_token.exists():
             try:
@@ -2881,10 +2881,8 @@ class WebAdapter(BasePlatformAdapter):
                 })
             except Exception:
                 tokens.append({"service": "Google", "valid": False})
-        else:
-            tokens.append({"service": "Google", "valid": False})
 
-        # X/Twitter OAuth
+        # X/Twitter OAuth — only show if token file exists
         x_token = home / "x_oauth2_token.json"
         if x_token.exists():
             try:
@@ -2896,15 +2894,14 @@ class WebAdapter(BasePlatformAdapter):
                 })
             except Exception:
                 tokens.append({"service": "X / Twitter", "valid": False})
-        else:
-            tokens.append({"service": "X / Twitter", "valid": False})
 
-        # Telegram session
+        # Telegram session — only show if session file exists
         telegram_session = home / "telegram_user_session.session"
-        tokens.append({
-            "service": "Telegram (User Session)",
-            "valid": telegram_session.exists(),
-        })
+        if telegram_session.exists():
+            tokens.append({
+                "service": "Telegram (User Session)",
+                "valid": True,
+            })
 
         return tokens
 

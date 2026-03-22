@@ -441,9 +441,9 @@ struct ChatView: View {
         }
     }
 
-    /// Check if a session was created or updated today (same calendar day).
+    /// Check if a session was created today (same calendar day).
     private func isSessionFresh(_ session: GatewayClient.SessionResponse) -> Bool {
-        let dateStr = session.updatedAt ?? session.createdAt ?? ""
+        let dateStr = session.createdAt ?? ""
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let date = formatter.date(from: dateStr) ?? ISO8601DateFormatter().date(from: dateStr)

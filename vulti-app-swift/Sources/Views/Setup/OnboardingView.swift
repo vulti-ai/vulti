@@ -224,7 +224,7 @@ struct OnboardingView: View {
             : "Sign in manually to Element X with your credentials."
         case 3: return "Connect an AI provider so your agents can think. This is required."
         case 4: return "Optional providers for speech, phone calls, and image generation."
-        case 5: return "Hector is your wizard — he manages connections, keeps agents healthy, and maintains system integrity."
+        case 5: return "Hector is your system wizard — he manages security, integrity, connections, and the file system."
         default: return ""
         }
     }
@@ -989,7 +989,7 @@ struct OnboardingView: View {
                     Text("Hector")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
-                    Text("He'll set up your first connections — email, files, calendar — and help you create your first agent.")
+                    Text("He manages security, system integrity, connections, and the file system — and helps you create your first agent.")
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .fixedSize(horizontal: false, vertical: true)
