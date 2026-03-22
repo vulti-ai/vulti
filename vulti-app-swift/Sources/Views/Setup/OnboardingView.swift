@@ -26,20 +26,23 @@ struct OnboardingView: View {
 
     // Speech provider key
     @State private var showAddSpeechKey = false
+    @State private var speechKeyName = "ELEVENLABS_API_KEY"
     @State private var speechKeyValue = ""
     @State private var isAddingSpeechKey = false
     @State private var isDownloadingWhisper = false
     @State private var whisperDownloaded = false
 
-    // Voice provider key (Bland)
+    // Voice provider key (Bland / Twilio)
     @State private var showAddVoiceKey = false
+    @State private var voiceKeyName = "BLAND_API_KEY"
     @State private var voiceKeyValue = ""
     @State private var isAddingVoiceKey = false
 
     // Image gen key
-    @State private var showAddFalKey = false
-    @State private var falKeyValue = ""
-    @State private var isAddingFalKey = false
+    @State private var showAddImageKey = false
+    @State private var imageKeyName = "FAL_KEY"
+    @State private var imageKeyValue = ""
+    @State private var isAddingImageKey = false
 
     // Shared
     @State private var isSubmitting = false
@@ -66,15 +69,52 @@ struct OnboardingView: View {
         secrets.contains { $0.key == "FAL_KEY" && ($0.isSet ?? false) }
     }
 
+    private var hasOpenAISpeechKey: Bool {
+        secrets.contains { $0.key == "VOICE_TOOLS_OPENAI_KEY" && ($0.isSet ?? false) }
+    }
+
+    private var hasOpenAIImageKey: Bool {
+        secrets.contains { $0.key == "OPENAI_API_KEY" && ($0.isSet ?? false) }
+    }
+
     private var hasBlandKey: Bool {
         secrets.contains { $0.key == "BLAND_API_KEY" && ($0.isSet ?? false) }
     }
 
+    private var hasTwilioKey: Bool {
+        secrets.contains { $0.key == "TWILIO_AUTH_TOKEN" && ($0.isSet ?? false) }
+    }
 
-    // Step 4 — Messaging
+    private static let voiceKeyOptions: [(label: String, key: String)] = [
+        ("Bland", "BLAND_API_KEY"),
+        ("Twilio SID", "TWILIO_ACCOUNT_SID"),
+        ("Twilio Token", "TWILIO_AUTH_TOKEN"),
+        ("Twilio Phone", "TWILIO_PHONE_NUMBER"),
+    ]
+
+    private static let speechKeyOptions: [(label: String, key: String)] = [
+        ("ElevenLabs", "ELEVENLABS_API_KEY"),
+        ("OpenAI", "VOICE_TOOLS_OPENAI_KEY"),
+    ]
+
+    private static let imageKeyOptions: [(label: String, key: String)] = [
+        ("fal.ai", "FAL_KEY"),
+        ("OpenAI", "OPENAI_API_KEY"),
+    ]
+
+
+    // Networking + Messaging
     @State private var homeserverURL = ""
+    @State private var messagingSubStep = 0  // 0 = download, 1 = sign in
 
-    private static let stepCount = 5
+    @State private var tailscaleStatus: TailscaleStatus = .checking
+    @State private var tailscaleHostname = ""
+
+    enum TailscaleStatus {
+        case checking, notInstalled, notRunning, running
+    }
+
+    private static let stepCount = 6
 
     var body: some View {
         VStack(spacing: 0) {
@@ -113,10 +153,11 @@ struct OnboardingView: View {
             VStack(spacing: 16) {
                 switch step {
                 case 0: identityStep
-                case 1: messagingStep
-                case 2: intelligenceStep
-                case 3: providersStep
-                case 4: completeStep
+                case 1: networkingStep
+                case 2: messagingStep
+                case 3: intelligenceStep
+                case 4: providersStep
+                case 5: completeStep
                 default: EmptyView()
                 }
 
@@ -142,6 +183,7 @@ struct OnboardingView: View {
             providers = (try? await app.client.listProviders()) ?? []
             secrets = (try? await app.client.listSecrets()) ?? []
             autoSelectFirstModel()
+            checkTailscale()
             await fetchHomeserverURL()
         }
     }
@@ -151,10 +193,11 @@ struct OnboardingView: View {
     private var stepIcon: String {
         switch step {
         case 0: return "brain.head.profile"
-        case 1: return "message.fill"
-        case 2: return "brain"
-        case 3: return "square.grid.2x2"
-        case 4: return "person.2.fill"
+        case 1: return "network"
+        case 2: return "message.fill"
+        case 3: return "brain"
+        case 4: return "square.grid.2x2"
+        case 5: return "person.2.fill"
         default: return ""
         }
     }
@@ -162,10 +205,11 @@ struct OnboardingView: View {
     private var stepTitle: String {
         switch step {
         case 0: return "Welcome to Vulti"
-        case 1: return "Messaging"
-        case 2: return "Intelligence"
-        case 3: return "Providers"
-        case 4: return "Create Agents"
+        case 1: return "Networking"
+        case 2: return messagingSubStep == 0 ? "Download Element X" : "Sign In"
+        case 3: return "Intelligence"
+        case 4: return "Providers"
+        case 5: return "Create Agents"
         default: return ""
         }
     }
@@ -173,10 +217,13 @@ struct OnboardingView: View {
     private var stepSubtitle: String {
         switch step {
         case 0: return "The fastest way to get multiple agents working for you at home."
-        case 1: return "Vulti works best with Element X — all your messaging with your agents in one server controlled by you."
-        case 2: return "Connect an AI provider so your agents can think. This is required."
-        case 3: return "Optional providers for speech, phone calls, and image generation."
-        case 4: return "Set up your system agent and create your first assistant."
+        case 1: return "Tailscale connects your devices so you can reach your agents from anywhere."
+        case 2: return messagingSubStep == 0
+            ? "VultiHub's Matrix server works with any Matrix client. We recommend Element X."
+            : "Sign in manually to Element X with your credentials."
+        case 3: return "Connect an AI provider so your agents can think. This is required."
+        case 4: return "Optional providers for speech, phone calls, and image generation."
+        case 5: return "Set up your system agent and create your first assistant."
         default: return ""
         }
     }
@@ -315,7 +362,7 @@ struct OnboardingView: View {
             }
 
             HStack {
-                Button("Back") { step = 1 }
+                Button("Back") { step = 2 }
                     .font(.system(size: 13))
                     .foregroundStyle(VultiTheme.inkMuted)
                     .buttonStyle(.plain)
@@ -374,61 +421,57 @@ struct OnboardingView: View {
                         .disabled(isDownloadingWhisper || whisperDownloaded)
                     }
 
-                    // ElevenLabs
+                    // Connected speech providers
                     if hasElevenLabsKey {
-                        HStack(spacing: 10) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(VultiTheme.teal)
-                                .font(.system(size: 14))
-                            Text("ElevenLabs")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(VultiTheme.inkSoft)
-                            Spacer()
-                            Text("Connected")
-                                .font(.system(size: 11))
-                                .foregroundStyle(VultiTheme.inkMuted)
-                        }
+                        connectedRow(name: "ElevenLabs")
+                    }
+                    if hasOpenAISpeechKey {
+                        connectedRow(name: "OpenAI")
                     }
 
-                    inlineSecretEntry(
+                    inlineKeyEntry(
                         showBinding: $showAddSpeechKey,
+                        keyName: $speechKeyName,
                         keyValue: $speechKeyValue,
                         isAdding: $isAddingSpeechKey,
-                        secretKey: "ELEVENLABS_API_KEY",
-                        placeholder: "Paste ElevenLabs API key",
-                        buttonLabel: "+ Add speech provider API key"
-                    )
+                        options: Self.speechKeyOptions,
+                        buttonLabel: "+ Add speech provider key"
+                    ) {
+                        addSecret(key: speechKeyName, value: speechKeyValue) {
+                            speechKeyValue = ""
+                            showAddSpeechKey = false
+                            isAddingSpeechKey = false
+                        }
+                    }
                 }
 
                 // ── Voice Provider ──
                 providerSection(
                     icon: "phone.arrow.up.right",
                     title: "Voice",
-                    subtitle: "Phone calls and voice AI via Bland"
+                    subtitle: "Phone calls and voice AI"
                 ) {
                     if hasBlandKey {
-                        HStack(spacing: 10) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(VultiTheme.teal)
-                                .font(.system(size: 14))
-                            Text("Bland")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(VultiTheme.inkSoft)
-                            Spacer()
-                            Text("Connected")
-                                .font(.system(size: 11))
-                                .foregroundStyle(VultiTheme.inkMuted)
-                        }
+                        connectedRow(name: "Bland")
+                    }
+                    if hasTwilioKey {
+                        connectedRow(name: "Twilio")
                     }
 
-                    inlineSecretEntry(
+                    inlineKeyEntry(
                         showBinding: $showAddVoiceKey,
+                        keyName: $voiceKeyName,
                         keyValue: $voiceKeyValue,
                         isAdding: $isAddingVoiceKey,
-                        secretKey: "BLAND_API_KEY",
-                        placeholder: "Paste Bland API key",
-                        buttonLabel: "+ Add Bland key"
-                    )
+                        options: Self.voiceKeyOptions,
+                        buttonLabel: "+ Add voice provider key"
+                    ) {
+                        addSecret(key: voiceKeyName, value: voiceKeyValue) {
+                            voiceKeyValue = ""
+                            showAddVoiceKey = false
+                            isAddingVoiceKey = false
+                        }
+                    }
                 }
 
                 // ── Image Gen Provider ──
@@ -438,45 +481,43 @@ struct OnboardingView: View {
                     subtitle: "Let agents create images"
                 ) {
                     if hasFalKey {
-                        HStack(spacing: 10) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(VultiTheme.teal)
-                                .font(.system(size: 14))
-                            Text("fal.ai")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(VultiTheme.inkSoft)
-                            Spacer()
-                            Text("Connected")
-                                .font(.system(size: 11))
-                                .foregroundStyle(VultiTheme.inkMuted)
-                        }
+                        connectedRow(name: "fal.ai")
+                    }
+                    if hasOpenAIImageKey {
+                        connectedRow(name: "OpenAI")
                     }
 
-                    inlineSecretEntry(
-                        showBinding: $showAddFalKey,
-                        keyValue: $falKeyValue,
-                        isAdding: $isAddingFalKey,
-                        secretKey: "FAL_KEY",
-                        placeholder: "Paste fal.ai API key",
-                        buttonLabel: "+ Add fal.ai key"
-                    )
+                    inlineKeyEntry(
+                        showBinding: $showAddImageKey,
+                        keyName: $imageKeyName,
+                        keyValue: $imageKeyValue,
+                        isAdding: $isAddingImageKey,
+                        options: Self.imageKeyOptions,
+                        buttonLabel: "+ Add image gen key"
+                    ) {
+                        addSecret(key: imageKeyName, value: imageKeyValue) {
+                            imageKeyValue = ""
+                            showAddImageKey = false
+                            isAddingImageKey = false
+                        }
+                    }
                 }
 
                 // ── Navigation ──
                 HStack {
-                    Button("Back") { step = 2 }
+                    Button("Back") { step = 3 }
                         .font(.system(size: 13))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .buttonStyle(.plain)
 
                     Spacer()
 
-                    Button("Skip") { step = 4 }
+                    Button("Skip") { step = 5 }
                         .font(.system(size: 13))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .buttonStyle(.plain)
 
-                    Button("Next") { step = 4 }
+                    Button("Next") { step = 5 }
                         .buttonStyle(.vultiPrimary)
                 }
             }
@@ -614,69 +655,147 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Step 4: Messaging
+    // MARK: - Step 2: Networking (Tailscale)
 
-    private var messagingStep: some View {
+    private var networkingStep: some View {
         VStack(spacing: 16) {
 
-            // Element X download
+            // Mac status
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.down.app.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(VultiTheme.primary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Download Element X")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(VultiTheme.inkSoft)
-                        Text("Available on iOS and Android. Search \"Element X\" on the App Store.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(VultiTheme.inkMuted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
-                // QR code linking to iOS app
-                if let qrImage = generateQRCode(from: "https://apps.apple.com/app/element-x-secure-messenger/id1631335820") {
-                    HStack {
-                        Spacer()
-                        Image(nsImage: qrImage)
-                            .interpolation(.none)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 120, height: 120)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        Spacer()
-                    }
-
-                    Text("Scan to download Element X for iOS")
-                        .font(.system(size: 10))
-                        .foregroundStyle(VultiTheme.inkMuted)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-
-            // Connection details
-            VStack(alignment: .leading, spacing: 10) {
-                Text("CONNECTION DETAILS")
+                Text("THIS MAC")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(VultiTheme.inkDim)
 
-                connectionRow(label: "Server", value: homeserverURL.isEmpty ? "Loading..." : homeserverURL)
-                connectionRow(label: "Username", value: name.lowercased().replacingOccurrences(of: " ", with: "_"))
-                connectionRow(label: "Password", value: password)
+                switch tailscaleStatus {
+                case .checking:
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking Tailscale...")
+                            .font(.system(size: 12))
+                            .foregroundStyle(VultiTheme.inkDim)
+                    }
+                case .running:
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(VultiTheme.teal)
+                            .font(.system(size: 14))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Tailscale is running")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(VultiTheme.inkSoft)
+                            if !tailscaleHostname.isEmpty {
+                                Text(tailscaleHostname)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(VultiTheme.inkMuted)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                case .notRunning:
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.system(size: 14))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Tailscale is installed but not connected.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(VultiTheme.inkDim)
+                            Text("Open the Tailscale app and sign in.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(VultiTheme.inkMuted)
+                        }
+                    }
+                    Button("Open Tailscale") {
+                        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "io.tailscale.ipn.macos") {
+                            NSWorkspace.shared.openApplication(at: url, configuration: .init())
+                        } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "io.tailscale.ipn.macsys") {
+                            NSWorkspace.shared.openApplication(at: url, configuration: .init())
+                        }
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .buttonStyle(.vultiSecondary)
+                case .notInstalled:
+                    HStack(spacing: 8) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(VultiTheme.rose)
+                            .font(.system(size: 14))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Tailscale is not installed.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(VultiTheme.inkDim)
+                            Text("Get it free from the Mac App Store — no terminal needed.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(VultiTheme.inkMuted)
+                        }
+                    }
+                    Button("Open Mac App Store") {
+                        NSWorkspace.shared.open(URL(string: "macappstore://apps.apple.com/app/tailscale/id1475387142")!)
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .buttonStyle(.vultiSecondary)
+                }
+
+                Button("Refresh") { checkTailscale() }
+                    .font(.system(size: 11))
+                    .foregroundStyle(VultiTheme.primary)
+                    .buttonStyle(.plain)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
-            Text("Sign in to Element X with these credentials to message your agents from any device.")
-                .font(.system(size: 11))
-                .foregroundStyle(VultiTheme.inkMuted)
-                .multilineTextAlignment(.center)
+            // iPhone instructions
+            VStack(alignment: .leading, spacing: 10) {
+                Text("YOUR IPHONE")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(VultiTheme.inkDim)
+
+                HStack(alignment: .top, spacing: 8) {
+                    Text("1.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(VultiTheme.inkDim)
+                    Text("Install Tailscale from the App Store")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                }
+                HStack(alignment: .top, spacing: 8) {
+                    Text("2.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(VultiTheme.inkDim)
+                    Text("Sign in with the same account as this Mac")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                }
+                HStack(alignment: .top, spacing: 8) {
+                    Text("3.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(VultiTheme.inkDim)
+                    Text("Both devices will appear on your private network")
+                        .font(.system(size: 12))
+                        .foregroundStyle(VultiTheme.inkSoft)
+                }
+
+                if let qrImage = generateQRCode(from: "https://apps.apple.com/app/tailscale/id1470499037") {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 4) {
+                            Image(nsImage: qrImage)
+                                .interpolation(.none)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 160, height: 160)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            Text("Scan to download Tailscale for iOS")
+                                .font(.system(size: 10))
+                                .foregroundStyle(VultiTheme.inkMuted)
+                        }
+                        Spacer()
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
             // Navigation
             HStack {
@@ -693,7 +812,135 @@ struct OnboardingView: View {
         }
     }
 
+    // MARK: - Step 3: Messaging
+
+    private var messagingStep: some View {
+        VStack(spacing: 16) {
+            if messagingSubStep == 0 {
+                // Page 1: Download Element X
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.down.app.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(VultiTheme.primary)
+                        Text("Download Element X")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(VultiTheme.inkSoft)
+                    }
+
+                    if let qrImage = generateQRCode(from: "https://apps.apple.com/app/element-x-secure-messenger/id1631335820") {
+                        HStack {
+                            Spacer()
+                            Image(nsImage: qrImage)
+                                .interpolation(.none)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 120, height: 120)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            Spacer()
+                        }
+
+                        Text("Scan to download Element X for iOS")
+                            .font(.system(size: 10))
+                            .foregroundStyle(VultiTheme.inkMuted)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+
+                HStack {
+                    Button("Back") { step = 1 }
+                        .font(.system(size: 13))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                        .buttonStyle(.plain)
+                    Spacer()
+                    Button("Next") { messagingSubStep = 1 }
+                        .buttonStyle(.vultiPrimary)
+                }
+
+            } else {
+                // Page 2: Sign in instructions + credentials
+
+                // Step-by-step instructions
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("SIGN IN MANUALLY")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(VultiTheme.inkDim)
+
+                    signInStep(number: "1", text: "Open Element X on your phone")
+                    signInStep(number: "2", text: "Tap \"Change account provider\"")
+                    signInStep(number: "3", text: "Enter your homeserver URL below")
+                    signInStep(number: "4", text: "Sign in with your username and password")
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+
+                // Connection details
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("YOUR CREDENTIALS")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(VultiTheme.inkDim)
+
+                    connectionRow(label: "Server", value: homeserverURL.isEmpty ? "Loading..." : homeserverURL)
+                    connectionRow(label: "Username", value: name.lowercased().replacingOccurrences(of: " ", with: "_"))
+                    connectionRow(label: "Password", value: password)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+
+                Text("Your server URL is also available to copy in your iOS Tailscale app.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(VultiTheme.inkMuted)
+                    .multilineTextAlignment(.center)
+
+                HStack {
+                    Button("Back") { messagingSubStep = 0 }
+                        .font(.system(size: 13))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                        .buttonStyle(.plain)
+                    Spacer()
+                    Button("Next") { step = 3 }
+                        .buttonStyle(.vultiPrimary)
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: messagingSubStep)
+    }
+
     @ViewBuilder
+    private func signInStep(number: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(number)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(VultiTheme.paperWarm)
+                .frame(width: 18, height: 18)
+                .background(VultiTheme.primary, in: Circle())
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(VultiTheme.inkSoft)
+        }
+    }
+
+    @ViewBuilder
+    private func connectedRow(name: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(VultiTheme.teal)
+                .font(.system(size: 14))
+            Text(name)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(VultiTheme.inkSoft)
+            Spacer()
+            Text("Connected")
+                .font(.system(size: 11))
+                .foregroundStyle(VultiTheme.inkMuted)
+        }
+    }
+
     private func connectionRow(label: String, value: String) -> some View {
         HStack {
             Text(label)
@@ -704,7 +951,7 @@ struct OnboardingView: View {
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(VultiTheme.inkSoft)
                 .textSelection(.enabled)
-            Spacer()
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -829,6 +1076,43 @@ struct OnboardingView: View {
         }
     }
 
+    private func checkTailscale() {
+        tailscaleStatus = .checking
+        Task {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["tailscale", "status", "--self", "--json"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = Pipe()
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                if process.terminationStatus == 0 {
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let selfNode = json["Self"] as? [String: Any],
+                       let dnsName = selfNode["DNSName"] as? String, !dnsName.isEmpty {
+                        let hostname = dnsName.hasSuffix(".") ? String(dnsName.dropLast()) : dnsName
+                        await MainActor.run {
+                            tailscaleHostname = hostname
+                            tailscaleStatus = .running
+                        }
+                        return
+                    }
+                    await MainActor.run { tailscaleStatus = .notRunning }
+                } else {
+                    // Check if tailscale binary exists but daemon isn't running
+                    await MainActor.run { tailscaleStatus = .notRunning }
+                }
+            } catch {
+                await MainActor.run { tailscaleStatus = .notInstalled }
+            }
+        }
+    }
+
     private func fetchHomeserverURL() async {
         // Fetch from .well-known/matrix/client endpoint
         let url = URL(string: "http://localhost:8080/.well-known/matrix/client")!
@@ -860,7 +1144,7 @@ struct OnboardingView: View {
         Task {
             try? await app.client.addSecret(key: "VULTI_DEFAULT_MODEL", value: selectedModel)
         }
-        step = 3
+        step = 4
     }
 
     private func submitIdentity() {

@@ -64,11 +64,10 @@ final class AppState {
         hasToken = !(VultiHome.webToken() ?? "").isEmpty
         guard hasToken else { return }
         isGatewayRunning = await client.checkHealth()
-        await refreshAgents()
-        // Auto-complete onboarding for existing users who already have an owner profile
-        if !onboardingComplete, let name = ownerInfo?.name, !name.isEmpty {
-            Persistence.onboardingComplete = true
-            onboardingComplete = true
+        if !isGatewayRunning {
+            try? await startGateway()
+        } else {
+            await refreshAgents()
         }
         startRefreshTimer()
     }

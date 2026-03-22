@@ -14,6 +14,24 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Shared initial_state events for all rooms: readable history + block encryption.
+# Setting m.room.encryption to power level 101 (above admin=100) prevents anyone
+# from enabling E2EE, avoiding cross-signing verification hassles in Element.
+_BASE_INITIAL_STATE = [
+    {
+        "type": "m.room.history_visibility",
+        "content": {"history_visibility": "shared"},
+    },
+    {
+        "type": "m.room.power_levels",
+        "content": {
+            "events": {
+                "m.room.encryption": 101,
+            },
+        },
+    },
+]
+
 
 def _tokens_dir() -> Path:
     """Return the tokens directory for agent Matrix credentials."""
@@ -414,12 +432,7 @@ async def create_relationship_room(
                     "visibility": "private",
                     "preset": "private_chat",
                     "invite": invite_list,
-                    "initial_state": [
-                        {
-                            "type": "m.room.history_visibility",
-                            "content": {"history_visibility": "shared"},
-                        }
-                    ],
+                    "initial_state": _BASE_INITIAL_STATE,
                 },
             )
 
@@ -518,12 +531,7 @@ async def ensure_room_topology(
                     "topic": topic,
                     "visibility": "private",
                     "preset": "private_chat",
-                    "initial_state": [
-                        {
-                            "type": "m.room.history_visibility",
-                            "content": {"history_visibility": "shared"},
-                        }
-                    ],
+                    "initial_state": _BASE_INITIAL_STATE,
                 }
                 if not alias_taken:
                     create_data["room_alias_name"] = alias_local
@@ -903,12 +911,7 @@ async def create_owner_dm_room(
                     "visibility": "private",
                     "preset": "trusted_private_chat",
                     "invite": [owner_user_id],
-                    "initial_state": [
-                        {
-                            "type": "m.room.history_visibility",
-                            "content": {"history_visibility": "shared"},
-                        }
-                    ],
+                    "initial_state": _BASE_INITIAL_STATE,
                 },
             )
 
@@ -1032,12 +1035,7 @@ async def create_squad_room(
                     "visibility": "private",
                     "preset": "private_chat",
                     "invite": invite_ids,
-                    "initial_state": [
-                        {
-                            "type": "m.room.history_visibility",
-                            "content": {"history_visibility": "shared"},
-                        }
-                    ],
+                    "initial_state": _BASE_INITIAL_STATE,
                 },
             )
 
