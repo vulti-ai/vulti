@@ -122,61 +122,65 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             Spacer()
 
-            // Header
-            Image(systemName: stepIcon)
-                .font(.system(size: 48))
-                .foregroundStyle(VultiTheme.primary)
-                .padding(.bottom, 8)
+            if step == 0 {
+                // Prerequisites splash — custom layout, no header/card
+                prerequisitesStep
+            } else {
+                // Header
+                Image(systemName: stepIcon)
+                    .font(.system(size: 48))
+                    .foregroundStyle(VultiTheme.primary)
+                    .padding(.bottom, 8)
 
-            Text(stepTitle)
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundStyle(VultiTheme.inkSoft)
-                .padding(.bottom, 4)
+                Text(stepTitle)
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundStyle(VultiTheme.inkSoft)
+                    .padding(.bottom, 4)
 
-            Text(stepSubtitle)
-                .font(.system(size: 13))
-                .foregroundStyle(VultiTheme.inkDim)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
+                Text(stepSubtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(VultiTheme.inkDim)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+                    .padding(.bottom, 24)
+
+                // Step indicator
+                HStack(spacing: 8) {
+                    ForEach(0..<Self.stepCount, id: \.self) { i in
+                        Capsule()
+                            .fill(i <= step ? VultiTheme.primary : VultiTheme.paperShadow)
+                            .frame(width: i == step ? 24 : 8, height: 4)
+                    }
+                }
                 .padding(.bottom, 24)
 
-            // Step indicator
-            HStack(spacing: 8) {
-                ForEach(0..<Self.stepCount, id: \.self) { i in
-                    Capsule()
-                        .fill(i <= step ? VultiTheme.primary : VultiTheme.paperShadow)
-                        .frame(width: i == step ? 24 : 8, height: 4)
-                }
-            }
-            .padding(.bottom, 24)
+                // Content card
+                VStack(spacing: 16) {
+                    switch step {
+                    case 1: identityStep
+                    case 2: elementSignInStep
+                    case 3: intelligenceStep
+                    case 4: providersStep
+                    case 5: completeStep
+                    default: EmptyView()
+                    }
 
-            // Content card
-            VStack(spacing: 16) {
-                switch step {
-                case 0: identityStep
-                case 1: networkingStep
-                case 2: messagingStep
-                case 3: intelligenceStep
-                case 4: providersStep
-                case 5: completeStep
-                default: EmptyView()
+                    if let error {
+                        Text(error)
+                            .font(.system(size: 12))
+                            .foregroundStyle(VultiTheme.rose)
+                    }
                 }
-
-                if let error {
-                    Text(error)
-                        .font(.system(size: 12))
-                        .foregroundStyle(VultiTheme.rose)
+                .padding(24)
+                .background {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.ultraThinMaterial)
+                        .overlay(RoundedRectangle(cornerRadius: 12).fill(VultiTheme.paperWarm.opacity(0.65)))
                 }
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(VultiTheme.border))
+                .frame(maxWidth: 420)
             }
-            .padding(24)
-            .background {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(.ultraThinMaterial)
-                    .overlay(RoundedRectangle(cornerRadius: 12).fill(VultiTheme.paperWarm.opacity(0.65)))
-            }
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(VultiTheme.border))
-            .frame(maxWidth: 420)
 
             Spacer()
         }
@@ -195,8 +199,8 @@ struct OnboardingView: View {
 
     private var stepIcon: String {
         switch step {
-        case 0: return "brain.head.profile"
-        case 1: return "network"
+        case 0: return "" // prerequisites — custom layout
+        case 1: return "brain.head.profile"
         case 2: return "message.fill"
         case 3: return "brain"
         case 4: return "square.grid.2x2"
@@ -207,9 +211,9 @@ struct OnboardingView: View {
 
     private var stepTitle: String {
         switch step {
-        case 0: return "Welcome to Vulti"
-        case 1: return "Networking"
-        case 2: return messagingSubStep == 0 ? "Download Element X" : "Sign In"
+        case 0: return "" // prerequisites — custom layout
+        case 1: return "Welcome to Vulti"
+        case 2: return "Sign In to Element X"
         case 3: return "Intelligence"
         case 4: return "Providers"
         case 5: return "Meet Hector"
@@ -219,16 +223,148 @@ struct OnboardingView: View {
 
     private var stepSubtitle: String {
         switch step {
-        case 0: return "The fastest way to get multiple agents working for you at home."
-        case 1: return "Tailscale connects your devices so you can reach your agents from anywhere."
-        case 2: return messagingSubStep == 0
-            ? "VultiHub's Matrix server works with any Matrix client. We recommend Element X."
-            : "Sign in manually to Element X with your credentials."
+        case 0: return "" // prerequisites — custom layout
+        case 1: return "The fastest way to get multiple agents working for you at home."
+        case 2: return "Sign in to Element X with your VultiHub credentials."
         case 3: return "Connect an AI provider so your agents can think. This is required."
         case 4: return "Optional providers for speech, phone calls, and image generation."
         case 5: return "Hector is your system wizard — he manages security, integrity, connections, and the file system."
         default: return ""
         }
+    }
+
+    // MARK: - Step 0: Prerequisites
+
+    // App Store URLs
+    private static let tailscaleMacURL = "https://apps.apple.com/app/tailscale/id1475387142"
+    private static let tailscaleIOSURL = "https://apps.apple.com/app/tailscale/id1470499037"
+    private static let elementXIOSURL = "https://apps.apple.com/app/element-x-secure-messenger/id1631335820"
+
+    private var prerequisitesStep: some View {
+        VStack(spacing: 20) {
+            Text("Before You Begin")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundStyle(VultiTheme.inkSoft)
+
+            Text("VultiHub gives you a personal team of AI agents that live on your Mac — always on, always private. They message you, run tasks, and manage services without sending your data to the cloud.")
+                .font(.system(size: 13))
+                .foregroundStyle(VultiTheme.inkDim)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 480)
+
+            Text("To get started, install these two apps on your Mac and iPhone.")
+                .font(.system(size: 12))
+                .foregroundStyle(VultiTheme.inkMuted)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 480)
+
+            Divider()
+                .frame(maxWidth: 500)
+
+            // ── Two-column layout: QR codes far apart ──
+            HStack(alignment: .top, spacing: 120) {
+
+                // Left column: Tailscale
+                VStack(spacing: 12) {
+                    Image(systemName: "network")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.blue)
+
+                    Text("Tailscale")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(VultiTheme.inkSoft)
+
+                    Text("Secure private network between your devices. Reach your agents from anywhere.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                        .multilineTextAlignment(.center)
+                        .frame(width: 180)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // QR code for iPhone
+                    qrCodeImage(for: Self.tailscaleIOSURL)
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 120, height: 120)
+                        .padding(8)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 8))
+
+                    Text("Scan with iPhone")
+                        .font(.system(size: 10))
+                        .foregroundStyle(VultiTheme.inkDim)
+
+                    // Mac App Store link
+                    Link("Install on this Mac", destination: URL(string: Self.tailscaleMacURL)!)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(VultiTheme.primary)
+                }
+
+                // Right column: Element X
+                VStack(spacing: 12) {
+                    Image(systemName: "message.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.green)
+
+                    Text("Element X")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(VultiTheme.inkSoft)
+
+                    Text("VultiHub runs its own messaging server on your Mac. Your data never leaves your machine.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                        .multilineTextAlignment(.center)
+                        .frame(width: 180)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // QR code for iPhone
+                    qrCodeImage(for: Self.elementXIOSURL)
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 120, height: 120)
+                        .padding(8)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 8))
+
+                    Text("Scan with iPhone")
+                        .font(.system(size: 10))
+                        .foregroundStyle(VultiTheme.inkDim)
+
+                    // No Mac link needed — Element X is phone only
+                    Text("iPhone only")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkDim)
+                }
+            }
+
+            Button {
+                withAnimation { step = 1 }
+            } label: {
+                Text("Got it, let\u{2019}s go")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.vultiPrimary)
+            .controlSize(.large)
+            .frame(maxWidth: 300)
+        }
+    }
+
+    /// Generate a QR code image from a string using CoreImage.
+    private func qrCodeImage(for string: String) -> Image {
+        let context = CIContext()
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else {
+            return Image(systemName: "qrcode")
+        }
+        filter.setValue(Data(string.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+
+        guard let output = filter.outputImage,
+              let cgImage = context.createCGImage(output, from: output.extent) else {
+            return Image(systemName: "qrcode")
+        }
+        return Image(nsImage: NSImage(cgImage: cgImage, size: NSSize(width: output.extent.width, height: output.extent.height)))
     }
 
     // MARK: - Step 1: Identity
@@ -345,7 +481,7 @@ struct OnboardingView: View {
                             selectedProviderId = provider.id
                             // Auto-select first model
                             if let first = provider.models?.first {
-                                selectedModel = stripProviderPrefix(first)
+                                selectedModel = first.strippingProviderPrefix()
                             }
                         }
                     }
@@ -371,28 +507,11 @@ struct OnboardingView: View {
                             .textCase(.uppercase)
                     }
 
-                    ForEach(provider.models ?? [], id: \.self) { m in
-                        let modelId = stripProviderPrefix(m)
-                        HStack(spacing: 8) {
-                            Image(systemName: selectedModel == modelId ? "circle.inset.filled" : "circle")
-                                .font(.system(size: 13))
-                                .foregroundStyle(selectedModel == modelId ? VultiTheme.primary : VultiTheme.inkDim)
-                            Text(modelId)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(selectedModel == modelId ? VultiTheme.inkSoft : VultiTheme.inkDim)
-                        }
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            selectedModel == modelId
-                                ? VultiTheme.primary.opacity(0.08)
-                                : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 6)
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture { selectedModel = modelId }
-                    }
+                    ModelPicker(
+                        style: .radioList,
+                        selectedModel: $selectedModel,
+                        providers: [provider]
+                    )
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -428,17 +547,6 @@ struct OnboardingView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: selectedProviderId)
-    }
-
-    /// Strip provider routing prefix (e.g. "openrouter/anthropic/claude-opus-4" → "anthropic/claude-opus-4")
-    private func stripProviderPrefix(_ model: String) -> String {
-        let prefixes = ["openrouter/", "openai/openai/", "anthropic/anthropic/"]
-        for prefix in prefixes {
-            if model.hasPrefix(prefix) {
-                return String(model.dropFirst(prefix.count))
-            }
-        }
-        return model
     }
 
     // MARK: - Step 3: Providers (speech, voice, image — optional)
@@ -709,264 +817,49 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Step 2: Networking (Tailscale)
+    // MARK: - Step 2: Sign In to Element X
 
-    private var networkingStep: some View {
+    private var elementSignInStep: some View {
         VStack(spacing: 16) {
-
-            // Mac status
-            VStack(alignment: .leading, spacing: 10) {
-                Text("THIS MAC")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(VultiTheme.inkDim)
-
-                switch tailscaleStatus {
-                case .checking:
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text("Checking Tailscale...")
-                            .font(.system(size: 12))
-                            .foregroundStyle(VultiTheme.inkDim)
-                    }
-                case .running:
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(VultiTheme.teal)
-                            .font(.system(size: 14))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Tailscale is running")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(VultiTheme.inkSoft)
-                            if !tailscaleHostname.isEmpty {
-                                Text(tailscaleHostname)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(VultiTheme.inkMuted)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                    }
-                case .notRunning:
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.circle.fill")
-                            .foregroundStyle(.orange)
-                            .font(.system(size: 14))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Tailscale is installed but not connected.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(VultiTheme.inkDim)
-                            Text("Open the Tailscale app and sign in.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(VultiTheme.inkMuted)
-                        }
-                    }
-                    Button("Open Tailscale") {
-                        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "io.tailscale.ipn.macos") {
-                            NSWorkspace.shared.openApplication(at: url, configuration: .init())
-                        } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "io.tailscale.ipn.macsys") {
-                            NSWorkspace.shared.openApplication(at: url, configuration: .init())
-                        }
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .buttonStyle(.vultiSecondary)
-                case .notInstalled:
-                    HStack(spacing: 8) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(VultiTheme.rose)
-                            .font(.system(size: 14))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Tailscale is not installed.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(VultiTheme.inkDim)
-                            Text("Get it free from the Mac App Store — no terminal needed.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(VultiTheme.inkMuted)
-                        }
-                    }
-                    Button("Open Mac App Store") {
-                        NSWorkspace.shared.open(URL(string: "macappstore://apps.apple.com/app/tailscale/id1475387142")!)
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .buttonStyle(.vultiSecondary)
-                }
-
-                Button("Refresh") { checkTailscale() }
-                    .font(.system(size: 11))
-                    .foregroundStyle(VultiTheme.primary)
-                    .buttonStyle(.plain)
+            // Step-by-step instructions
+            VStack(alignment: .leading, spacing: 12) {
+                signInStepRow(number: "1", text: "Open Element X on your phone")
+                signInStepRow(number: "2", text: "Tap \"Change account provider\"")
+                signInStepRow(number: "3", text: "Enter your homeserver URL below")
+                signInStepRow(number: "4", text: "Sign in with your username and password")
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
-            // iPhone instructions
+            // Connection details
             VStack(alignment: .leading, spacing: 10) {
-                Text("YOUR IPHONE")
+                Text("YOUR CREDENTIALS")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(VultiTheme.inkDim)
 
-                HStack(alignment: .top, spacing: 8) {
-                    Text("1.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(VultiTheme.inkDim)
-                    Text("Install Tailscale from the App Store")
-                        .font(.system(size: 12))
-                        .foregroundStyle(VultiTheme.inkSoft)
-                }
-                HStack(alignment: .top, spacing: 8) {
-                    Text("2.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(VultiTheme.inkDim)
-                    Text("Sign in with the same account as this Mac")
-                        .font(.system(size: 12))
-                        .foregroundStyle(VultiTheme.inkSoft)
-                }
-                HStack(alignment: .top, spacing: 8) {
-                    Text("3.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(VultiTheme.inkDim)
-                    Text("Both devices will appear on your private network")
-                        .font(.system(size: 12))
-                        .foregroundStyle(VultiTheme.inkSoft)
-                }
-
-                if let qrImage = generateQRCode(from: "https://apps.apple.com/app/tailscale/id1470499037") {
-                    HStack {
-                        Spacer()
-                        VStack(spacing: 4) {
-                            Image(nsImage: qrImage)
-                                .interpolation(.none)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 160, height: 160)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                            Text("Scan to download Tailscale for iOS")
-                                .font(.system(size: 10))
-                                .foregroundStyle(VultiTheme.inkMuted)
-                        }
-                        Spacer()
-                    }
-                }
+                connectionRow(label: "Server", value: homeserverURL.isEmpty ? "Loading..." : homeserverURL)
+                connectionRow(label: "Username", value: name.lowercased().replacingOccurrences(of: " ", with: "_"))
+                connectionRow(label: "Password", value: password)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
-            // Navigation
             HStack {
-                Button("Back") { step = 0 }
+                Button("Back") { step = 1 }
                     .font(.system(size: 13))
                     .foregroundStyle(VultiTheme.inkMuted)
                     .buttonStyle(.plain)
-
                 Spacer()
-
-                Button("Next") { step = 2 }
+                Button("Next") { step = 3 }
                     .buttonStyle(.vultiPrimary)
             }
         }
     }
 
-    // MARK: - Step 3: Messaging
-
-    private var messagingStep: some View {
-        VStack(spacing: 16) {
-            if messagingSubStep == 0 {
-                // Page 1: Download Element X
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.down.app.fill")
-                            .font(.system(size: 20))
-                            .foregroundStyle(VultiTheme.primary)
-                        Text("Download Element X")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(VultiTheme.inkSoft)
-                    }
-
-                    if let qrImage = generateQRCode(from: "https://apps.apple.com/app/element-x-secure-messenger/id1631335820") {
-                        HStack {
-                            Spacer()
-                            Image(nsImage: qrImage)
-                                .interpolation(.none)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 120, height: 120)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                            Spacer()
-                        }
-
-                        Text("Scan to download Element X for iOS")
-                            .font(.system(size: 10))
-                            .foregroundStyle(VultiTheme.inkMuted)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                    }
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-
-                HStack {
-                    Button("Back") { step = 1 }
-                        .font(.system(size: 13))
-                        .foregroundStyle(VultiTheme.inkMuted)
-                        .buttonStyle(.plain)
-                    Spacer()
-                    Button("Next") { messagingSubStep = 1 }
-                        .buttonStyle(.vultiPrimary)
-                }
-
-            } else {
-                // Page 2: Sign in instructions + credentials
-
-                // Step-by-step instructions
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("SIGN IN MANUALLY")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(VultiTheme.inkDim)
-
-                    signInStep(number: "1", text: "Open Element X on your phone")
-                    signInStep(number: "2", text: "Tap \"Change account provider\"")
-                    signInStep(number: "3", text: "Enter your homeserver URL below")
-                    signInStep(number: "4", text: "Sign in with your username and password")
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-
-                // Connection details
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("YOUR CREDENTIALS")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(VultiTheme.inkDim)
-
-                    connectionRow(label: "Server", value: homeserverURL.isEmpty ? "Loading..." : homeserverURL)
-                    connectionRow(label: "Username", value: name.lowercased().replacingOccurrences(of: " ", with: "_"))
-                    connectionRow(label: "Password", value: password)
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-
-                Text("Your server URL is also available to copy in your iOS Tailscale app.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(VultiTheme.inkMuted)
-                    .multilineTextAlignment(.center)
-
-                HStack {
-                    Button("Back") { messagingSubStep = 0 }
-                        .font(.system(size: 13))
-                        .foregroundStyle(VultiTheme.inkMuted)
-                        .buttonStyle(.plain)
-                    Spacer()
-                    Button("Next") { step = 3 }
-                        .buttonStyle(.vultiPrimary)
-                }
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: messagingSubStep)
-    }
-
     @ViewBuilder
-    private func signInStep(number: String, text: String) -> some View {
+    private func signInStepRow(number: String, text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text(number)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -1166,7 +1059,7 @@ struct OnboardingView: View {
         guard selectedModel.isEmpty else { return }
         if let first = authenticatedProviders.first,
            let firstModel = first.models?.first {
-            selectedModel = stripProviderPrefix(firstModel)
+            selectedModel = firstModel.strippingProviderPrefix()
         }
     }
 
@@ -1201,7 +1094,7 @@ struct OnboardingView: View {
                 await app.refreshOwner()
 
                 await MainActor.run {
-                    step = 1
+                    step = 2
                     isSubmitting = false
                 }
             } catch {

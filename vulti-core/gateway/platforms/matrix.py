@@ -129,10 +129,11 @@ class MatrixAdapter(BasePlatformAdapter):
         import nio
 
         if not self.user_id and not self._agent_clients:
-            logger.error("Matrix: no agent credentials available")
-            self._set_fatal_error("MATRIX_NO_USER", "Matrix user_id not configured", retryable=False)
-            await self._notify_fatal_error()
-            return False
+            # No agents onboarded yet — start in dormant mode.
+            # Agents will be connected later via hot_add_agent().
+            logger.info("Matrix: no agent credentials yet — waiting for onboarding")
+            self._mark_connected()
+            return True
 
         try:
             # Create nio clients for ALL agents
@@ -228,90 +229,171 @@ class MatrixAdapter(BasePlatformAdapter):
             await self._notify_fatal_error()
             return False
 
-    async def _auto_set_home_channels(self) -> None:
-        """Auto-set Matrix home channels: platform default + per-agent.
+    async def hot_add_agent(self, agent_id: str) -> bool:
+        """Add and connect a newly onboarded agent at runtime."""
+        import nio
 
-        Platform default: #updates room
-        Per-agent: team room if managed by another agent, owner DM if solo
-        Fallback: #updates
+        try:
+            # Guard: skip if agent already has an active sync loop
+            existing = self._agent_clients.get(agent_id)
+            if existing and existing.get("client") is not None:
+                logger.info("Matrix: hot_add_agent skipped for %s (already connected)", agent_id)
+                return True
+
+            from gateway.matrix_agents import get_agent_matrix_credentials
+            creds = get_agent_matrix_credentials(agent_id)
+            if not creds:
+                return False
+
+            user_id = creds["user_id"]
+            self._agent_user_ids.add(user_id)
+            self._matrix_to_agent[user_id] = agent_id
+            self._agent_clients[agent_id] = {
+                "user_id": user_id,
+                "access_token": creds["access_token"],
+                "client": None,
+            }
+
+            client = nio.AsyncClient(self.homeserver_url, user_id)
+            client.access_token = creds["access_token"]
+            client.user_id = user_id
+
+            resp = await client.whoami()
+            if isinstance(resp, nio.responses.WhoamiError):
+                logger.warning("Matrix: hot_add_agent token invalid for %s", agent_id)
+                return False
+
+            self._agent_clients[agent_id]["client"] = client
+
+            # Register callbacks
+            def make_callbacks(aid, cli):
+                async def on_msg(room, event):
+                    await self._on_room_message(room, event, aid, cli)
+                async def on_img(room, event):
+                    await self._on_room_media(room, event, aid, cli, MessageType.PHOTO)
+                async def on_audio(room, event):
+                    await self._on_room_media(room, event, aid, cli, MessageType.VOICE)
+                async def on_file(room, event):
+                    await self._on_room_media(room, event, aid, cli, MessageType.DOCUMENT)
+                async def on_invite(room, event):
+                    if event.state_key == cli.user_id:
+                        logger.info("Matrix: %s accepting invite to %s", aid, room.room_id)
+                        try:
+                            await cli.join(room.room_id)
+                        except Exception as e:
+                            logger.warning("Matrix: %s failed to join %s: %s", aid, room.room_id, e)
+                async def on_member(room, event):
+                    await self._on_member_change(room, event, aid, cli)
+                return on_msg, on_img, on_audio, on_file, on_invite, on_member
+
+            on_msg, on_img, on_audio, on_file, on_invite, on_member = make_callbacks(agent_id, client)
+            client.add_event_callback(on_msg, nio.RoomMessageText)
+            client.add_event_callback(on_img, nio.RoomMessageImage)
+            client.add_event_callback(on_audio, nio.RoomMessageAudio)
+            client.add_event_callback(on_file, nio.RoomMessageFile)
+            client.add_event_callback(on_invite, nio.InviteMemberEvent)
+            client.add_event_callback(on_member, nio.RoomMemberEvent)
+
+            # Set as primary client if none exists
+            if not self._client:
+                self._client = client
+                self.user_id = user_id
+
+            # Start sync loop
+            if not self._connect_timestamp:
+                self._connect_timestamp = int(time.time() * 1000)
+            task = asyncio.create_task(self._sync_loop(agent_id, client))
+            self._sync_tasks.append(task)
+
+            if not self._health_task:
+                self._health_task = asyncio.create_task(self._health_monitor())
+
+            # Set up home channels now that we have a connected client
+            await self._auto_set_home_channels()
+
+            logger.info("Matrix: hot-added agent %s (%s)", agent_id, user_id)
+            return True
+
+        except Exception as e:
+            logger.warning("Matrix: failed to hot-add agent %s: %s", agent_id, e)
+            return False
+
+    async def _auto_set_home_channels(self) -> None:
+        """Auto-set Matrix home channels.
+
+        Platform default: #chatter room
+        Per-agent: DM room with owner (found by scanning joined rooms)
         """
         import nio
 
-        # 1. Resolve #updates as platform-wide default
-        updates_room_id = None
+        # Resolve #chatter as platform-wide default
         try:
-            alias = f"#updates:{self.server_name}"
+            alias = f"#chatter:{self.server_name}"
             resp = await self._client.room_resolve_alias(alias)
             if isinstance(resp, nio.RoomResolveAliasResponse):
-                updates_room_id = resp.room_id
                 if not self.config.home_channel:
                     from gateway.config import HomeChannel
                     self.config.home_channel = HomeChannel(
                         platform=Platform.MATRIX,
                         chat_id=resp.room_id,
-                        name="Updates",
+                        name="Agent Chatter",
                     )
                     os.environ["MATRIX_HOME_CHANNEL"] = resp.room_id
                     logger.info("Matrix: platform home channel → %s (%s)", alias, resp.room_id)
         except Exception as e:
-            logger.debug("Matrix: could not resolve #updates: %s", e)
+            logger.debug("Matrix: could not resolve #chatter: %s", e)
 
-        # 2. Set per-agent home channels
+        # Set per-agent home channels to their owner DM rooms
         try:
             from vulti_cli.agent_registry import AgentRegistry
+            from gateway.matrix_agents import _get_owner_matrix_credentials
             reg = AgentRegistry()
-            reg.ensure_initialized()
-            # Read relationships directly from registry data
-            reg_data = reg._load()
-            relationships = reg_data.get("relationships", [])
+            owner_creds = _get_owner_matrix_credentials()
+            owner_user_id = owner_creds.get("user_id") if owner_creds else None
 
-            # Identify team-managed agents (managed by another agent, not owner)
-            team_managed = set()
-            for rel in relationships:
-                if rel.get("rel_type") == "manages" and rel.get("from_agent_id") not in ("owner", ""):
-                    team_managed.add(rel.get("to_agent_id"))
+            if owner_user_id:
+                for agent_id, info in self._agent_clients.items():
+                    agent = reg.get_agent(agent_id)
+                    if not agent:
+                        continue
+                    existing = (agent.home_channels or {}).get("matrix")
+                    if existing and existing.get("chat_id"):
+                        continue  # Already set
 
-            for agent_id in self._agent_clients:
-                agent = reg.get_agent(agent_id)
-                if not agent:
-                    continue
-                existing = (agent.home_channels or {}).get("matrix")
-                if existing and existing.get("chat_id"):
-                    continue  # Already configured
-
-                # Team-managed agents: use team room
-                if agent_id in team_managed:
-                    team_room = None
-                    for rel in relationships:
-                        if rel.get("to_agent_id") == agent_id and rel.get("from_agent_id") not in ("owner", ""):
-                            team_room = rel.get("matrix_room_id")
-                            if team_room:
-                                break
-                    if team_room:
-                        reg.set_home_channel(agent_id, "matrix", team_room, name="Team")
-                        logger.info("Matrix: %s home channel → team room %s", agent_id, team_room)
-                    elif updates_room_id:
-                        reg.set_home_channel(agent_id, "matrix", updates_room_id, name="Updates")
-                        logger.info("Matrix: %s home channel → #updates (team room not set)", agent_id)
-                    continue
-
-                # Solo agent: find DM with owner
-                owner_dm = None
-                for rel in relationships:
-                    if rel.get("from_agent_id") == "owner" and rel.get("to_agent_id") == agent_id:
-                        owner_dm = rel.get("matrix_room_id")
-                        if owner_dm:
-                            break
-
-                if owner_dm:
-                    reg.set_home_channel(agent_id, "matrix", owner_dm, name="Owner DM")
-                    logger.info("Matrix: %s home channel → owner DM %s", agent_id, owner_dm)
-                elif updates_room_id:
-                    reg.set_home_channel(agent_id, "matrix", updates_room_id, name="Updates")
-                    logger.info("Matrix: %s home channel → #updates (fallback)", agent_id)
-
+                    # Find the DM room: a room with exactly {agent, owner} and no name
+                    agent_client = info.get("client")
+                    if not agent_client:
+                        continue
+                    try:
+                        rooms_resp = await agent_client.joined_rooms()
+                        if hasattr(rooms_resp, "rooms"):
+                            import httpx
+                            agent_uid = info["user_id"]
+                            async with httpx.AsyncClient(timeout=5.0) as hc:
+                                for room_id in rooms_resp.rooms:
+                                    # Skip named rooms (chatter, etc.)
+                                    from urllib.parse import quote
+                                    name_resp = await hc.get(
+                                        f"{self.homeserver_url}/_matrix/client/v3/rooms/{quote(room_id, safe='')}/state/m.room.name",
+                                        headers={"Authorization": f"Bearer {info['access_token']}"},
+                                    )
+                                    if name_resp.status_code == 200 and name_resp.json().get("name"):
+                                        continue
+                                    # Check members
+                                    members_resp = await hc.get(
+                                        f"{self.homeserver_url}/_matrix/client/v3/rooms/{quote(room_id, safe='')}/joined_members",
+                                        headers={"Authorization": f"Bearer {info['access_token']}"},
+                                    )
+                                    if members_resp.status_code == 200:
+                                        members = set(members_resp.json().get("joined", {}).keys())
+                                        if members == {agent_uid, owner_user_id}:
+                                            reg.set_home_channel(agent_id, "matrix", room_id, name="Owner DM")
+                                            logger.info("Matrix: %s home channel → DM %s", agent_id, room_id)
+                                            break
+                    except Exception as e:
+                        logger.debug("Matrix: could not find DM for %s: %s", agent_id, e)
         except Exception as e:
-            logger.debug("Matrix: per-agent home channel setup failed: %s", e)
+            logger.debug("Matrix: per-agent home channel setup: %s", e)
 
     async def _sync_loop(self, agent_id: str, client) -> None:
         """Sync loop for a single agent's client."""

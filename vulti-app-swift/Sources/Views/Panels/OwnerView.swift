@@ -602,53 +602,18 @@ struct GeneralSettingsView: View {
                         .foregroundStyle(VultiTheme.inkDim)
                 }
             } else {
-                ForEach(providers, id: \.id) { provider in
-                    providerRow(provider)
+                ModelPicker(
+                    style: .radioList,
+                    selectedModel: $defaultModel,
+                    providers: providers,
+                    defaultModel: defaultModel,
+                    defaultProvider: defaultProvider
+                ) { model, providerId in
+                    setDefaultModel(model, providerId: providerId)
                 }
             }
         } header: {
             Text("PROVIDERS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-        }
-    }
-
-    private func providerRow(_ provider: GatewayClient.ProviderResponse) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Circle()
-                    .fill(provider.authenticated ? .green : VultiTheme.inkDim)
-                    .frame(width: 8, height: 8)
-                Text(provider.name)
-                    .font(.system(size: 13, weight: .medium))
-                Spacer()
-                Text(provider.authenticated ? "Connected" : "Not configured")
-                    .font(.system(size: 11))
-                    .foregroundStyle(VultiTheme.inkDim)
-            }
-
-            if provider.authenticated, let models = provider.models, !models.isEmpty {
-                ForEach(models, id: \.self) { model in
-                    let isDefault = defaultModel == model && defaultProvider == provider.id
-                    HStack(spacing: 8) {
-                        Image(systemName: isDefault ? "circle.inset.filled" : "circle")
-                            .font(.system(size: 12))
-                            .foregroundStyle(isDefault ? AnyShapeStyle(VultiTheme.rainbowGradient) : AnyShapeStyle(VultiTheme.inkDim))
-                        Text(model)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(isDefault ? VultiTheme.inkSoft : VultiTheme.inkDim)
-                        if isDefault {
-                            Text("default")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(VultiTheme.rainbowGradient)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(VultiTheme.paperDeep, in: Capsule())
-                        }
-                    }
-                    .padding(.leading, 16)
-                    .contentShape(Rectangle())
-                    .onTapGesture { setDefaultModel(model, providerId: provider.id) }
-                }
-            }
         }
     }
 
@@ -708,15 +673,21 @@ struct GeneralSettingsView: View {
 
     private func reload() async {
         isLoadingProviders = true
-        do { providers = try await app.client.listProviders() } catch {}
+        // Fetch all data in parallel
+        async let p = (try? await app.client.listProviders()) ?? []
+        async let o = (try? await app.client.oauthStatus()) ?? []
+        async let perm = (try? await app.client.listPermissions()) ?? []
+        async let s = (try? await app.client.listSecrets()) ?? []
+
+        let (fetchedProviders, fetchedOAuth, fetchedPerms, fetchedSecrets) = await (p, o, perm, s)
+        providers = fetchedProviders
         isLoadingProviders = false
-        do { oauthStatuses = try await app.client.oauthStatus() } catch {}
-        do { pendingPermissions = try await app.client.listPermissions() } catch {}
-        // Load default model and provider from secrets
-        if let secrets = try? await app.client.listSecrets() {
-            defaultModel = secrets.first(where: { $0.key == "VULTI_DEFAULT_MODEL" })?.maskedValue ?? ""
-            defaultProvider = secrets.first(where: { $0.key == "VULTI_DEFAULT_PROVIDER" })?.maskedValue ?? ""
-        }
+        oauthStatuses = fetchedOAuth
+        pendingPermissions = fetchedPerms
+
+        defaultModel = fetchedSecrets.first(where: { $0.key == "VULTI_DEFAULT_MODEL" })?.maskedValue ?? ""
+        defaultProvider = fetchedSecrets.first(where: { $0.key == "VULTI_DEFAULT_PROVIDER" })?.maskedValue ?? ""
+
         // If provider not set, infer from first connected provider that has the model
         if defaultProvider.isEmpty && !defaultModel.isEmpty {
             for p in providers where p.authenticated {
@@ -1111,57 +1082,16 @@ struct CreateAgentView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(VultiTheme.inkSoft)
 
-                    if authenticatedProviders.isEmpty {
-                        // No providers warning
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle")
-                                .foregroundStyle(.orange)
-                            Text("No API keys configured. Add one to get started.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(VultiTheme.inkDim)
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                    } else {
-                        // Model list grouped by provider
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(authenticatedProviders, id: \.id) { provider in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(provider.name)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(VultiTheme.inkDim)
-                                        .textCase(.uppercase)
-
-                                    ForEach(provider.models ?? [], id: \.self) { m in
-                                        let modelId = stripProviderPrefix(m)
-                                        HStack(spacing: 8) {
-                                            Image(systemName: selectedModel == modelId ? "circle.inset.filled" : "circle")
-                                                .font(.system(size: 13))
-                                                .foregroundStyle(selectedModel == modelId ? VultiTheme.primary : VultiTheme.inkDim)
-                                            Text(modelId)
-                                                .font(.system(size: 12, design: .monospaced))
-                                                .foregroundStyle(selectedModel == modelId ? VultiTheme.inkSoft : VultiTheme.inkDim)
-                                        }
-                                        .padding(.vertical, 4)
-                                        .padding(.horizontal, 8)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(
-                                            selectedModel == modelId
-                                                ? VultiTheme.primary.opacity(0.08)
-                                                : Color.clear,
-                                            in: RoundedRectangle(cornerRadius: 6)
-                                        )
-                                        .contentShape(Rectangle())
-                                        .onTapGesture { selectedModel = modelId }
-                                    }
-                                }
-                            }
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, maxHeight: 192, alignment: .topLeading)
-                        .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                    ScrollView {
+                        ModelPicker(
+                            style: .radioList,
+                            selectedModel: $selectedModel,
+                            providers: authenticatedProviders
+                        )
                     }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: 240, alignment: .topLeading)
+                    .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
                     // Inline API key addition
                     if showAddKey {
@@ -1260,16 +1190,7 @@ struct CreateAgentView: View {
         }
     }
 
-    /// Strip provider routing prefix (e.g. "openrouter/anthropic/claude-opus-4" → "anthropic/claude-opus-4")
-    private func stripProviderPrefix(_ model: String) -> String {
-        let prefixes = ["openrouter/", "openai/openai/", "anthropic/anthropic/"]
-        for prefix in prefixes {
-            if model.hasPrefix(prefix) {
-                return String(model.dropFirst(prefix.count))
-            }
-        }
-        return model
-    }
+
 
     private func create() {
         error = nil

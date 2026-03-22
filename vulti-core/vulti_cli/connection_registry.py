@@ -247,7 +247,13 @@ class ConnectionRegistry:
         """Return merged ``{ENV_VAR: value}`` for all allowed connections."""
         creds: Dict[str, str] = {}
         for entry in self.get_for_agent(agent_id):
-            creds.update(entry.credentials)
+            if isinstance(entry.credentials, dict):
+                creds.update(entry.credentials)
+            else:
+                logger.warning(
+                    "Connection '%s' has non-dict credentials (type=%s), skipping",
+                    entry.name, type(entry.credentials).__name__,
+                )
         return creds
 
     def get_mcp_configs_for_agent(self, agent_id: str) -> Dict[str, dict]:

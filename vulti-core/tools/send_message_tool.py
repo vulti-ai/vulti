@@ -54,7 +54,6 @@ SEND_MESSAGE_SCHEMA = {
 
 
 def send_message_tool(args, **kw):
-    """Handle cross-channel send_message tool calls."""
     action = args.get("action", "send")
 
     if action == "list":
@@ -723,3 +722,6 @@ registry.register(
     check_fn=_check_send_message,
     emoji="📨",
 )
+
+# Alias for orchestrator compatibility
+send_message = send_message_tool

@@ -231,6 +231,10 @@ from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageTyp
 
 logger = logging.getLogger(__name__)
 
+# Module-level reference to the running gateway runner, set during start().
+# Used by web.py endpoints to access adapters (e.g. hot_add_agent).
+_active_runner: Optional["GatewayRunner"] = None
+
 
 def _resolve_runtime_agent_kwargs() -> dict:
     """Resolve provider credentials for gateway-created AIAgent instances."""
@@ -1232,56 +1236,9 @@ class GatewayRunner:
                 self._continuwuity = ContinuwuityManager(server_name=server_name, port=port)
                 if await self._continuwuity.start():
                     logger.info("✓ Continuwuity homeserver started on port %d", port)
-                    # Register agents as Matrix users
-                    try:
-                        from gateway.matrix_agents import sync_agents_to_matrix, ensure_room_topology, ensure_relationship_rooms, get_agent_matrix_credentials
-                        agent_matrix_ids = await sync_agents_to_matrix(
-                            homeserver_url=self._continuwuity.homeserver_url,
-                            server_name=server_name,
-                            registration_token=self._continuwuity.registration_token,
-                        )
-                        logger.info("Matrix: sync_agents_to_matrix returned %d agents: %s", len(agent_matrix_ids), list(agent_matrix_ids.keys()))
-                        # Inject first available agent credentials into Matrix platform config
-                        default_agent_id = next(iter(agent_matrix_ids), "")
-                        logger.info("Matrix: primary_agent_id=%s", default_agent_id)
-                        creds = get_agent_matrix_credentials(default_agent_id)
-                        if creds:
-                            logger.info("Matrix: got creds for %s, setting up topology...", default_agent_id)
-                            matrix_config.extra["user_id"] = creds["user_id"]
-                            matrix_config.extra["access_token"] = creds["access_token"]
-                            matrix_config.extra["homeserver_url"] = creds["homeserver_url"]
-                            # Set up room topology
-                            try:
-                                rooms = await ensure_room_topology(
-                                    homeserver_url=creds["homeserver_url"],
-                                    access_token=creds["access_token"],
-                                    server_name=server_name,
-                                    agent_matrix_ids=agent_matrix_ids,
-                                )
-                                logger.info("Matrix: ensure_room_topology returned %d rooms: %s", len(rooms), rooms)
-                                # Set home channel to Agent Coordination if not configured
-                                updates_alias = f"#updates:{server_name}"
-                                if updates_alias in rooms and not matrix_config.home_channel:
-                                    from gateway.config import HomeChannel
-                                    matrix_config.home_channel = HomeChannel(
-                                        platform=Platform.MATRIX,
-                                        chat_id=rooms[updates_alias],
-                                        name="Updates",
-                                    )
-                                # Ensure relationship-based rooms (team rooms, DMs, peer channels)
-                                try:
-                                    await ensure_relationship_rooms(
-                                        homeserver_url=creds["homeserver_url"],
-                                        server_name=server_name,
-                                    )
-                                except Exception as e:
-                                    logger.warning("Matrix relationship rooms: %s", e)
-                            except Exception as e:
-                                logger.warning("Matrix room topology setup: %s", e, exc_info=True)
-                        else:
-                            logger.warning("Matrix: no credentials for default agent '%s', adapter may fail", default_agent_id)
-                    except Exception as e:
-                        logger.warning("Matrix agent registration: %s", e, exc_info=True)
+                    # Export for web.py endpoints that need these values
+                    os.environ["MATRIX_SERVER_NAME"] = server_name
+                    os.environ["MATRIX_HOMESERVER_URL"] = self._continuwuity.homeserver_url
                 else:
                     logger.warning("✗ Continuwuity failed to start — Matrix will be disabled")
                     matrix_config.enabled = False
@@ -1364,6 +1321,8 @@ class GatewayRunner:
         self.delivery_router.adapters = self.adapters
         
         self._running = True
+        global _active_runner
+        _active_runner = self
         try:
             from gateway.status import write_runtime_status
             write_runtime_status(gateway_state="running", exit_reason=None)
@@ -1600,6 +1559,16 @@ class GatewayRunner:
         # so they are always authorized here.
         if source.platform == Platform.APP:
             return True
+
+        # The owner is always authorized on Matrix
+        if source.platform == Platform.MATRIX:
+            try:
+                from gateway.matrix_agents import _get_owner_matrix_credentials
+                owner_creds = _get_owner_matrix_credentials()
+                if owner_creds and source.user_id == owner_creds.get("user_id"):
+                    return True
+            except Exception:
+                pass
 
         user_id = source.user_id
         if not user_id:
@@ -2306,7 +2275,7 @@ class GatewayRunner:
         if not history and not self.session_store.has_any_sessions():
             context_prompt += (
                 "\n\n[System note: This is the user's very first message ever. "
-                "Briefly introduce yourself and mention that /help shows available commands. "
+                "Briefly introduce yourself. "
                 "Keep the introduction concise -- one or two sentences max.]"
             )
 

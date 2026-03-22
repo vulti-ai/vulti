@@ -41,6 +41,22 @@ _RESERVED_IDS = frozenset({"agent", "agents", "api", "ws", "system", "interagent
 HECTOR_AGENT_ID = "hector"
 
 
+def _role_emoji(role: str) -> str:
+    """Pick an emoji that fits the agent's role."""
+    return {
+        "assistant": "✦",
+        "engineer": "⚙",
+        "researcher": "◎",
+        "analyst": "◆",
+        "writer": "✎",
+        "therapist": "☯",
+        "coach": "⚑",
+        "creative": "✧",
+        "ops": "⚿",
+        "wizard": "🧙",
+    }.get((role or "").lower(), "◇")
+
+
 @dataclass
 class AgentMeta:
     """Metadata for a registered agent."""
@@ -146,6 +162,11 @@ class AgentRegistry:
             raise ValueError(f"Source agent '{clone_from}' not found")
 
         now = datetime.now(timezone.utc).isoformat()
+
+        # Assign a role-based emoji if no avatar provided
+        if not avatar:
+            avatar = _role_emoji(role)
+
         meta = AgentMeta(
             id=agent_id,
             name=name,
@@ -506,6 +527,9 @@ class AgentRegistry:
         if not role_path.exists():
             role_path.write_text("wizard", encoding="utf-8")
 
+        # Install default skills
+        self._install_hector_skills(agent_home)
+
         # Seed default cron jobs
         self._seed_hector_cron(hector_id)
 
@@ -525,6 +549,25 @@ class AgentRegistry:
         }
         self._save()
         logger.info("Seeded hector agent '%s'", hector_id)
+
+    @staticmethod
+    def _install_hector_skills(agent_home: Path) -> None:
+        """Symlink default skills into Hector's skills directory."""
+        skills_dir = agent_home / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find the optional-skills directory relative to the package
+        import vulti_cli
+        pkg_root = Path(vulti_cli.__file__).resolve().parent.parent
+        default_skills = [
+            ("agent-creation", pkg_root / "optional-skills" / "system" / "agent-creation"),
+            ("whatsapp-reader", pkg_root / "optional-skills" / "productivity" / "whatsapp-reader"),
+        ]
+        for name, src in default_skills:
+            dest = skills_dir / name
+            if not dest.exists() and src.exists():
+                dest.symlink_to(src)
+                logger.debug("Installed skill '%s' for hector", name)
 
     def _seed_hector_cron(self, agent_id: str) -> None:
         """Seed default cron jobs for the hector agent."""

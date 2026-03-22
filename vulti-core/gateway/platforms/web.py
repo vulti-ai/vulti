@@ -28,6 +28,18 @@ from gateway.platforms.base import (
 from gateway.session import SessionSource
 
 
+async def _hot_add_to_matrix(agent_id: str) -> None:
+    """Hot-add an agent to the running Matrix adapter."""
+    try:
+        from gateway.run import _active_runner
+        if _active_runner:
+            matrix_adapter = _active_runner.adapters.get(Platform.MATRIX)
+            if matrix_adapter and hasattr(matrix_adapter, 'hot_add_agent'):
+                await matrix_adapter.hot_add_agent(agent_id)
+    except Exception as e:
+        logger.warning("[web] hot_add_to_matrix failed for %s: %s", agent_id, e)
+
+
 def check_web_requirements() -> bool:
     """Check if FastAPI and uvicorn are available."""
     try:
@@ -552,43 +564,66 @@ class WebAdapter(BasePlatformAdapter):
                 "access_token": result["access_token"],
             }, indent=2))
 
-            # Invite and join owner to all rooms
+            # Create #chatter room (owner is the creator)
             try:
                 import httpx
+                from gateway.matrix_agents import _BASE_INITIAL_STATE, _POWER_LEVEL_OVERRIDE
                 server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
-                tokens_dir = _continuwuity_dir() / "tokens"
-                # Get an agent token for inviting
-                agent_token = None
-                for f in tokens_dir.iterdir():
-                    if f.suffix == ".json":
-                        agent_token = json.loads(f.read_text()).get("access_token")
-                        break
-                if agent_token:
-                    owner_headers = {"Authorization": f"Bearer {result['access_token']}"}
-                    agent_headers = {"Authorization": f"Bearer {agent_token}"}
-                    async with httpx.AsyncClient(timeout=10.0) as hc:
-                        for room_alias in ["chatter", "updates"]:
+                owner_headers = {"Authorization": f"Bearer {result['access_token']}"}
+                async with httpx.AsyncClient(timeout=10.0) as hc:
+                    # Check if #chatter already exists
+                    resp = await hc.get(
+                        f"{homeserver_url}/_matrix/client/v3/directory/room/%23chatter:{server_name}",
+                    )
+                    if resp.status_code == 200:
+                        # Already exists — just join
+                        room_id = resp.json().get("room_id")
+                        if room_id:
+                            await hc.post(
+                                f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
+                                headers=owner_headers, json={},
+                            )
+                    else:
+                        # Create it
+                        resp = await hc.post(
+                            f"{homeserver_url}/_matrix/client/v3/createRoom",
+                            headers=owner_headers,
+                            json={
+                                "name": "Agent Chatter",
+                                "topic": "Casual chat — agents talk freely, no restrictions",
+                                "room_alias_name": "chatter",
+                                "visibility": "private",
+                                "preset": "private_chat",
+                                "initial_state": _BASE_INITIAL_STATE,
+                                "power_level_content_override": _POWER_LEVEL_OVERRIDE,
+                            },
+                        )
+                        if resp.status_code == 200:
+                            chatter_room_id = resp.json().get("room_id")
+                            logger.info("[web] Created #chatter room")
+                            # Set room avatar
                             try:
-                                resp = await hc.get(
-                                    f"{homeserver_url}/_matrix/client/v3/directory/room/%23{room_alias}:{server_name}",
-                                )
-                                if resp.status_code == 200:
-                                    room_id = resp.json().get("room_id")
-                                    if room_id:
-                                        await hc.post(
-                                            f"{homeserver_url}/_matrix/client/v3/rooms/{room_id}/invite",
-                                            headers=agent_headers,
-                                            json={"user_id": result["user_id"]},
-                                        )
-                                        await hc.post(
-                                            f"{homeserver_url}/_matrix/client/v3/join/{room_id}",
-                                            headers=owner_headers,
-                                            json={},
-                                        )
+                                from gateway.matrix_agents import _render_emoji_to_png
+                                avatar_data = _render_emoji_to_png("👥")
+                                if avatar_data:
+                                    up = await hc.post(
+                                        f"{homeserver_url}/_matrix/media/v3/upload",
+                                        headers={"Authorization": f"Bearer {result['access_token']}", "Content-Type": "image/png"},
+                                        params={"filename": "chatter_avatar.png"},
+                                        content=avatar_data,
+                                    )
+                                    if up.status_code == 200:
+                                        mxc = up.json().get("content_uri")
+                                        if mxc:
+                                            await hc.put(
+                                                f"{homeserver_url}/_matrix/client/v3/rooms/{chatter_room_id}/state/m.room.avatar",
+                                                headers={"Authorization": f"Bearer {result['access_token']}"},
+                                                json={"url": mxc},
+                                            )
                             except Exception:
                                 pass
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("[web] Failed to create #chatter: %s", e)
 
             return {"user_id": result["user_id"], "username": username}
 
@@ -692,8 +727,14 @@ class WebAdapter(BasePlatformAdapter):
             agent_id = data.get("agent_id", "").strip()
             agent_name = data.get("agent_name", "").strip()
 
-            if not agent_id or not agent_name:
-                raise HTTPException(status_code=400, detail="agent_id and agent_name are required")
+            if not agent_id:
+                raise HTTPException(status_code=400, detail="agent_id is required")
+
+            # Look up agent name from registry if not provided
+            if not agent_name:
+                from vulti_cli.agent_registry import AgentRegistry
+                meta = AgentRegistry().get_agent(agent_id)
+                agent_name = meta.name if meta else agent_id.capitalize()
 
             port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
             homeserver_url = f"http://127.0.0.1:{port}"
@@ -711,6 +752,10 @@ class WebAdapter(BasePlatformAdapter):
                 agent_id=agent_id,
                 agent_name=agent_name,
             )
+
+            # Hot-add agent to the running Matrix adapter
+            if result.get("matrix_user_id"):
+                await _hot_add_to_matrix(agent_id)
 
             return result
 
@@ -739,8 +784,13 @@ class WebAdapter(BasePlatformAdapter):
             agent_id = data.get("agent_id", "").strip()
             agent_name = data.get("agent_name", "").strip()
 
-            if not agent_id or not agent_name:
-                raise HTTPException(status_code=400, detail="agent_id and agent_name are required")
+            if not agent_id:
+                raise HTTPException(status_code=400, detail="agent_id is required")
+
+            if not agent_name:
+                from vulti_cli.agent_registry import AgentRegistry
+                meta = AgentRegistry().get_agent(agent_id)
+                agent_name = meta.name if meta else agent_id.capitalize()
 
             port = int(os.getenv("MATRIX_CONTINUWUITY_PORT", "6167"))
             homeserver_url = f"http://127.0.0.1:{port}"
@@ -1852,36 +1902,27 @@ class WebAdapter(BasePlatformAdapter):
         }
 
     async def _setup_agent_matrix(self, agent_id: str, agent_name: str) -> None:
-        """Register a new agent on Matrix and create an owner DM room."""
+        """Register a new agent on Matrix, join rooms, create owner DM."""
         try:
-            from gateway.matrix_agents import (
-                ensure_agent_matrix_user,
-                create_owner_relationship,
-            )
+            from gateway.matrix_agents import onboard_agent_to_matrix
             from gateway.continuwuity import _get_or_create_registration_token
 
             homeserver_url = os.getenv("MATRIX_HOMESERVER_URL", "http://127.0.0.1:6167")
             server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
             registration_token = _get_or_create_registration_token()
 
-            matrix_id = await ensure_agent_matrix_user(
-                agent_id=agent_id,
-                agent_name=agent_name,
+            result = await onboard_agent_to_matrix(
                 homeserver_url=homeserver_url,
                 server_name=server_name,
                 registration_token=registration_token,
-            )
-            if not matrix_id:
-                logger.warning("[web] Failed to register %s on Matrix", agent_id)
-                return
-
-            await create_owner_relationship(
-                homeserver_url=homeserver_url,
-                server_name=server_name,
                 agent_id=agent_id,
                 agent_name=agent_name,
             )
-            logger.info("[web] Matrix setup complete for %s: %s", agent_id, matrix_id)
+            if result.get("matrix_user_id"):
+                logger.info("[web] Matrix onboarding complete for %s: %s", agent_id, result["matrix_user_id"])
+                await _hot_add_to_matrix(agent_id)
+            else:
+                logger.warning("[web] Failed to register %s on Matrix", agent_id)
         except Exception as e:
             logger.warning("[web] Matrix setup failed for %s: %s", agent_id, e)
 
@@ -2711,14 +2752,19 @@ class WebAdapter(BasePlatformAdapter):
     # Map of env var keys → connection entries to auto-create
     # Map env var keys to connection entries. LLM providers (OpenRouter, Anthropic, etc.)
     # are NOT connections — they're infrastructure managed in the Providers settings.
+    # Maps env var name → (connection_name, type, description, tags, credential_keys)
     _ENV_TO_CONNECTION = {
-        "FIRECRAWL_API_KEY": ("firecrawl", "api_key", "Firecrawl — web scraping", ["web", "scraping"]),
-        "FAL_KEY": ("fal-ai", "api_key", "FAL.ai — image generation", ["media", "images"]),
-        "BROWSERBASE_API_KEY": ("browserbase", "api_key", "Browserbase — browser automation", ["web", "browser"]),
-        "ELEVENLABS_API_KEY": ("elevenlabs", "api_key", "ElevenLabs — text-to-speech", ["voice", "tts"]),
-        "TELEGRAM_BOT_TOKEN": ("telegram", "api_key", "Telegram — bot messaging", ["messaging", "bot"]),
-        "BLAND_API_KEY": ("bland-ai", "api_key", "Bland.ai — AI phone calls", ["voice", "ai"]),
-        "WANDB_API_KEY": ("wandb", "api_key", "Weights & Biases — ML tracking", ["analytics", "ml"]),
+        "FIRECRAWL_API_KEY": ("firecrawl", "api_key", "Firecrawl — web scraping", ["web", "scraping"], ["FIRECRAWL_API_KEY"]),
+        "FAL_KEY": ("fal-ai", "api_key", "FAL.ai — image generation", ["media", "images"], ["FAL_KEY"]),
+        "BROWSERBASE_API_KEY": ("browserbase", "api_key", "Browserbase — browser automation", ["web", "browser"], ["BROWSERBASE_API_KEY"]),
+        "ELEVENLABS_API_KEY": ("elevenlabs", "api_key", "ElevenLabs — text-to-speech", ["voice", "tts"], ["ELEVENLABS_API_KEY"]),
+        "VOICE_TOOLS_OPENAI_KEY": ("openai-voice", "api_key", "OpenAI — TTS and speech-to-text", ["voice", "tts", "stt"], ["VOICE_TOOLS_OPENAI_KEY"]),
+        "TELEGRAM_BOT_TOKEN": ("telegram", "api_key", "Telegram — bot messaging", ["messaging", "bot"], ["TELEGRAM_BOT_TOKEN"]),
+        "BLAND_API_KEY": ("bland-ai", "api_key", "Bland.ai — AI phone calls", ["voice", "ai"], ["BLAND_API_KEY"]),
+        "TWILIO_ACCOUNT_SID": ("twilio", "api_key", "Twilio — SMS, MMS, and voice calls", ["phone", "sms", "voice"], ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER"]),
+        "TWILIO_AUTH_TOKEN": ("twilio", "api_key", "Twilio — SMS, MMS, and voice calls", ["phone", "sms", "voice"], ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER"]),
+        "TWILIO_PHONE_NUMBER": ("twilio", "api_key", "Twilio — SMS, MMS, and voice calls", ["phone", "sms", "voice"], ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER"]),
+        "WANDB_API_KEY": ("wandb", "api_key", "Weights & Biases — ML tracking", ["analytics", "ml"], ["WANDB_API_KEY"]),
     }
 
     def _add_secret(self, key: str, value: str) -> dict:
@@ -2744,18 +2790,27 @@ class WebAdapter(BasePlatformAdapter):
 
         return {"ok": True, "key": key}
 
-    def _ensure_connection(self, name: str, conn_type: str, description: str, tags: list) -> None:
-        """Create a connection entry if it doesn't already exist."""
+    def _ensure_connection(self, name: str, conn_type: str, description: str, tags: list, credential_keys: list = None) -> None:
+        """Create a connection entry if it doesn't already exist, with credentials."""
         try:
             from vulti_cli.connection_registry import ConnectionRegistry, ConnectionEntry
             registry = ConnectionRegistry(self._get_vulti_home())
-            if registry.get(name) is not None:
+            existing = registry.get(name)
+            if existing is not None:
+                # Update credentials if they're empty but we have keys now
+                if credential_keys and not existing.credentials:
+                    cred_dict = {k: k for k in credential_keys}
+                    connections = registry.load()
+                    connections[name].credentials = cred_dict
+                    registry.save(connections)
                 return
             # Don't re-add if user explicitly deleted it
             if name in registry._get_deleted():
                 return
+            cred_dict = {k: k for k in (credential_keys or [])}
             registry.add(name, ConnectionEntry(
                 name=name, type=conn_type, description=description, tags=tags,
+                credentials=cred_dict,
             ))
         except Exception as e:
             logger.debug("Could not auto-create connection '%s': %s", name, e)

@@ -160,6 +160,9 @@ async def _try_download_binary(target_path: Path) -> Optional[Path]:
                         dl.raise_for_status()
                         target_path.write_bytes(dl.content)
                         target_path.chmod(target_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+                        # Re-sign on macOS so Gatekeeper doesn't SIGKILL the binary
+                        if system == "darwin":
+                            await _codesign_binary(target_path)
                         logger.info("Continuwuity: installed to %s", target_path)
                         return target_path
 
@@ -169,6 +172,23 @@ async def _try_download_binary(target_path: Path) -> Optional[Path]:
         logger.warning("Continuwuity: download attempt failed: %s", e)
 
     return None
+
+
+async def _codesign_binary(binary_path: Path) -> None:
+    """Re-sign binary with ad-hoc signature so macOS doesn't SIGKILL it."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "codesign", "--force", "--sign", "-", str(binary_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode == 0:
+            logger.info("Continuwuity: re-signed binary with ad-hoc signature")
+        else:
+            logger.warning("Continuwuity: codesign failed: %s", stderr.decode(errors="replace"))
+    except FileNotFoundError:
+        pass  # codesign not available (non-macOS)
 
 
 async def _try_cargo_install(target_path: Path) -> Optional[Path]:
@@ -363,6 +383,10 @@ class ContinuwuityManager:
             data_dir=self.data_dir,
         )
 
+        # Ensure binary is properly signed on macOS (prevents SIGKILL)
+        if platform.system().lower() == "darwin":
+            await _codesign_binary(self._binary_path)
+
         # Spawn process — capture stdout to extract bootstrap token on first run
         env = os.environ.copy()
         env["CONDUIT_CONFIG"] = str(config_path)
@@ -455,8 +479,12 @@ class ContinuwuityManager:
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     resp = await client.get(url)
                     if resp.status_code == 200:
-                        # Give stdout reader a moment to capture the token
-                        await asyncio.sleep(0.5)
+                        # Wait for stderr reader to capture bootstrap token (first-run only)
+                        for _ in range(10):
+                            if self._bootstrap_token:
+                                break
+                            await asyncio.sleep(0.3)
+                        stderr_task.cancel()
                         return True
             except Exception:
                 pass

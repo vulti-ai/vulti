@@ -22,15 +22,15 @@ _BASE_INITIAL_STATE = [
         "type": "m.room.history_visibility",
         "content": {"history_visibility": "shared"},
     },
-    {
-        "type": "m.room.power_levels",
-        "content": {
-            "events": {
-                "m.room.encryption": 101,
-            },
-        },
-    },
 ]
+
+# Power level override: block E2EE by requiring PL 101 (above admin=100) for
+# m.room.encryption. Used via "power_level_content_override" in createRoom.
+_POWER_LEVEL_OVERRIDE = {
+    "events": {
+        "m.room.encryption": 101,
+    },
+}
 
 
 def _tokens_dir() -> Path:
@@ -280,26 +280,68 @@ async def ensure_agent_matrix_user(
     return result["user_id"]
 
 
+def _render_emoji_to_png(emoji: str, size: int = 160) -> Optional[bytes]:
+    """Render an emoji character to a PNG image. Returns bytes or None."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        font = None
+        # Apple Color Emoji only supports specific sizes (20,32,40,48,64,96,160)
+        for font_path in [
+            "/System/Library/Fonts/Apple Color Emoji.ttc",
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+        ]:
+            try:
+                font = ImageFont.truetype(font_path, size)
+                break
+            except (OSError, IOError):
+                continue
+        if not font:
+            return None
+        bbox = draw.textbbox((0, 0), emoji, font=font)
+        x = (size - (bbox[2] - bbox[0])) // 2 - bbox[0]
+        y = (size - (bbox[3] - bbox[1])) // 2 - bbox[1]
+        draw.text((x, y), emoji, font=font, embedded_color=True)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
 async def _sync_avatar_to_matrix(
     agent_id: str,
     user_id: str,
     access_token: str,
     homeserver_url: str,
 ) -> bool:
-    """Upload agent's avatar.png to Matrix and set as profile picture."""
+    """Upload agent's avatar to Matrix. Uses avatar.png if available, else renders emoji."""
     from vulti_cli.agent_registry import AgentRegistry
 
     registry = AgentRegistry()
     avatar_path = registry.agent_home(agent_id) / "avatar.png"
-    if not avatar_path.exists():
+
+    avatar_data = None
+    if avatar_path.exists():
+        avatar_data = avatar_path.read_bytes()
+    else:
+        # Render emoji avatar as PNG
+        meta = registry.get_agent(agent_id)
+        if meta and meta.avatar:
+            avatar_data = _render_emoji_to_png(meta.avatar)
+
+    if not avatar_data:
         return False
 
     try:
         import httpx
 
-        avatar_data = avatar_path.read_bytes()
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Upload image to Matrix media repo
             upload_resp = await client.post(
                 f"{homeserver_url}/_matrix/media/v3/upload",
                 headers={
@@ -317,7 +359,6 @@ async def _sync_avatar_to_matrix(
             if not mxc_uri:
                 return False
 
-            # Set avatar URL on profile
             await client.put(
                 f"{homeserver_url}/_matrix/client/v3/profile/{user_id}/avatar_url",
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -433,6 +474,7 @@ async def create_relationship_room(
                     "preset": "private_chat",
                     "invite": invite_list,
                     "initial_state": _BASE_INITIAL_STATE,
+                    "power_level_content_override": _POWER_LEVEL_OVERRIDE,
                 },
             )
 
@@ -493,7 +535,6 @@ async def ensure_room_topology(
     async with httpx.AsyncClient(timeout=15.0) as client:
         for alias_local, room_name, topic in [
             ("chatter", "Agent Chatter", "Casual chat — agents talk freely, no restrictions"),
-            ("updates", "Updates", "Agent reports, cron output, and status updates"),
         ]:
             full_alias = f"#{alias_local}:{server_name}"
 
@@ -532,6 +573,7 @@ async def ensure_room_topology(
                     "visibility": "private",
                     "preset": "private_chat",
                     "initial_state": _BASE_INITIAL_STATE,
+                    "power_level_content_override": _POWER_LEVEL_OVERRIDE,
                 }
                 if not alias_taken:
                     create_data["room_alias_name"] = alias_local
@@ -747,9 +789,6 @@ async def ensure_relationship_rooms(
         relationships = reg_data.get("relationships", [])
         agents_data = reg_data.get("agents", {})
 
-        if not relationships:
-            return result
-
         manager_teams: Dict[str, List[str]] = {}
         owner_dm_agents: List[str] = []
         collab_pairs: List[tuple] = []
@@ -856,6 +895,73 @@ def _get_owner_matrix_credentials() -> Optional[Dict[str, Any]]:
     return None
 
 
+async def ensure_owner_matrix_account(
+    homeserver_url: str,
+    server_name: str,
+    registration_token: str,
+) -> Optional[Dict[str, Any]]:
+    """Register the owner as a Matrix user if not already registered.
+
+    Reads the owner name from ~/.vulti/owner.json.
+    Returns credentials dict or None on failure.
+    """
+    import secrets as _secrets
+
+    creds = _get_owner_matrix_credentials()
+    if creds:
+        return creds
+
+    # Read owner profile for display name
+    owner_name = "Owner"
+    try:
+        owner_json = Path.home() / ".vulti" / "owner.json"
+        if owner_json.exists():
+            data = json.loads(owner_json.read_text())
+            owner_name = data.get("name", "Owner")
+    except Exception:
+        pass
+
+    username = "owner"
+    password = _secrets.token_urlsafe(32)
+
+    result = await register_matrix_user(
+        homeserver_url=homeserver_url,
+        username=username,
+        password=password,
+        registration_token=registration_token,
+    )
+
+    if not result:
+        logger.warning("Matrix: failed to register owner account")
+        return None
+
+    # Set display name
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.put(
+                f"{homeserver_url}/_matrix/client/v3/profile/{result['user_id']}/displayname",
+                headers={"Authorization": f"Bearer {result['access_token']}"},
+                json={"displayname": owner_name},
+            )
+    except Exception:
+        pass
+
+    # Save credentials
+    from gateway.continuwuity import _continuwuity_dir
+    owner_creds_path = _continuwuity_dir() / "owner_credentials.json"
+    creds_data = {
+        "username": username,
+        "password": password,
+        "user_id": result["user_id"],
+        "access_token": result["access_token"],
+        "homeserver_url": homeserver_url,
+    }
+    owner_creds_path.write_text(json.dumps(creds_data, indent=2))
+    logger.info("Matrix: registered owner as %s", result["user_id"])
+    return creds_data
+
+
 async def create_owner_dm_room(
     homeserver_url: str,
     server_name: str,
@@ -893,6 +999,16 @@ async def create_owner_dm_room(
             if resp.status_code == 200:
                 from urllib.parse import quote
                 for room_id in resp.json().get("joined_rooms", []):
+                    # Skip named rooms (chatter, updates, team rooms) — only match DMs
+                    try:
+                        name_resp = await client.get(
+                            f"{homeserver_url}/_matrix/client/v3/rooms/{quote(room_id, safe='')}/state/m.room.name",
+                            headers=agent_headers,
+                        )
+                        if name_resp.status_code == 200 and name_resp.json().get("name"):
+                            continue
+                    except Exception:
+                        pass
                     members_resp = await client.get(
                         f"{homeserver_url}/_matrix/client/v3/rooms/{quote(room_id, safe='')}/joined_members",
                         headers=agent_headers,
@@ -912,6 +1028,7 @@ async def create_owner_dm_room(
                     "preset": "trusted_private_chat",
                     "invite": [owner_user_id],
                     "initial_state": _BASE_INITIAL_STATE,
+                    "power_level_content_override": _POWER_LEVEL_OVERRIDE,
                 },
             )
 
@@ -1036,6 +1153,7 @@ async def create_squad_room(
                     "preset": "private_chat",
                     "invite": invite_ids,
                     "initial_state": _BASE_INITIAL_STATE,
+                    "power_level_content_override": _POWER_LEVEL_OVERRIDE,
                 },
             )
 
@@ -1196,9 +1314,8 @@ async def onboard_agent_to_matrix(
     1. Register as Matrix user
     2. Join the global rooms (chatter, updates)
     3. Say hi in Agent Chatter
-
-    DMs with the owner are only created when the user explicitly creates
-    a relationship between the owner and the agent.
+    4. Create owner DM (if owner is registered)
+    5. Create daily update cron job
 
     Returns dict with matrix_user_id.
     """
@@ -1218,7 +1335,7 @@ async def onboard_agent_to_matrix(
 
     import httpx
 
-    # Step 2: Join global rooms (chatter, updates)
+    # Step 2: Join #chatter
     chatter_room_id = None
     creds = get_agent_matrix_credentials(agent_id)
     if creds:
@@ -1237,32 +1354,27 @@ async def onboard_agent_to_matrix(
             inviter_headers = {"Authorization": f"Bearer {inviter_creds['access_token']}"}
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    for room_alias in ["chatter", "updates"]:
-                        try:
-                            resp = await client.get(
-                                f"{homeserver_url}/_matrix/client/v3/directory/room/%23{room_alias}:{server_name}",
+                    resp = await client.get(
+                        f"{homeserver_url}/_matrix/client/v3/directory/room/%23chatter:{server_name}",
+                    )
+                    if resp.status_code == 200:
+                        rid = resp.json().get("room_id")
+                        if rid:
+                            await client.post(
+                                f"{homeserver_url}/_matrix/client/v3/rooms/{rid}/invite",
+                                headers=inviter_headers,
+                                json={"user_id": matrix_user_id},
                             )
-                            if resp.status_code == 200:
-                                rid = resp.json().get("room_id")
-                                if rid:
-                                    await client.post(
-                                        f"{homeserver_url}/_matrix/client/v3/rooms/{rid}/invite",
-                                        headers=inviter_headers,
-                                        json={"user_id": matrix_user_id},
-                                    )
-                                    await client.post(
-                                        f"{homeserver_url}/_matrix/client/v3/join/{rid}",
-                                        headers=agent_headers,
-                                        json={},
-                                    )
-                                    if room_alias == "chatter":
-                                        chatter_room_id = rid
-                        except Exception:
-                            pass
+                            await client.post(
+                                f"{homeserver_url}/_matrix/client/v3/join/{rid}",
+                                headers=agent_headers,
+                                json={},
+                            )
+                            chatter_room_id = rid
             except Exception as e:
-                logger.warning("Matrix: error joining global rooms for %s: %s", agent_id, e)
+                logger.warning("Matrix: error joining #chatter for %s: %s", agent_id, e)
 
-    # Step 3: Say hi in Agent Chatter
+    # Step 3: Say hi in #chatter
     if chatter_room_id:
         await send_room_message(
             homeserver_url=homeserver_url,
@@ -1271,34 +1383,30 @@ async def onboard_agent_to_matrix(
             body=f"Hey everyone, {agent_name} here. Just joined the squad!",
         )
 
-    # Step 4: Create daily update cron job if the updates room exists
-    if creds:
-        try:
-            updates_room_id = None
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    f"{homeserver_url}/_matrix/client/v3/directory/room/%23updates:{server_name}",
-                )
-                if resp.status_code == 200:
-                    updates_room_id = resp.json().get("room_id")
-            if updates_room_id:
-                from cron.jobs import create_job, list_jobs
-                existing = list_jobs(include_disabled=True)
-                already = any(
-                    j.get("agent") == agent_id and j.get("name") == "Daily update"
-                    for j in existing
-                )
-                if not already:
-                    create_job(
-                        prompt="Post a short status update: what you worked on recently, what's next, and any blockers. Keep it to 2-3 sentences.",
-                        schedule="0 9 * * *",
-                        name="Daily update",
-                        deliver=f"matrix:{updates_room_id}",
-                        agent=agent_id,
-                    )
-                    logger.info("Matrix: created daily update cron for agent %s", agent_id)
-        except Exception as e:
-            logger.warning("Matrix: failed to create daily cron for %s: %s", agent_id, e)
+    # Step 5: Create owner DM (if owner is registered on Matrix)
+    owner_creds = _get_owner_matrix_credentials()
+    if owner_creds:
+        dm_room_id = await create_owner_dm_room(
+            homeserver_url=homeserver_url,
+            server_name=server_name,
+            agent_id=agent_id,
+        )
+        if dm_room_id:
+            await send_room_message(
+                homeserver_url=homeserver_url,
+                agent_id=agent_id,
+                room_id=dm_room_id,
+                body=f"Hey! I'm {agent_name}, and I'm ready to go. What can I help you with?",
+            )
+            result["dm_room_id"] = dm_room_id
+
+            # Set the DM as this agent's Matrix home channel
+            try:
+                from vulti_cli.agent_registry import AgentRegistry
+                AgentRegistry().set_home_channel(agent_id, "matrix", dm_room_id, name="Owner DM")
+                logger.info("Matrix: set home channel for %s → DM %s", agent_id, dm_room_id)
+            except Exception:
+                pass
 
     return result
 

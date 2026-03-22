@@ -3,7 +3,9 @@ import Foundation
 /// Thin API client over the vulti-core gateway.
 /// Replaces all local file I/O stores with REST calls.
 /// Mirrors api.ts from the Tauri app 1:1.
-actor GatewayClient {
+/// Thin API client — stateless pass-through to GatewayService.
+/// Not an actor: all methods are independent HTTP calls that can run concurrently.
+final class GatewayClient: Sendable {
     private let gw: GatewayService
 
     init(gateway: GatewayService) {

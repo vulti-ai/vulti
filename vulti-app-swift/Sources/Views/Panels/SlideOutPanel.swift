@@ -106,7 +106,7 @@ struct AgentPanelHeader: View {
     private var activeProviderName: String? {
         guard !configModel.isEmpty else { return nil }
         for p in providers {
-            let models = (p.models ?? []).map { Self.stripProviderPrefix($0) }
+            let models = (p.models ?? []).map { $0.strippingProviderPrefix() }
             if models.contains(configModel) {
                 return p.name
             }
@@ -256,38 +256,15 @@ struct AgentPanelHeader: View {
             .background(VultiTheme.paperDeep, in: Capsule())
         } else {
         Menu {
-            if providers.isEmpty {
-                Text("No providers connected")
-            }
-            ForEach(providers, id: \.id) { provider in
-                let models = provider.models ?? []
-                if models.isEmpty {
-                    Menu(provider.name) {
-                        Text("No models available")
-                    }
-                } else {
-                    let isActive = activeProviderName == provider.name
-                    Menu(isActive ? "\(provider.name) ✓" : provider.name) {
-                        ForEach(models, id: \.self) { model in
-                            // Strip routing prefix (openrouter/, anthropic/anthropic/) — backend expects clean model ID
-                            let cleanId = Self.stripProviderPrefix(model)
-                            Button {
-                                configModel = cleanId
-                                Task {
-                                    _ = try? await app.client.updateAgent(
-                                        agentId, updates: ["model": cleanId]
-                                    )
-                                }
-                            } label: {
-                                HStack {
-                                    Text(cleanId)
-                                    if configModel == cleanId || configModel == model {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                    }
+            ModelPicker(
+                style: .dropdownMenu,
+                selectedModel: $configModel,
+                providers: providers
+            ) { model, _ in
+                Task {
+                    _ = try? await app.client.updateAgent(
+                        agentId, updates: ["model": model]
+                    )
                 }
             }
         } label: {
@@ -322,14 +299,4 @@ struct AgentPanelHeader: View {
         return Color(hex: hex)
     }
 
-    /// Strip routing prefixes from model IDs — backend expects clean IDs like "anthropic/claude-opus-4"
-    static func stripProviderPrefix(_ model: String) -> String {
-        let prefixes = ["openrouter/", "openai/openai/", "anthropic/anthropic/"]
-        for prefix in prefixes {
-            if model.hasPrefix(prefix) {
-                return String(model.dropFirst(prefix.count))
-            }
-        }
-        return model
-    }
 }

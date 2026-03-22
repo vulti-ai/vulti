@@ -117,34 +117,29 @@ struct AddAgentNode: View {
     @State private var isHovered = false
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             Image(systemName: "plus")
-                .font(.system(size: 20, weight: .ultraLight))
+                .font(.system(size: 14, weight: .ultraLight))
                 .foregroundStyle(VultiTheme.rainbowGradient)
-                .frame(width: 36, height: 36)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(VultiTheme.paperWarm.opacity(0.5))
-                )
+                .frame(width: 24, height: 24)
 
             Text("New Agent")
-                .font(.system(size: 13, weight: .ultraLight))
+                .font(.system(size: 9, weight: .ultraLight))
                 .foregroundStyle(VultiTheme.rainbowGradient)
                 .lineLimit(1)
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 20)
-        .frame(minWidth: 100)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(VultiTheme.paper.opacity(0.4))
+            RoundedRectangle(cornerRadius: 8)
+                .fill(VultiTheme.paper.opacity(0.3))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(VultiTheme.rainbowGradient, lineWidth: isHovered ? 1 : 0.5)
         )
-        .shadow(color: .black.opacity(isHovered ? 0.14 : 0.08), radius: isHovered ? 20 : 14, y: isHovered ? 10 : 6)
-        .scaleEffect(isHovered ? 1.04 : 1.0)
+        .shadow(color: .black.opacity(isHovered ? 0.12 : 0.06), radius: isHovered ? 12 : 8, y: isHovered ? 6 : 4)
+        .scaleEffect(isHovered ? 1.06 : 1.0)
         .animation(.easeInOut(duration: 0.12), value: isHovered)
         .onHover { isHovered = $0 }
     }
