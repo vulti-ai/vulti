@@ -416,230 +416,280 @@ struct GeneralSettingsView: View {
     @Environment(AppState.self) private var app
     @AppStorage("vulti_theme") private var themeRaw: String = "system"
     @State private var providers: [GatewayClient.ProviderResponse] = []
+    @State private var isLoadingProviders = true
     @State private var oauthStatuses: [GatewayClient.OAuthResponse] = []
     @State private var pendingPermissions: [GatewayClient.PermissionResponse] = []
+    @State private var defaultModel: String = ""
+    @State private var defaultProvider: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            // ── Theme ──
-            Section {
-                Picker("Appearance", selection: $themeRaw) {
-                    ForEach(ThemePreference.allCases, id: \.rawValue) { pref in
-                        Text(pref.label).tag(pref.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 260)
-            } header: {
-                Text("THEME").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-            }
-
+            themeSection
             Divider()
-
-            // ── Gateway Control ──
-            Section {
-                HStack {
-                    Circle()
-                        .fill(app.isGatewayRunning ? .green : .red)
-                        .frame(width: 8, height: 8)
-                    Text(app.isGatewayRunning ? "Running" : "Stopped")
-                        .font(.system(size: 13, weight: .medium))
-                    Spacer()
-                    Button(app.isGatewayRunning ? "Stop" : "Start") {
-                        Task {
-                            if app.isGatewayRunning {
-                                await app.stopGateway()
-                            } else {
-                                try? await app.startGateway()
-                            }
-                        }
-                    }
-                    .buttonStyle(.vultiPrimary)
-                    .tint(app.isGatewayRunning ? .red : .green)
-                    .controlSize(.small)
-                }
-            } header: {
-                Text("GATEWAY").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-            }
-
+            oauthSection
+            providersSection
+            Spacer().frame(height: 40)
             Divider()
+            resetSection
+        }
+        .task { await reload() }
+    }
 
-            // ── Permissions ──
-            Section {
-                if pendingPermissions.isEmpty {
-                    Text("No pending requests")
-                        .font(.system(size: 12))
-                        .foregroundStyle(VultiTheme.inkDim)
-                } else {
-                    ForEach(pendingPermissions, id: \.id) { req in
-                        HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 4) {
-                                    if let agentId = req.agentId,
-                                       let agent = app.agent(byId: agentId) {
-                                        Text(agent.name)
-                                            .font(.system(size: 13, weight: .medium))
-                                    } else if let agentId = req.agentId {
-                                        Text(agentId)
-                                            .font(.system(size: 13, weight: .medium))
-                                    }
-                                    if let conn = req.connectionName {
-                                        Text(conn)
-                                            .font(.system(size: 11))
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 1)
-                                            .background(VultiTheme.paperDeep, in: Capsule())
-                                    }
-                                }
-                                if let reason = req.reason, !reason.isEmpty {
-                                    Text(reason)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(VultiTheme.inkDim)
-                                        .lineLimit(2)
-                                }
-                            }
-                            Spacer()
-                            Button {
-                                resolvePermission(req.id, approved: true)
-                            } label: {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 18))
-                                    .foregroundStyle(.green)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Approve")
+    // MARK: - Sections
 
-                            Button {
-                                resolvePermission(req.id, approved: false)
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 18))
-                                    .foregroundStyle(.red)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Deny")
+    private var themeSection: some View {
+        Section {
+            Picker("Appearance", selection: $themeRaw) {
+                ForEach(ThemePreference.allCases, id: \.rawValue) { pref in
+                    Text(pref.label).tag(pref.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 260)
+        } header: {
+            Text("THEME").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
+        }
+    }
+
+    private var gatewaySection: some View {
+        Section {
+            HStack {
+                Circle()
+                    .fill(app.isGatewayRunning ? .green : .red)
+                    .frame(width: 8, height: 8)
+                Text(app.isGatewayRunning ? "Running" : "Stopped")
+                    .font(.system(size: 13, weight: .medium))
+                Spacer()
+                Button(app.isGatewayRunning ? "Stop" : "Start") {
+                    Task {
+                        if app.isGatewayRunning {
+                            await app.stopGateway()
+                        } else {
+                            try? await app.startGateway()
                         }
                     }
                 }
-            } header: {
-                HStack(spacing: 6) {
-                    Text("PERMISSIONS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-                    if !pendingPermissions.isEmpty {
-                        Text("\(pendingPermissions.count)")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
+                .buttonStyle(.vultiPrimary)
+                .tint(app.isGatewayRunning ? .red : .green)
+                .controlSize(.small)
+            }
+        } header: {
+            Text("GATEWAY").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
+        }
+    }
+
+    private var permissionsSection: some View {
+        Section {
+            if pendingPermissions.isEmpty {
+                Text("No pending requests")
+                    .font(.system(size: 12))
+                    .foregroundStyle(VultiTheme.inkDim)
+            } else {
+                ForEach(pendingPermissions, id: \.id) { req in
+                    permissionRow(req)
+                }
+            }
+        } header: {
+            HStack(spacing: 6) {
+                Text("PERMISSIONS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
+                if !pendingPermissions.isEmpty {
+                    Text("\(pendingPermissions.count)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(.orange, in: Capsule())
+                }
+            }
+        }
+    }
+
+    private func permissionRow(_ req: GatewayClient.PermissionResponse) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    if let agentId = req.agentId,
+                       let agent = app.agent(byId: agentId) {
+                        Text(agent.name)
+                            .font(.system(size: 13, weight: .medium))
+                    } else if let agentId = req.agentId {
+                        Text(agentId)
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    if let conn = req.connectionName {
+                        Text(conn)
+                            .font(.system(size: 11))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
-                            .background(.orange, in: Capsule())
+                            .background(VultiTheme.paperDeep, in: Capsule())
                     }
                 }
+                if let reason = req.reason, !reason.isEmpty {
+                    Text(reason)
+                        .font(.system(size: 11))
+                        .foregroundStyle(VultiTheme.inkDim)
+                        .lineLimit(2)
+                }
             }
+            Spacer()
+            Button {
+                resolvePermission(req.id, approved: true)
+            } label: {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.green)
+            }
+            .buttonStyle(.plain)
+            .help("Approve")
 
-            Divider()
+            Button {
+                resolvePermission(req.id, approved: false)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+            .help("Deny")
+        }
+    }
 
-            // ── OAuth Status ──
-            if !oauthStatuses.isEmpty {
-                Section {
-                    ForEach(oauthStatuses, id: \.service) { oauth in
-                        HStack {
-                            Text(oauth.service)
-                                .font(.system(size: 13, weight: .medium))
-                            if let scopes = oauth.scopes {
-                                Text("\(scopes.count) scopes")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(VultiTheme.inkDim)
-                            }
-                            Spacer()
-                            if oauth.hasRefresh == true {
-                                Text("Refresh")
-                                    .font(.system(size: 10))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(.blue.opacity(0.1), in: Capsule())
-                                    .foregroundStyle(.blue)
-                            }
-                            Text(oauth.valid ? "Connected" : "Disconnected")
+    @ViewBuilder
+    private var oauthSection: some View {
+        if !oauthStatuses.isEmpty {
+            Section {
+                ForEach(oauthStatuses, id: \.service) { oauth in
+                    HStack {
+                        Text(oauth.service)
+                            .font(.system(size: 13, weight: .medium))
+                        if let scopes = oauth.scopes {
+                            Text("\(scopes.count) scopes")
+                                .font(.system(size: 10))
+                                .foregroundStyle(VultiTheme.inkDim)
+                        }
+                        Spacer()
+                        if oauth.hasRefresh == true {
+                            Text("Refresh")
                                 .font(.system(size: 10))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(oauth.valid ? .green.opacity(0.1) : .red.opacity(0.1), in: Capsule())
-                                .foregroundStyle(oauth.valid ? .green : .red)
+                                .background(.blue.opacity(0.1), in: Capsule())
+                                .foregroundStyle(.blue)
                         }
-                    }
-                } header: {
-                    Text("OAUTH TOKENS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-                }
-
-                Divider()
-            }
-
-            // Integrations moved to Connections tab
-
-            // ── Providers ──
-            Section {
-                ForEach(providers, id: \.id) { provider in
-                    HStack {
-                        Circle()
-                            .fill(provider.authenticated ? .green : VultiTheme.inkDim)
-                            .frame(width: 8, height: 8)
-                        Text(provider.name)
-                            .font(.system(size: 13, weight: .medium))
-                        Spacer()
-                        Text(provider.authenticated ? "Connected" : "Not configured")
-                            .font(.system(size: 11))
-                            .foregroundStyle(VultiTheme.inkDim)
+                        Text(oauth.valid ? "Connected" : "Disconnected")
+                            .font(.system(size: 10))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(oauth.valid ? .green.opacity(0.1) : .red.opacity(0.1), in: Capsule())
+                            .foregroundStyle(oauth.valid ? .green : .red)
                     }
                 }
             } header: {
-                Text("PROVIDERS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
+                Text("OAUTH TOKENS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
             }
-
-            // API keys managed via connections
-
-            Spacer().frame(height: 40)
 
             Divider()
+        }
+    }
 
-            // ── Reset Everything ──
-            VStack(spacing: 12) {
-                if showResetConfirm {
-                    Text("This will delete all agents, connections, skills, jobs, rules, memories, sessions, Matrix server, and all cached data. Are you sure?")
+    private var providersSection: some View {
+        Section {
+            if isLoadingProviders {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading providers...")
                         .font(.system(size: 12))
-                        .foregroundStyle(.red.opacity(0.8))
-                        .multilineTextAlignment(.center)
-
-                    HStack(spacing: 12) {
-                        Button("No") {
-                            withAnimation(.easeInOut(duration: 0.15)) { showResetConfirm = false }
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12, weight: .medium))
-
-                        Button("Yes, delete everything") {
-                            performReset()
-                        }
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background(.red, in: RoundedRectangle(cornerRadius: 6))
-                        .buttonStyle(.plain)
-                    }
-                } else {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) { showResetConfirm = true }
-                    } label: {
-                        Text("Reset Everything")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.red)
-                    }
-                    .buttonStyle(.plain)
+                        .foregroundStyle(VultiTheme.inkDim)
+                }
+            } else {
+                ForEach(providers, id: \.id) { provider in
+                    providerRow(provider)
                 }
             }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 8)
+        } header: {
+            Text("PROVIDERS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
         }
-        .task { await reload() }
+    }
+
+    private func providerRow(_ provider: GatewayClient.ProviderResponse) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Circle()
+                    .fill(provider.authenticated ? .green : VultiTheme.inkDim)
+                    .frame(width: 8, height: 8)
+                Text(provider.name)
+                    .font(.system(size: 13, weight: .medium))
+                Spacer()
+                Text(provider.authenticated ? "Connected" : "Not configured")
+                    .font(.system(size: 11))
+                    .foregroundStyle(VultiTheme.inkDim)
+            }
+
+            if provider.authenticated, let models = provider.models, !models.isEmpty {
+                ForEach(models, id: \.self) { model in
+                    let isDefault = defaultModel == model && defaultProvider == provider.id
+                    HStack(spacing: 8) {
+                        Image(systemName: isDefault ? "circle.inset.filled" : "circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(isDefault ? AnyShapeStyle(VultiTheme.rainbowGradient) : AnyShapeStyle(VultiTheme.inkDim))
+                        Text(model)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(isDefault ? VultiTheme.inkSoft : VultiTheme.inkDim)
+                        if isDefault {
+                            Text("default")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(VultiTheme.rainbowGradient)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(VultiTheme.paperDeep, in: Capsule())
+                        }
+                    }
+                    .padding(.leading, 16)
+                    .contentShape(Rectangle())
+                    .onTapGesture { setDefaultModel(model, providerId: provider.id) }
+                }
+            }
+        }
+    }
+
+    private var resetSection: some View {
+        VStack(spacing: 12) {
+            if showResetConfirm {
+                Text("This will delete all agents, connections, skills, jobs, rules, memories, sessions, Matrix server, and all cached data. Are you sure?")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red.opacity(0.8))
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: 12) {
+                    Button("No") {
+                        withAnimation(.easeInOut(duration: 0.15)) { showResetConfirm = false }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+
+                    Button("Yes, delete everything") {
+                        performReset()
+                    }
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                    .background(.red, in: RoundedRectangle(cornerRadius: 6))
+                    .buttonStyle(.plain)
+                }
+            } else {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showResetConfirm = true }
+                } label: {
+                    Text("Reset Everything")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
     }
 
     @State private var showResetConfirm = false
@@ -657,9 +707,34 @@ struct GeneralSettingsView: View {
     }
 
     private func reload() async {
+        isLoadingProviders = true
         do { providers = try await app.client.listProviders() } catch {}
+        isLoadingProviders = false
         do { oauthStatuses = try await app.client.oauthStatus() } catch {}
         do { pendingPermissions = try await app.client.listPermissions() } catch {}
+        // Load default model and provider from secrets
+        if let secrets = try? await app.client.listSecrets() {
+            defaultModel = secrets.first(where: { $0.key == "VULTI_DEFAULT_MODEL" })?.maskedValue ?? ""
+            defaultProvider = secrets.first(where: { $0.key == "VULTI_DEFAULT_PROVIDER" })?.maskedValue ?? ""
+        }
+        // If provider not set, infer from first connected provider that has the model
+        if defaultProvider.isEmpty && !defaultModel.isEmpty {
+            for p in providers where p.authenticated {
+                if let models = p.models, models.contains(defaultModel) {
+                    defaultProvider = p.id
+                    break
+                }
+            }
+        }
+    }
+
+    private func setDefaultModel(_ model: String, providerId: String) {
+        defaultModel = model
+        defaultProvider = providerId
+        Task {
+            try? await app.client.addSecret(key: "VULTI_DEFAULT_MODEL", value: model)
+            try? await app.client.addSecret(key: "VULTI_DEFAULT_PROVIDER", value: providerId)
+        }
     }
 
     private func resolvePermission(_ id: String, approved: Bool) {
@@ -674,6 +749,7 @@ struct GeneralSettingsView: View {
 struct ConnectionsSettingsView: View {
     @Environment(AppState.self) private var app
     @State private var connections: [GatewayClient.ConnectionResponse] = []
+    @State private var isLoadingConnections = true
 
     // Form state
     @State private var showForm = false
@@ -711,19 +787,28 @@ struct ConnectionsSettingsView: View {
             }
 
             // Connection list
-            ForEach(connections, id: \.name) { conn in
-                connectionRow(conn)
-                Divider()
-            }
-
-            if connections.isEmpty && !showForm {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("No connections yet.")
-                        .font(.system(size: 11))
+            if isLoadingConnections {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading connections...")
+                        .font(.system(size: 12))
                         .foregroundStyle(VultiTheme.inkDim)
-                    Text("Add API keys, MCP servers, and other integrations.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(VultiTheme.inkMuted)
+                }
+            } else {
+                ForEach(connections, id: \.name) { conn in
+                    connectionRow(conn)
+                    Divider()
+                }
+
+                if connections.isEmpty && !showForm {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("No connections yet.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(VultiTheme.inkDim)
+                        Text("Add API keys, MCP servers, and other integrations.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(VultiTheme.inkMuted)
+                    }
                 }
             }
         }
@@ -888,7 +973,9 @@ struct ConnectionsSettingsView: View {
     // MARK: - Actions
 
     private func reload() async {
+        isLoadingConnections = true
         do { connections = try await app.client.listConnections() } catch {}
+        isLoadingConnections = false
     }
 
     private func saveConnection() {

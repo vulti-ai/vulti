@@ -2698,22 +2698,20 @@ class WebAdapter(BasePlatformAdapter):
                     category = cat_name
                     break
 
+            _NON_SECRET_KEYS = {"VULTI_DEFAULT_MODEL", "VULTI_DEFAULT_PROVIDER"}
+            masked = value if key in _NON_SECRET_KEYS else (self._mask_value(value) if value else "")
             secrets.append({
                 "key": key,
-                "masked_value": self._mask_value(value) if value else "",
+                "masked_value": masked,
                 "is_set": bool(value),
                 "category": category,
             })
         return secrets
 
     # Map of env var keys → connection entries to auto-create
+    # Map env var keys to connection entries. LLM providers (OpenRouter, Anthropic, etc.)
+    # are NOT connections — they're infrastructure managed in the Providers settings.
     _ENV_TO_CONNECTION = {
-        "OPENROUTER_API_KEY": ("openrouter", "api_key", "OpenRouter — LLM provider", ["llm", "ai"]),
-        "ANTHROPIC_API_KEY": ("anthropic", "api_key", "Anthropic — Claude models", ["llm", "ai"]),
-        "OPENAI_API_KEY": ("openai", "api_key", "OpenAI — GPT models", ["llm", "ai"]),
-        "DEEPSEEK_API_KEY": ("deepseek", "api_key", "DeepSeek — LLM provider", ["llm", "ai"]),
-        "GOOGLE_API_KEY": ("google-ai", "api_key", "Google AI — Gemini models", ["llm", "ai"]),
-        "VENICE_API_KEY": ("venice", "api_key", "Venice — LLM provider", ["llm", "ai"]),
         "FIRECRAWL_API_KEY": ("firecrawl", "api_key", "Firecrawl — web scraping", ["web", "scraping"]),
         "FAL_KEY": ("fal-ai", "api_key", "FAL.ai — image generation", ["media", "images"]),
         "BROWSERBASE_API_KEY": ("browserbase", "api_key", "Browserbase — browser automation", ["web", "browser"]),
@@ -2721,8 +2719,6 @@ class WebAdapter(BasePlatformAdapter):
         "TELEGRAM_BOT_TOKEN": ("telegram", "api_key", "Telegram — bot messaging", ["messaging", "bot"]),
         "BLAND_API_KEY": ("bland-ai", "api_key", "Bland.ai — AI phone calls", ["voice", "ai"]),
         "WANDB_API_KEY": ("wandb", "api_key", "Weights & Biases — ML tracking", ["analytics", "ml"]),
-        "HONCHO_API_KEY": ("honcho", "api_key", "Honcho — memory and personalization", ["memory", "ai"]),
-        "TINKER_API_KEY": ("tinker", "api_key", "Tinker — tool provider", ["tools"]),
     }
 
     def _add_secret(self, key: str, value: str) -> dict:
@@ -2803,6 +2799,8 @@ class WebAdapter(BasePlatformAdapter):
                 "name": "Claude Code (OAuth)",
                 "env_keys": ["CLAUDE_CODE_OAUTH_TOKEN"],
                 "models": [
+                    "anthropic/claude-opus-4.6",
+                    "anthropic/claude-sonnet-4.6",
                     "anthropic/claude-opus-4",
                     "anthropic/claude-sonnet-4",
                     "anthropic/claude-haiku-4.5",

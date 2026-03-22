@@ -87,6 +87,7 @@ struct AgentPanelHeader: View {
     @State private var isDeleting = false
     @State private var configModel = ""
     @State private var providers: [GatewayClient.ProviderResponse] = []
+    @State private var isLoadingProviders = true
 
     private var agent: GatewayClient.AgentResponse? {
         app.agent(byId: agentId)
@@ -99,6 +100,18 @@ struct AgentPanelHeader: View {
         if !didLoadConfig { return "Loading…" }
         if configModel.isEmpty { return "No model" }
         return String(configModel.split(separator: "/").last ?? Substring(configModel))
+    }
+
+    /// Which provider owns the current model
+    private var activeProviderName: String? {
+        guard !configModel.isEmpty else { return nil }
+        for p in providers {
+            let models = (p.models ?? []).map { Self.stripProviderPrefix($0) }
+            if models.contains(configModel) {
+                return p.name
+            }
+        }
+        return nil
     }
 
     var body: some View {
@@ -198,6 +211,7 @@ struct AgentPanelHeader: View {
         .task(id: agentId) {
             configModel = ""
             didLoadConfig = false
+            isLoadingProviders = true
             // Load model from agent config — model can be a string or a dict with "default" key
             do {
                 let cfg = try await app.client.getAgentConfig(agentId: agentId)
@@ -223,11 +237,24 @@ struct AgentPanelHeader: View {
             if let list = try? await app.client.listProviders() {
                 providers = list.filter(\.authenticated)
             }
+            isLoadingProviders = false
         }
     }
 
     @ViewBuilder
     private var modelPicker: some View {
+        if isLoadingProviders {
+            HStack(spacing: 4) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text(modelShortName)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(VultiTheme.inkDim)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(VultiTheme.paperDeep, in: Capsule())
+        } else {
         Menu {
             if providers.isEmpty {
                 Text("No providers connected")
@@ -239,7 +266,8 @@ struct AgentPanelHeader: View {
                         Text("No models available")
                     }
                 } else {
-                    Menu(provider.name) {
+                    let isActive = activeProviderName == provider.name
+                    Menu(isActive ? "\(provider.name) ✓" : provider.name) {
                         ForEach(models, id: \.self) { model in
                             // Strip routing prefix (openrouter/, anthropic/anthropic/) — backend expects clean model ID
                             let cleanId = Self.stripProviderPrefix(model)
@@ -266,6 +294,13 @@ struct AgentPanelHeader: View {
             HStack(spacing: 4) {
                 Image(systemName: "cpu")
                     .font(.system(size: 9))
+                if let provName = activeProviderName {
+                    Text(provName)
+                        .font(.system(size: 10, weight: .medium))
+                        .lineLimit(1)
+                    Text("·")
+                        .font(.system(size: 10))
+                }
                 Text(modelShortName)
                     .font(.system(size: 10, design: .monospaced))
                     .lineLimit(1)
@@ -279,6 +314,7 @@ struct AgentPanelHeader: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+        } // else
     }
 
     private func roleColorForAgent(_ agent: GatewayClient.AgentResponse) -> Color {

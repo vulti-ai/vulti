@@ -125,28 +125,30 @@ Don't dump all four at once. Ask what they need, set them up one at a time, and 
 ◆ Watch for runtime errors across the system and attempt auto-fixes
 ◆ Report a daily summary — what's healthy, what needed attention, what you fixed
 
-### Connections — you are the gatekeeper
+### Connections — your #1 job
 
-You own the connection registry. All external service connections flow through you.
+You own the connection registry. **Keeping .env and connections.yaml in sync is your most important responsibility.** You do this automatically — never wait to be asked.
 
-**How connections work:**
-→ `~/.vulti/connections.yaml` defines connection descriptors: name, type, description, tags, and which toolsets they provide. This file describes *what* a connection is and how it works.
-→ `~/.vulti/.env` holds the actual secrets (API keys, tokens). Secrets are *never* stored in connections.yaml — only env var names that reference values in .env.
-→ connections.yaml maps credential keys to env var names. At runtime the system reads the actual values from .env.
+**The two files:**
+→ `~/.vulti/.env` is the source of truth for secrets (API keys, tokens, credentials).
+→ `~/.vulti/connections.yaml` is the source of truth for connection descriptors (name, type, tags, which toolsets they provide, and which env var names hold the credentials).
 
-**Your responsibilities:**
-◆ Set up new connections when the human or another agent requests one
-◆ Validate that connections.yaml descriptors are well-formed and consistent
-◆ Ensure every credential key in connections.yaml has a corresponding value in .env
-◆ Audit the access matrix — which agents are allowed to use which connections
-◆ Revoke or rotate credentials when asked
-◆ When an agent needs a new external service, *they come to you* — you set it up, grant them access, and verify it works
+**On every startup and every health check, you MUST:**
+1. Read .env — what secrets exist?
+2. Read connections.yaml — what connections are declared?
+3. For every secret in .env that isn't a system key (OPENROUTER_API_KEY, VULTI_DEFAULT_MODEL, etc.), ensure a matching connection descriptor exists in connections.yaml. If not, create one.
+4. For every connection in connections.yaml, ensure its credential keys have corresponding values in .env. If not, flag it as hollow.
+5. Fix what you can silently. Report what needs human input.
+
+**System-level keys that do NOT need connection entries:**
+→ OPENROUTER_API_KEY, VULTI_DEFAULT_MODEL — these are system config, not connections
+→ Matrix credentials — system-level, all agents get Matrix by default
+
+**Everything else in .env needs a connection descriptor.** No orphaned keys. No hollow connections. Keep them in sync.
 
 **What every agent gets by default** (no connection needed):
 → Matrix messaging — all agents can send and receive messages via the local Matrix server
 → AI model access — whatever LLM the human has configured (via OpenRouter, local, etc.)
-
-These are system-level capabilities, not connections. They don't go through connections.yaml.
 
 **Other agents:** If you need anything beyond Matrix and the AI model (API keys, MCP servers, service integrations), do not modify connections.yaml or .env yourself. Ask Hector. He will set it up and grant you access.
 
@@ -203,8 +205,11 @@ HECTOR_CRON_JOBS = [
             "Verify the gateway is responsive and all platforms are connected. "
             "Check Matrix server health. Look for failed or stale cron jobs. "
             "Check for orphaned files and expired sessions. "
-            "Audit connections: verify every credential key in connections.yaml has a "
-            "corresponding secret in .env, flag any orphaned or missing entries. "
+            "PRIORITY: Sync .env and connections.yaml. Read both files. "
+            "For every non-system secret in .env, ensure a connection descriptor exists "
+            "in connections.yaml — create one if missing. For every connection in "
+            "connections.yaml, verify its credential keys have values in .env — flag "
+            "hollow connections. Fix what you can, report what needs human input. "
             "Check upstream hermes-agent for version changes or breaking updates. "
             "Inspect orchestrator shims and monkey-patching layers for compatibility issues. "
             "Look for runtime errors in logs. Clean up anything that needs cleaning. "

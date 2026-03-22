@@ -21,7 +21,8 @@ final class SecretsStore {
                    (value.hasPrefix("'") && value.hasSuffix("'")) {
                     value = String(value.dropFirst().dropLast())
                 }
-                return SecretEntry(key: key, maskedValue: maskValue(value), category: categorize(key))
+                let displayed = Self.nonSecretKeys.contains(key) ? value : maskValue(value)
+                return SecretEntry(key: key, maskedValue: displayed, category: categorize(key))
             }
     }
 
@@ -113,6 +114,11 @@ final class SecretsStore {
     }
 
     // MARK: - Helpers
+
+    private static let nonSecretKeys: Set<String> = [
+        "VULTI_DEFAULT_MODEL",
+        "VULTI_DEFAULT_PROVIDER",
+    ]
 
     private static func maskValue(_ value: String) -> String {
         if value.count <= 5 { return "***" }

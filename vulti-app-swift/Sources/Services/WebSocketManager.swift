@@ -136,15 +136,29 @@ final class WebSocketManager {
 
             let content = json["content"] as? String ?? streamingContent
             streamingContent = ""
-            let msg = ChatMessage(
-                messageId: json["message_id"] as? String ?? UUID().uuidString,
-                type: "message",
-                role: json["role"] as? String ?? "assistant",
-                content: content,
-                agentId: json["agent_id"] as? String,
-                timestamp: json["timestamp"] as? String
-            )
-            messages.append(msg)
+            let role = json["role"] as? String ?? "assistant"
+
+            // Merge consecutive assistant messages into one bubble
+            // (agent sends multiple messages across tool call boundaries)
+            if role == "assistant",
+               let lastIdx = messages.lastIndex(where: { $0.role == "assistant" && $0.type == "message" }),
+               lastIdx == messages.count - 1 || messages[lastIdx...].allSatisfy({ $0.role == "assistant" || $0.type == "tool_use" }) {
+                // Only merge if the content is different (not a duplicate)
+                let existing = messages[lastIdx].content ?? ""
+                if content != existing && !content.isEmpty {
+                    messages[lastIdx].content = existing.isEmpty ? content : existing + "\n\n" + content
+                }
+            } else {
+                let msg = ChatMessage(
+                    messageId: json["message_id"] as? String ?? UUID().uuidString,
+                    type: "message",
+                    role: role,
+                    content: content,
+                    agentId: json["agent_id"] as? String,
+                    timestamp: json["timestamp"] as? String
+                )
+                messages.append(msg)
+            }
 
         case "tool_use":
             let name = json["name"] as? String ?? "tool"

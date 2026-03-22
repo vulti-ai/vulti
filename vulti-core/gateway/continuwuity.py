@@ -448,7 +448,7 @@ class ContinuwuityManager:
                         pass
                 logger.error("Continuwuity: process exited with code %d: %s",
                              self._process.returncode, stderr[:500])
-                stdout_task.cancel()
+                stderr_task.cancel()
                 return False
 
             try:

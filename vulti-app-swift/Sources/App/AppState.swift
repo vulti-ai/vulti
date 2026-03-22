@@ -25,6 +25,8 @@ final class AppState {
     var panelMode: PanelMode?
     var notifications: [AppNotification] = []
     var pendingOps = 0
+    /// Tracks which agents have already had their daily introspect triggered this app session.
+    var introspectedAgents: Set<String> = []
 
     var isBusy: Bool { pendingOps > 0 }
 

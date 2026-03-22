@@ -13,7 +13,6 @@ struct ChatView: View {
     @State private var ws = WebSocketManager()
     @State private var input = ""
     @State private var sessionId: String?
-    @State private var didAutoIntrospect = false
     @State private var recentSessions: [GatewayClient.SessionResponse] = []
     @State private var isLoadingSessions = false
     @State private var renameCount = 0  // tracks how many times we've auto-renamed
@@ -143,8 +142,8 @@ struct ChatView: View {
         .onAppear {
             loadSessions()
             // Resume today's session or trigger daily introspection (once per day)
-            if sessionId == nil && !didAutoIntrospect {
-                didAutoIntrospect = true
+            if sessionId == nil && !app.introspectedAgents.contains(agentId) {
+                app.introspectedAgents.insert(agentId)
                 Task {
                     // Fetch sessions directly — don't rely on @State timing
                     let sessions = (try? await app.client.listSessions(agentId: agentId)) ?? []
@@ -445,9 +444,20 @@ struct ChatView: View {
     /// Check if a session was created today (same calendar day).
     private func isSessionFresh(_ session: GatewayClient.SessionResponse) -> Bool {
         let dateStr = session.createdAt ?? ""
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = formatter.date(from: dateStr) ?? ISO8601DateFormatter().date(from: dateStr)
+        // Server returns ISO8601 without timezone (e.g. "2026-03-22T17:07:08.277183")
+        // Try multiple formats to handle with/without timezone and fractional seconds
+        let formatters: [ISO8601DateFormatter] = {
+            let f1 = ISO8601DateFormatter()
+            f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let f2 = ISO8601DateFormatter()
+            f2.formatOptions = [.withInternetDateTime]
+            return [f1, f2]
+        }()
+        // Also try DateFormatter for timezone-less ISO strings
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        df.locale = Locale(identifier: "en_US_POSIX")
+        let date = formatters.compactMap({ $0.date(from: dateStr) }).first ?? df.date(from: dateStr)
         guard let date else { return false }
         return Calendar.current.isDateInToday(date)
     }
