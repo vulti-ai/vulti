@@ -247,6 +247,14 @@ struct ScratchPadView: View {
                             onReorder: saveRowOrder
                         ))
                     }
+
+                    // Files widget as the last row
+                    if activeTab == .home {
+                        AgentFilesView(agentId: agentId)
+                            .padding(12)
+                            .background(VultiTheme.paperDeep.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(VultiTheme.border.opacity(0.3)))
+                    }
                 }
                 .padding(16)
                 .animation(.spring(duration: 0.25), value: rows.map(\.id))

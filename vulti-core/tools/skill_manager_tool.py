@@ -509,6 +509,15 @@ def skill_manage(
         if not content:
             return json.dumps({"success": False, "error": "content is required for 'create'. Provide the full SKILL.md text (frontmatter + body)."}, ensure_ascii=False)
         result = _create_skill(name, content, category)
+        # Sync skill-declared connection into the global registry
+        if result.get("success"):
+            try:
+                from vulti_cli.connection_registry import ConnectionRegistry
+                from pathlib import Path
+                import os
+                ConnectionRegistry(Path(os.getenv("VULTI_HOME", Path.home() / ".vulti"))).sync_skill_connections()
+            except Exception:
+                pass
 
     elif action == "edit":
         if not content:

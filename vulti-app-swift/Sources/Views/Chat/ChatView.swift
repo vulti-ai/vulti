@@ -133,14 +133,17 @@ struct ChatView: View {
         }
         .onAppear {
             loadSessions()
-            if autoIntrospect && !didAutoIntrospect {
+            // Resume today's session or trigger daily introspection (once per day)
+            if sessionId == nil && !didAutoIntrospect {
                 didAutoIntrospect = true
                 Task {
                     // Wait for sessions to load
                     try? await Task.sleep(for: .milliseconds(400))
-                    if let latest = recentSessions.first, isSessionFresh(latest) {
-                        switchToSession(latest)
-                    } else {
+                    if let todaySession = recentSessions.first(where: { isSessionFresh($0) }) {
+                        // Already have a session from today — resume it
+                        switchToSession(todaySession)
+                    } else if autoIntrospect {
+                        // No session today — start daily check-in
                         triggerIntrospect()
                     }
                 }
@@ -307,6 +310,9 @@ struct ChatView: View {
 
             // Reconnect WebSocket to this session
             ws.connect(sessionId: session.id)
+
+            // Mark session as read
+            try? await app.client.markSessionRead(session.id)
         }
     }
 
@@ -414,14 +420,14 @@ struct ChatView: View {
         }
     }
 
-    /// Check if a session is fresh enough to resume (< 24 hours old).
+    /// Check if a session was created or updated today (same calendar day).
     private func isSessionFresh(_ session: GatewayClient.SessionResponse) -> Bool {
         let dateStr = session.updatedAt ?? session.createdAt ?? ""
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let date = formatter.date(from: dateStr) ?? ISO8601DateFormatter().date(from: dateStr)
         guard let date else { return false }
-        return Date().timeIntervalSince(date) < 86400 // 24 hours
+        return Calendar.current.isDateInToday(date)
     }
 
     private func sendMessage() {

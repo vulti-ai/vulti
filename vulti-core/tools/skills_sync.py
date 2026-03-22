@@ -262,6 +262,16 @@ def sync_skills(quiet: bool = False) -> dict:
 
     _write_manifest(manifest)
 
+    # Sync skill-declared connections into the global connection registry
+    try:
+        from vulti_cli.connection_registry import ConnectionRegistry
+        registry = ConnectionRegistry(SKILLS_DIR.parent)  # ~/.vulti
+        synced = registry.sync_skill_connections()
+        if synced and not quiet:
+            print(f"  Synced {len(synced)} skill connection(s): {', '.join(synced)}")
+    except Exception as e:
+        logger.debug("Could not sync skill connections: %s", e)
+
     return {
         "copied": copied,
         "updated": updated,

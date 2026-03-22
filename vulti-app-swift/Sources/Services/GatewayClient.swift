@@ -132,6 +132,11 @@ actor GatewayClient {
         return result["title"] as? String
     }
 
+    /// Mark a session as read and sync read receipt to Matrix.
+    func markSessionRead(_ id: String) async throws {
+        _ = try await gw.postRaw(path: "sessions/\(id)/mark-read", body: [String: String]())
+    }
+
     func deleteSession(_ id: String) async throws {
         try await gw.delete(path: "sessions/\(id)")
     }
@@ -514,6 +519,25 @@ actor GatewayClient {
 
     func generateOwnerAvatar() async throws {
         try await gw.generateOwnerAvatar()
+    }
+
+    // MARK: - Agent Files
+
+    struct AgentFile: Codable, Identifiable {
+        let name: String
+        let path: String
+        let category: String  // "image", "audio", "video", "document"
+        let size: Int
+        let modified: String
+        var id: String { path }
+    }
+
+    func listAgentFiles(agentId: String) async throws -> [AgentFile] {
+        try await gw.get([AgentFile].self, path: "agents/\(agentId)/files")
+    }
+
+    func agentFileURL(agentId: String, path: String) -> URL? {
+        URL(string: "http://localhost:8080/api/agents/\(agentId)/files/\(path)")
     }
 
     // MARK: - Agent Config

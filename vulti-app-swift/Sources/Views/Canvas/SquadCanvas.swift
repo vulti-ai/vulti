@@ -362,22 +362,71 @@ struct SquadCanvas: View {
                     .position(x: rect.midX, y: rect.minY)
             }
 
-            // Connection circles along the bottom edge (exclude matrix — first-class)
+            // Connection circles along the boundary — bottom, then up the sides
             let connections = integrations.filter { $0.id != "matrix" }
             if !connections.isEmpty {
                 let circleSize: CGFloat = 36
                 let spacing: CGFloat = 12
-                let count = CGFloat(connections.count)
-                let itemWidth = circleSize + spacing
-                let totalWidth = count * itemWidth - spacing
+                let step = circleSize + spacing
+                let cornerRadius: CGFloat = 24
+                let cornerInset: CGFloat = cornerRadius + circleSize / 2
+
+                // Bottom edge positions (left to right, inset from corners)
+                let bottomLeft = rect.minX + cornerInset
+                let bottomRight = rect.maxX - cornerInset
+                let bottomWidth = bottomRight - bottomLeft
+                let bottomCount = max(1, Int(floor(bottomWidth / step)) + 1)
+
+                // Distribute evenly across bottom
+                let bottomSpacing = bottomCount > 1 ? bottomWidth / CGFloat(bottomCount - 1) : 0
+
+                // Place circles: fill bottom first, then overflow up left side, then right side
+                let positions: [(CGFloat, CGFloat)] = {
+                    var pts: [(CGFloat, CGFloat)] = []
+
+                    // Bottom edge (left to right)
+                    for i in 0..<bottomCount {
+                        let x = bottomCount == 1 ? rect.midX : bottomLeft + CGFloat(i) * bottomSpacing
+                        pts.append((x, rect.maxY))
+                    }
+
+                    // Remaining go up the sides, alternating left then right
+                    let remaining = connections.count - bottomCount
+                    if remaining > 0 {
+                        let leftX = rect.minX
+                        let rightX = rect.maxX
+                        let topLimit = rect.minY + cornerInset
+
+                        var leftY = rect.maxY - cornerInset
+                        var rightY = rect.maxY - cornerInset
+
+                        for i in 0..<remaining {
+                            if i % 2 == 0 {
+                                // Left side (going up)
+                                if leftY >= topLimit {
+                                    pts.append((leftX, leftY))
+                                    leftY -= step
+                                }
+                            } else {
+                                // Right side (going up)
+                                if rightY >= topLimit {
+                                    pts.append((rightX, rightY))
+                                    rightY -= step
+                                }
+                            }
+                        }
+                    }
+
+                    return pts
+                }()
 
                 ForEach(Array(connections.enumerated()), id: \.element.id) { index, integration in
-                    let x = rect.midX - totalWidth / 2 + CGFloat(index) * itemWidth + circleSize / 2
-                    let y = rect.maxY
-
-                    ConnectionCircle(integration: integration, size: circleSize)
-                        .fixedSize()
-                        .position(x: x, y: y)
+                    if index < positions.count {
+                        let pos = positions[index]
+                        ConnectionCircle(integration: integration, size: circleSize)
+                            .fixedSize()
+                            .position(x: pos.0, y: pos.1)
+                    }
                 }
             }
         }

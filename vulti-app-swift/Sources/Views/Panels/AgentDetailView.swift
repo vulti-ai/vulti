@@ -1050,4 +1050,145 @@ struct CryptoSubtab: View {
     }
 }
 
+// MARK: - Agent Files Viewer
+
+struct AgentFilesView: View {
+    let agentId: String
+    @Environment(AppState.self) private var app
+    @State private var files: [GatewayClient.AgentFile] = []
+    @State private var filter: String? = nil  // nil = all
+
+    private var filtered: [GatewayClient.AgentFile] {
+        guard let filter else { return files }
+        return files.filter { $0.category == filter }
+    }
+
+    private let categories: [(String?, String, String)] = [
+        (nil, "All", "folder"),
+        ("image", "Images", "photo"),
+        ("audio", "Audio", "waveform"),
+        ("video", "Video", "play.rectangle"),
+        ("document", "Docs", "doc"),
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header with filter chips
+            HStack(spacing: 8) {
+                Text("FILES")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkMuted)
+
+                ForEach(categories, id: \.1) { cat, label, icon in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { filter = cat }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: icon)
+                                .font(.system(size: 9))
+                            Text(label)
+                                .font(.system(size: 10, weight: filter == cat ? .semibold : .regular))
+                        }
+                        .foregroundStyle(filter == cat ? VultiTheme.primary : VultiTheme.inkMuted)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            filter == cat ? VultiTheme.primary.opacity(0.1) : Color.clear,
+                            in: Capsule()
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+
+                Text("\(filtered.count) file\(filtered.count == 1 ? "" : "s")")
+                    .font(.system(size: 10))
+                    .foregroundStyle(VultiTheme.inkDim)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            // File list (horizontal scroll)
+            if filtered.isEmpty {
+                Spacer()
+                Text("No files")
+                    .font(.system(size: 12))
+                    .foregroundStyle(VultiTheme.inkDim)
+                Spacer()
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(filtered) { file in
+                            fileCard(file)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .task { await loadFiles() }
+    }
+
+    @ViewBuilder
+    private func fileCard(_ file: GatewayClient.AgentFile) -> some View {
+        VStack(spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(VultiTheme.paperDeep)
+                    .frame(width: 64, height: 52)
+                Image(systemName: iconForFile(file))
+                    .font(.system(size: 20))
+                    .foregroundStyle(colorForCategory(file.category))
+            }
+
+            Text(file.name)
+                .font(.system(size: 9))
+                .foregroundStyle(VultiTheme.inkSoft)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(width: 64)
+
+            Text(formatSize(file.size))
+                .font(.system(size: 8))
+                .foregroundStyle(VultiTheme.inkDim)
+        }
+    }
+
+    private func iconForFile(_ file: GatewayClient.AgentFile) -> String {
+        switch file.category {
+        case "image": return "photo"
+        case "audio": return "waveform"
+        case "video": return "play.rectangle.fill"
+        case "document":
+            if file.name.hasSuffix(".pdf") { return "doc.richtext" }
+            return "doc"
+        default: return "doc"
+        }
+    }
+
+    private func colorForCategory(_ category: String) -> Color {
+        switch category {
+        case "image": return .blue
+        case "audio": return .orange
+        case "video": return .purple
+        case "document": return .green
+        default: return VultiTheme.inkDim
+        }
+    }
+
+    private func formatSize(_ bytes: Int) -> String {
+        if bytes < 1024 { return "\(bytes) B" }
+        if bytes < 1024 * 1024 { return "\(bytes / 1024) KB" }
+        return String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
+    }
+
+    private func loadFiles() async {
+        files = (try? await app.client.listAgentFiles(agentId: agentId)) ?? []
+    }
+}
+
 // AgentAnalyticsTab moved to AnalyticsTab.swift

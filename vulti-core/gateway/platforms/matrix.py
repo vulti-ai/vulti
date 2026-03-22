@@ -30,6 +30,9 @@ from gateway.platforms.base import (
     cache_image_from_bytes,
     cache_audio_from_bytes,
     cache_document_from_bytes,
+    cache_image_for_agent,
+    cache_audio_for_agent,
+    cache_document_for_agent,
 )
 
 logger = logging.getLogger(__name__)
@@ -598,13 +601,13 @@ class MatrixAdapter(BasePlatformAdapter):
             resp = await client.download(event.url)
             if isinstance(resp, nio.DownloadResponse):
                 if msg_type == MessageType.PHOTO:
-                    cached_path = cache_image_from_bytes(resp.body, ".jpg")
+                    cached_path = cache_image_for_agent(agent_id, resp.body, ".jpg")
                     media_types.append("image/jpeg")
                 elif msg_type == MessageType.VOICE:
-                    cached_path = cache_audio_from_bytes(resp.body, ".ogg")
+                    cached_path = cache_audio_for_agent(agent_id, resp.body, ".ogg")
                     media_types.append("audio/ogg")
                 else:
-                    cached_path = cache_document_from_bytes(resp.body, event.body or "file")
+                    cached_path = cache_document_for_agent(agent_id, resp.body, event.body or "file")
                     media_types.append("application/octet-stream")
                 media_urls.append(cached_path)
         except Exception as e:

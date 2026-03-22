@@ -365,6 +365,36 @@ class GatewayConfig:
         )
 
 
+def _detect_tailscale_hostname() -> str:
+    """Auto-detect the Tailscale FQDN for this machine.
+
+    Used as the Matrix server_name so federation works out of the box
+    via Tailscale Funnel. Falls back to 'localhost' if Tailscale isn't available.
+    """
+    import subprocess
+    import shutil
+
+    if not shutil.which("tailscale"):
+        return "localhost"
+
+    try:
+        result = subprocess.run(
+            ["tailscale", "status", "--self", "--json"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            import json
+            data = json.loads(result.stdout)
+            # Self node's DNS name (e.g., "devs-macbook-air.tail0a584c.ts.net.")
+            dns_name = data.get("Self", {}).get("DNSName", "")
+            if dns_name:
+                return dns_name.rstrip(".")
+    except Exception:
+        pass
+
+    return "localhost"
+
+
 def load_gateway_config() -> GatewayConfig:
     """
     Load gateway configuration from multiple sources.
@@ -703,7 +733,7 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
         config.platforms[Platform.MATRIX].enabled = True
         config.platforms[Platform.MATRIX].extra.update({
             "homeserver_url": os.getenv("MATRIX_HOMESERVER_URL", "http://127.0.0.1:6167"),
-            "server_name": os.getenv("MATRIX_SERVER_NAME", "localhost"),
+            "server_name": os.getenv("MATRIX_SERVER_NAME") or _detect_tailscale_hostname(),
         })
         matrix_home = os.getenv("MATRIX_HOME_CHANNEL")
         if matrix_home:

@@ -394,10 +394,13 @@ class ContinuwuityManager:
         # registration_token only works after that. We bootstrap automatically.
         await self._bootstrap_first_user()
 
+        # Enable Tailscale Funnel for federation
+        await self._ensure_tailscale_funnel()
+
         # Start health monitor
         self._health_task = asyncio.create_task(self._health_monitor())
 
-        logger.info("Continuwuity: ready at %s", self.homeserver_url)
+        logger.info("Continuwuity: ready at %s (federated via Tailscale Funnel)", self.homeserver_url)
         return True
 
     async def _wait_for_ready(self) -> bool:
@@ -570,6 +573,37 @@ class ContinuwuityManager:
         logger.warning("Continuwuity: not running, restarting...")
         await self.stop()
         return await self.start()
+
+    async def _ensure_tailscale_funnel(self) -> None:
+        """Enable Tailscale Funnel so the Matrix server is publicly reachable for federation.
+
+        Runs `tailscale funnel --bg <port>` which exposes the local Continuwuity
+        port via Tailscale's HTTPS proxy with automatic TLS.
+        """
+        import shutil
+
+        if not shutil.which("tailscale"):
+            logger.warning("Continuwuity: tailscale not found, federation will not work without manual setup")
+            return
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tailscale", "funnel", "--bg", str(self.port),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+            output = (stdout or b"").decode(errors="replace") + (stderr or b"").decode(errors="replace")
+
+            if proc.returncode == 0:
+                logger.info("Continuwuity: Tailscale Funnel enabled for port %d", self.port)
+            else:
+                logger.warning("Continuwuity: Tailscale Funnel failed (exit %d): %s",
+                               proc.returncode, output[:300])
+        except asyncio.TimeoutError:
+            logger.warning("Continuwuity: Tailscale Funnel timed out")
+        except Exception as e:
+            logger.warning("Continuwuity: Tailscale Funnel error: %s", e)
 
     async def _health_monitor(self) -> None:
         """Periodically check server health and restart if needed."""

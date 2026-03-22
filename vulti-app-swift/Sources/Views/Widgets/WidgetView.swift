@@ -269,8 +269,6 @@ struct LiveAnalyticsWidget: View {
                     CompactStat(label: "Messages", value: formatNumber(o.totalMessages ?? 0))
                     CompactStat(label: "Tokens", value: formatNumber(o.totalTokens ?? 0))
                     CompactStat(label: "Cost", value: "$\(String(format: "%.2f", o.estimatedCost ?? 0))")
-                    CompactStat(label: "Tools", value: formatNumber(o.totalToolCalls ?? 0))
-                    CompactStat(label: "Hours", value: String(format: "%.1f", o.totalHours ?? 0))
                 }
             } else {
                 ProgressView()

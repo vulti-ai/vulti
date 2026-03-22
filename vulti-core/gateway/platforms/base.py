@@ -256,6 +256,49 @@ def cleanup_document_cache(max_age_hours: int = 24) -> int:
     return removed
 
 
+# ---------------------------------------------------------------------------
+# Agent-scoped media cache — stores files under ~/.vulti/agents/{agent_id}/cache/
+# ---------------------------------------------------------------------------
+
+def _agent_cache_dir(agent_id: str, subdir: str) -> Path:
+    d = get_vulti_home() / "agents" / agent_id / "cache" / subdir
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def cache_audio_for_agent(agent_id: str, data: bytes, ext: str = ".ogg") -> str:
+    """Save audio bytes to the agent's cache directory."""
+    cache_dir = _agent_cache_dir(agent_id, "audio")
+    filename = f"audio_{uuid.uuid4().hex[:12]}{ext}"
+    filepath = cache_dir / filename
+    filepath.write_bytes(data)
+    return str(filepath)
+
+
+def cache_image_for_agent(agent_id: str, data: bytes, ext: str = ".jpg") -> str:
+    """Save image bytes to the agent's cache directory."""
+    cache_dir = _agent_cache_dir(agent_id, "images")
+    filename = f"img_{uuid.uuid4().hex[:12]}{ext}"
+    filepath = cache_dir / filename
+    filepath.write_bytes(data)
+    return str(filepath)
+
+
+def cache_document_for_agent(agent_id: str, data: bytes, filename: str) -> str:
+    """Save document bytes to the agent's cache directory."""
+    cache_dir = _agent_cache_dir(agent_id, "documents")
+    safe_name = Path(filename).name if filename else "document"
+    safe_name = safe_name.replace("\x00", "").strip()
+    if not safe_name or safe_name in (".", ".."):
+        safe_name = "document"
+    cached_name = f"doc_{uuid.uuid4().hex[:12]}_{safe_name}"
+    filepath = cache_dir / cached_name
+    if not filepath.resolve().is_relative_to(cache_dir.resolve()):
+        raise ValueError(f"Path traversal rejected: {filename!r}")
+    filepath.write_bytes(data)
+    return str(filepath)
+
+
 class MessageType(Enum):
     """Types of incoming messages."""
     TEXT = "text"

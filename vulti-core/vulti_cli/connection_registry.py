@@ -34,12 +34,14 @@ class ConnectionEntry:
     mcp: dict[str, Any] = field(default_factory=dict)
     provides_toolsets: list[str] = field(default_factory=list)
     tools: dict[str, Any] = field(default_factory=dict)  # MCP tool include/exclude
+    skill: str = ""  # Skill name that backs this connection (if any)
     enabled: bool = True
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        d.pop("name", None)  # Name is the YAML key, not a field
         # Drop empty optional fields for cleaner YAML
-        for key in ("mcp", "provides_toolsets", "tools", "tags"):
+        for key in ("mcp", "provides_toolsets", "tools", "tags", "skill", "credentials"):
             if not d.get(key):
                 d.pop(key, None)
         if d.get("enabled") is True:
@@ -146,7 +148,54 @@ class ConnectionRegistry:
             return False
         del connections[name]
         self.save(connections)
+        # Track as explicitly deleted so skill sync doesn't re-add it
+        self._add_to_deleted(name)
+        # Remove from all agents' allowlists
+        self._remove_from_all_agents(name)
         return True
+
+    def _add_to_deleted(self, name: str) -> None:
+        """Record a connection name as explicitly deleted by the user."""
+        deleted_file = self._vulti_home / "connections_deleted.json"
+        deleted: list = []
+        if deleted_file.exists():
+            try:
+                import json as _json
+                deleted = _json.loads(deleted_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        if name not in deleted:
+            deleted.append(name)
+            import json as _json
+            deleted_file.write_text(_json.dumps(deleted), encoding="utf-8")
+
+    def _get_deleted(self) -> set:
+        """Return set of connection names explicitly deleted by the user."""
+        deleted_file = self._vulti_home / "connections_deleted.json"
+        if not deleted_file.exists():
+            return set()
+        try:
+            import json as _json
+            return set(_json.loads(deleted_file.read_text(encoding="utf-8")))
+        except Exception:
+            return set()
+
+    def _remove_from_all_agents(self, name: str) -> None:
+        """Remove a connection from every agent's allowlist."""
+        try:
+            from orchestrator.permissions import get_allowed_connections, set_allowed_connections
+            agents_dir = self._vulti_home / "agents"
+            if not agents_dir.is_dir():
+                return
+            for agent_dir in agents_dir.iterdir():
+                if not agent_dir.is_dir() or agent_dir.name == "registry.json":
+                    continue
+                allowed = get_allowed_connections(agent_dir.name)
+                if name in allowed:
+                    allowed.remove(name)
+                    set_allowed_connections(agent_dir.name, allowed)
+        except Exception as e:
+            logger.debug("Could not clean agent allowlists for '%s': %s", name, e)
 
     def update(self, name: str, entry: ConnectionEntry) -> None:
         connections = self.load()
@@ -223,6 +272,67 @@ class ConnectionRegistry:
                 config["tools"] = entry.tools
             result[entry.name] = config
         return result
+
+    # -- Skill-to-connection sync -------------------------------------------
+
+    def sync_skill_connections(self) -> List[str]:
+        """Scan installed skills for ``connection:`` frontmatter and upsert into
+        connections.yaml.  Existing connections are not overwritten.
+
+        Returns list of newly added connection names.
+        """
+        import re
+        import yaml as _yaml
+
+        skills_dir = self._vulti_home / "skills"
+        if not skills_dir.is_dir():
+            return []
+
+        connections = self.load()
+        deleted = self._get_deleted()
+        added: List[str] = []
+
+        for skill_md in skills_dir.rglob("SKILL.md"):
+            try:
+                text = skill_md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+
+            # Parse frontmatter
+            if not text.startswith("---"):
+                continue
+            end = re.search(r"\n---\s*\n", text[3:])
+            if not end:
+                continue
+            try:
+                fm = _yaml.safe_load(text[3 : end.start() + 3])
+            except Exception:
+                continue
+            if not isinstance(fm, dict) or "connection" not in fm:
+                continue
+
+            conn = fm["connection"]
+            if not isinstance(conn, dict):
+                continue
+            conn_name = conn.get("name") or fm.get("name", "")
+            if not conn_name or conn_name in connections or conn_name in deleted:
+                continue
+
+            entry = ConnectionEntry(
+                name=conn_name,
+                type=conn.get("type", "custom"),
+                description=conn.get("description", fm.get("description", "")),
+                tags=conn.get("tags", []),
+                skill=fm.get("name", ""),
+            )
+            connections[conn_name] = entry
+            added.append(conn_name)
+
+        if added:
+            self.save(connections)
+            logger.info("Synced %d skill connections: %s", len(added), ", ".join(added))
+
+        return added
 
 
 # ---------------------------------------------------------------------------

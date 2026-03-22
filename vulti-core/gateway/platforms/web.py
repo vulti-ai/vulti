@@ -240,6 +240,19 @@ class WebAdapter(BasePlatformAdapter):
                 adapter._save_session_meta(session_id, meta)
             return {"ok": True, "title": title}
 
+        @app.post("/api/sessions/{session_id}/mark-read")
+        async def mark_session_read(session_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            # Mark all inbox items for this session as read
+            adapter._mark_session_inbox_read(session_id)
+            return {"ok": True}
+
+        @app.post("/api/inbox/{item_id}/read")
+        async def mark_inbox_read(item_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            adapter._mark_inbox_item_read(item_id)
+            return {"ok": True}
+
         # --- Agent endpoints ---
 
         @app.get("/api/agents")
@@ -468,7 +481,7 @@ class WebAdapter(BasePlatformAdapter):
                     ts_data = json.loads(result.stdout)
                     ts_name = ts_data.get("Self", {}).get("DNSName", "").rstrip(".")
                     if ts_name:
-                        base_url = f"https://{ts_name}:{port}"
+                        base_url = f"https://{ts_name}"
             except Exception:
                 pass
             return {
@@ -989,6 +1002,23 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return adapter._get_agent_avatar(agent_id)
 
+        # --- Agent Files ---
+
+        @app.get("/api/agents/{agent_id}/files")
+        async def list_agent_files(agent_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._list_agent_files(agent_id)
+
+        @app.get("/api/agents/{agent_id}/files/{file_path:path}")
+        async def get_agent_file(agent_id: str, file_path: str, authorization: str = Header("")):
+            from fastapi.responses import FileResponse
+            await get_current_user(authorization)
+            cache_dir = adapter._get_agent_cache_dir(agent_id)
+            full_path = (cache_dir / file_path).resolve()
+            if not full_path.is_relative_to(cache_dir.resolve()) or not full_path.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+            return FileResponse(full_path)
+
         # --- Agent Config ---
 
         @app.get("/api/agents/{agent_id}/config")
@@ -1215,9 +1245,11 @@ class WebAdapter(BasePlatformAdapter):
                             meta["preview"] = streamed[:100]
                             meta["updated_at"] = datetime.now().isoformat()
                             self._save_session_meta(session_id, meta)
-                # Sync to Matrix DM thread (fire-and-forget)
                 if streamed:
-                    self._fire_matrix_sync(session_id, event, streamed)
+                    # Write unread inbox item
+                    _agent_id = getattr(event, "_agent_id", "") or ""
+                    if _agent_id:
+                        self._append_inbox_item(session_id, _agent_id, streamed)
                 return
 
             if not response:
@@ -1247,8 +1279,10 @@ class WebAdapter(BasePlatformAdapter):
                     meta["updated_at"] = datetime.now().isoformat()
                     self._save_session_meta(session_id, meta)
 
-            # Sync to Matrix DM thread (fire-and-forget)
-            self._fire_matrix_sync(session_id, event, response)
+            # Write unread inbox item
+            _agent_id = getattr(event, "_agent_id", "") or ""
+            if _agent_id and response:
+                self._append_inbox_item(session_id, _agent_id, response)
 
         except Exception as e:
             import traceback
@@ -1270,36 +1304,6 @@ class WebAdapter(BasePlatformAdapter):
                     await ws.send_text(json.dumps({"type": "typing", "active": False}))
                 except Exception:
                     pass
-
-    def _fire_matrix_sync(self, session_id: str, event: MessageEvent, response: str) -> None:
-        """Fire-and-forget sync of a web chat exchange to a Matrix DM thread."""
-        agent_id = getattr(event, "_agent_id", None)
-        if not agent_id:
-            return
-        user_text = event.text or ""
-        if not user_text or not response:
-            return
-
-        # Get session name for thread root label
-        meta = self._get_session_meta(session_id)
-        session_name = (meta or {}).get("name")
-
-        async def _do_sync():
-            try:
-                from gateway.matrix_sync import sync_message_to_matrix
-                await sync_message_to_matrix(
-                    agent_id=agent_id,
-                    session_id=session_id,
-                    user_text=user_text,
-                    agent_response=response,
-                    session_name=session_name,
-                )
-            except Exception as e:
-                logger.debug("[web] Matrix sync failed: %s", e)
-
-        task = asyncio.create_task(_do_sync())
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
 
     # --- Tool progress for WebSocket clients ---
 
@@ -1632,6 +1636,61 @@ class WebAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.debug("Session title generation failed: %s", e)
             return None
+
+    def _append_inbox_item(self, session_id: str, agent_id: str, preview: str):
+        """Write an unread inbox item when an agent responds."""
+        d = self._get_data_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        item = {
+            "id": uuid.uuid4().hex[:12],
+            "source": "app",
+            "sender": agent_id,
+            "preview": preview[:200] if preview else "",
+            "timestamp": datetime.now().isoformat(),
+            "read": False,
+            "agent_id": agent_id,
+            "session_id": session_id,
+        }
+        with open(d / "inbox.jsonl", "a") as f:
+            f.write(json.dumps(item) + "\n")
+
+    def _mark_session_inbox_read(self, session_id: str):
+        """Mark all inbox items for a session as read."""
+        f = self._get_data_dir() / "inbox.jsonl"
+        if not f.exists():
+            return
+        lines = f.read_text().strip().split("\n")
+        updated = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+                if item.get("session_id") == session_id:
+                    item["read"] = True
+                updated.append(json.dumps(item))
+            except Exception:
+                updated.append(line)
+        f.write_text("\n".join(updated) + "\n" if updated else "")
+
+    def _mark_inbox_item_read(self, item_id: str):
+        """Mark a single inbox item as read by ID."""
+        f = self._get_data_dir() / "inbox.jsonl"
+        if not f.exists():
+            return
+        lines = f.read_text().strip().split("\n")
+        updated = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+                if item.get("id") == item_id:
+                    item["read"] = True
+                updated.append(json.dumps(item))
+            except Exception:
+                updated.append(line)
+        f.write_text("\n".join(updated) + "\n" if updated else "")
 
     def _append_history(self, session_id: str, message: dict):
         """Append a message to session history."""
@@ -2403,9 +2462,10 @@ class WebAdapter(BasePlatformAdapter):
         return []
 
     def _get_integrations(self) -> list:
-        """Get all integrations aggregated from multiple sources."""
+        """Get all integrations from the connection registry + live gateway status."""
         home = self._get_vulti_home()
         integrations = []
+        seen_ids: set = set()
 
         # 1. Gateway platform connections (live status)
         gateway_status = self._get_system_status()
@@ -2464,166 +2524,43 @@ class WebAdapter(BasePlatformAdapter):
                 "details": details,
                 "updated_at": info.get("updated_at"),
             })
+            seen_ids.add(pid)
 
-        # 2. Parse MEMORY.md for additional integrations
-        mem_file = home / "memories" / "MEMORY.md"
-        if mem_file.exists():
-            mem = mem_file.read_text()
-            sections = mem.split("§")
-            for section in sections:
-                s = section.strip()
-                if not s:
+        try:
+            from vulti_cli.connection_registry import ConnectionRegistry
+            registry = ConnectionRegistry(home)
+            tag_categories = {
+                "messaging": "Messaging", "email": "Messaging", "communication": "Messaging",
+                "social": "Social",
+                "productivity": "Productivity", "notes": "Productivity", "knowledge": "Productivity",
+                "project-management": "Productivity", "calendar": "Productivity",
+                "voice": "Voice & SMS", "telephony": "Voice & SMS",
+                "web": "Tools", "scraping": "Tools", "browser": "Tools",
+                "smart-home": "Smart Home", "iot": "Smart Home",
+                "llm": "LLM", "ai": "LLM", "ml": "Analytics",
+                "google": "Cloud", "apple": "Apple",
+            }
+            for conn in registry.list_all():
+                if conn.name in seen_ids or not conn.enabled:
                     continue
-
-                if "Google Cloud" in s or "Google Workspace" in s:
-                    # Only add if not already from gateway
-                    if not any(i["id"] == "google" for i in integrations):
-                        integrations.append({
-                            "id": "google",
-                            "name": "Google Workspace",
-                            "category": "Cloud",
-                            "status": "connected" if (home / "google_token.json").exists() else "configured",
-                            "details": self._extract_details(s, [
-                                "Gmail", "Calendar", "Drive", "Contacts", "Sheets", "Docs",
-                            ]),
-                        })
-
-                if "iCloud Mail" in s or "himalaya" in s:
-                    if not any(i["id"] == "icloud" for i in integrations):
-                        integrations.append({
-                            "id": "icloud",
-                            "name": "iCloud Mail",
-                            "category": "Messaging",
-                            "status": "connected",
-                            "details": {"account": self._extract_field(s, r"Account:\s*(\S+)")},
-                        })
-
-                if "Telegram Client API" in s or "Telethon" in s:
-                    # Enrich existing telegram entry
-                    for i in integrations:
-                        if i["id"] == "telegram":
-                            i["details"]["user"] = self._extract_field(s, r"User:\s*(@\S+)")
-                            i["details"]["user_id"] = self._extract_field(s, r"id:(\d+)")
-                            break
-
-                if "WhatsApp" in s and "Mac app" in s:
-                    # Enrich or add WhatsApp
-                    existing = next((i for i in integrations if i["id"] == "whatsapp"), None)
-                    if existing:
-                        existing["details"]["method"] = "Mac SQLite DB"
-                    else:
-                        integrations.append({
-                            "id": "whatsapp",
-                            "name": "WhatsApp",
-                            "category": "Messaging",
-                            "status": "configured",
-                            "details": {"method": "Mac SQLite DB"},
-                        })
-
-                if "X/Twitter" in s or "x-cli" in s:
-                    if not any(i["id"] == "x-twitter" for i in integrations):
-                        handle = self._extract_field(s, r"handle:\s*(@\S+)")
-                        has_credits = "CreditsDepleted" not in s
-                        integrations.append({
-                            "id": "x-twitter",
-                            "name": "X / Twitter",
-                            "category": "Social",
-                            "status": "connected" if has_credits else "degraded",
-                            "details": {
-                                "handle": handle,
-                                "note": "CreditsDepleted — needs paid plan" if not has_credits else "",
-                            },
-                        })
-
-                if "Twilio" in s:
-                    if not any(i["id"] == "twilio" for i in integrations):
-                        acct = self._extract_field(s, r"account\s*\((\w+\.\.\.?\w+)\)")
-                        integrations.append({
-                            "id": "twilio",
-                            "name": "Twilio",
-                            "category": "Voice & SMS",
-                            "status": "connected" if "reactivated" in s else "configured",
-                            "details": {"account": acct, "note": "Reactivated 17 Mar 2026" if "reactivated" in s else ""},
-                        })
-
-                if "Bland.ai" in s or "bland" in s.lower():
-                    if not any(i["id"] == "bland" for i in integrations):
-                        integrations.append({
-                            "id": "bland",
-                            "name": "Bland.ai",
-                            "category": "Voice & SMS",
-                            "status": "connected",
-                            "details": {
-                                "voices": "mason (working), sophie-australian (broken)",
-                                "note": "Twilio voice server at twilio_voice_server.py",
-                            },
-                        })
-
-        # 3. OAuth tokens as integrations
-        if (home / "google_token.json").exists():
-            # Enrich Google entry with OAuth details
-            for i in integrations:
-                if i["id"] == "google":
-                    try:
-                        data = json.loads((home / "google_token.json").read_text())
-                        i["details"]["scopes"] = len(data.get("scopes", []))
-                        i["details"]["has_refresh"] = bool(data.get("refresh_token"))
-                    except Exception:
-                        pass
-
-        if (home / "x_oauth2_token.json").exists():
-            for i in integrations:
-                if i["id"] == "x-twitter":
-                    try:
-                        data = json.loads((home / "x_oauth2_token.json").read_text())
-                        i["details"]["oauth"] = "valid" if data.get("access_token") else "expired"
-                    except Exception:
-                        pass
-
-        # 4. Check for Firecrawl, FAL, Browserbase from .env
-        env_file = home / ".env"
-        if env_file.exists():
-            env_text = env_file.read_text()
-            tool_services = [
-                ("firecrawl", "Firecrawl", "Tools", "FIRECRAWL_API_KEY"),
-                ("fal", "FAL.ai", "Tools", "FAL_KEY"),
-                ("browserbase", "Browserbase", "Tools", "BROWSERBASE_API_KEY"),
-                ("openrouter", "OpenRouter", "LLM", "OPENROUTER_API_KEY"),
-                ("groq", "Groq", "LLM", "GROQ_API_KEY"),
-            ]
-            for sid, sname, scat, env_key in tool_services:
-                if not any(i["id"] == sid for i in integrations):
-                    # Check if key is set (non-empty, non-commented)
-                    is_set = False
-                    for line in env_text.splitlines():
-                        line = line.strip()
-                        if line.startswith(env_key + "="):
-                            val = line.split("=", 1)[1].strip().strip("'\"")
-                            if val:
-                                is_set = True
-                            break
-                    if is_set:
-                        integrations.append({
-                            "id": sid,
-                            "name": sname,
-                            "category": scat,
-                            "status": "connected",
-                            "details": {},
-                        })
+                category = "Tools"
+                for tag in conn.tags:
+                    if tag in tag_categories:
+                        category = tag_categories[tag]
+                        break
+                display_name = conn.description.split(" \u2014 ")[0] if " \u2014 " in conn.description else conn.name.replace("-", " ").title()
+                integrations.append({
+                    "id": conn.name,
+                    "name": display_name,
+                    "category": category,
+                    "status": "connected",
+                    "details": {"skill": conn.skill} if conn.skill else {},
+                })
+                seen_ids.add(conn.name)
+        except Exception as e:
+            logger.debug("[web] Could not load connection registry for integrations: %s", e)
 
         return integrations
-
-    @staticmethod
-    def _extract_field(text: str, pattern: str) -> str:
-        """Extract a field from text using regex."""
-        m = re.search(pattern, text)
-        return m.group(1) if m else ""
-
-    @staticmethod
-    def _extract_details(text: str, keywords: list) -> dict:
-        """Check which keywords appear in text."""
-        found = [k for k in keywords if k.lower() in text.lower()]
-        return {"services": found} if found else {}
 
     # --- Memories & Soul ---
 
@@ -3053,6 +2990,12 @@ class WebAdapter(BasePlatformAdapter):
         if link.exists() or link.is_symlink():
             return {"ok": True, "name": skill_name, "already_installed": True}
         link.symlink_to(source)
+        # Sync skill-declared connection into the global registry
+        try:
+            from vulti_cli.connection_registry import ConnectionRegistry
+            ConnectionRegistry(self._get_vulti_home()).sync_skill_connections()
+        except Exception:
+            pass
         return {"ok": True, "name": skill_name}
 
     def _remove_agent_skill(self, agent_id: str, skill_name: str) -> dict:
@@ -3221,6 +3164,39 @@ class WebAdapter(BasePlatformAdapter):
         if meta and meta.avatar:
             return {"avatar": meta.avatar, "format": "emoji"}
         return {"avatar": None}
+
+    # --- Agent Files ---
+
+    def _get_agent_cache_dir(self, agent_id: str) -> Path:
+        from vulti_cli.config import get_vulti_home
+        return get_vulti_home() / "agents" / agent_id / "cache"
+
+    def _list_agent_files(self, agent_id: str) -> list:
+        cache_dir = self._get_agent_cache_dir(agent_id)
+        if not cache_dir.exists():
+            return []
+        files = []
+        for f in sorted(cache_dir.rglob("*"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not f.is_file():
+                continue
+            rel = f.relative_to(cache_dir)
+            ext = f.suffix.lower()
+            if ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                category = "image"
+            elif ext in (".ogg", ".opus", ".mp3", ".wav", ".m4a"):
+                category = "audio"
+            elif ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+                category = "video"
+            else:
+                category = "document"
+            files.append({
+                "name": f.name,
+                "path": str(rel),
+                "category": category,
+                "size": f.stat().st_size,
+                "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+            })
+        return files
 
     # --- Agent Config ---
 
