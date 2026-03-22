@@ -66,6 +66,10 @@ actor GatewayClient {
         try await gw.delete(path: "agents/\(id)")
     }
 
+    func resetEverything() async throws {
+        _ = try await gw.postRaw(path: "reset", body: [:] as [String: String])
+    }
+
     func generateAvatar(agentId: String) async throws {
         try await gw.generateAvatar(agentId: agentId)
     }
@@ -538,6 +542,10 @@ actor GatewayClient {
 
     func agentFileURL(agentId: String, path: String) -> URL? {
         URL(string: "http://localhost:8080/api/agents/\(agentId)/files/\(path)")
+    }
+
+    func deleteAgentFile(agentId: String, path: String) async throws {
+        try await gw.delete(path: "agents/\(agentId)/files/\(path)")
     }
 
     // MARK: - Agent Config

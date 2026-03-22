@@ -30,9 +30,8 @@ struct SquadCanvas: View {
     // Measured node sizes — reported by AgentNode via onNodeSize callback
     @State private var nodeSizes: [String: CGSize] = [:]
 
-    // Matrix server name and integrations fetched from gateway
+    // Matrix server name fetched from gateway
     @State private var matrixServerName: String?
-    @State private var integrations: [GatewayClient.IntegrationResponse] = []
 
     // Outward padding from edge for handle position
     private let handlePad: CGFloat = 4
@@ -259,16 +258,14 @@ struct SquadCanvas: View {
                     fitView(layout: layout, size: geo.size)
                     didFitView = true
                 }
-                // Fetch integrations and Matrix server name
+                // Fetch Matrix server name
                 Task {
-                    if let fetched = try? await app.client.listIntegrations() {
-                        integrations = fetched
-                        if let matrix = fetched.first(where: { $0.id == "matrix" }),
-                           let details = matrix.details,
-                           let serverName = details["server_name"]?.value as? String,
-                           !serverName.isEmpty, serverName != "localhost" {
-                            matrixServerName = serverName
-                        }
+                    if let integrations = try? await app.client.listIntegrations(),
+                       let matrix = integrations.first(where: { $0.id == "matrix" }),
+                       let details = matrix.details,
+                       let serverName = details["server_name"]?.value as? String,
+                       !serverName.isEmpty, serverName != "localhost" {
+                        matrixServerName = serverName
                     }
                 }
             }
@@ -362,73 +359,6 @@ struct SquadCanvas: View {
                     .position(x: rect.midX, y: rect.minY)
             }
 
-            // Connection circles along the boundary — bottom, then up the sides
-            let connections = integrations.filter { $0.id != "matrix" }
-            if !connections.isEmpty {
-                let circleSize: CGFloat = 36
-                let spacing: CGFloat = 12
-                let step = circleSize + spacing
-                let cornerRadius: CGFloat = 24
-                let cornerInset: CGFloat = cornerRadius + circleSize / 2
-
-                // Bottom edge positions (left to right, inset from corners)
-                let bottomLeft = rect.minX + cornerInset
-                let bottomRight = rect.maxX - cornerInset
-                let bottomWidth = bottomRight - bottomLeft
-                let bottomCount = max(1, Int(floor(bottomWidth / step)) + 1)
-
-                // Distribute evenly across bottom
-                let bottomSpacing = bottomCount > 1 ? bottomWidth / CGFloat(bottomCount - 1) : 0
-
-                // Place circles: fill bottom first, then overflow up left side, then right side
-                let positions: [(CGFloat, CGFloat)] = {
-                    var pts: [(CGFloat, CGFloat)] = []
-
-                    // Bottom edge (left to right)
-                    for i in 0..<bottomCount {
-                        let x = bottomCount == 1 ? rect.midX : bottomLeft + CGFloat(i) * bottomSpacing
-                        pts.append((x, rect.maxY))
-                    }
-
-                    // Remaining go up the sides, alternating left then right
-                    let remaining = connections.count - bottomCount
-                    if remaining > 0 {
-                        let leftX = rect.minX
-                        let rightX = rect.maxX
-                        let topLimit = rect.minY + cornerInset
-
-                        var leftY = rect.maxY - cornerInset
-                        var rightY = rect.maxY - cornerInset
-
-                        for i in 0..<remaining {
-                            if i % 2 == 0 {
-                                // Left side (going up)
-                                if leftY >= topLimit {
-                                    pts.append((leftX, leftY))
-                                    leftY -= step
-                                }
-                            } else {
-                                // Right side (going up)
-                                if rightY >= topLimit {
-                                    pts.append((rightX, rightY))
-                                    rightY -= step
-                                }
-                            }
-                        }
-                    }
-
-                    return pts
-                }()
-
-                ForEach(Array(connections.enumerated()), id: \.element.id) { index, integration in
-                    if index < positions.count {
-                        let pos = positions[index]
-                        ConnectionCircle(integration: integration, size: circleSize)
-                            .fixedSize()
-                            .position(x: pos.0, y: pos.1)
-                    }
-                }
-            }
         }
     }
 
@@ -680,96 +610,6 @@ struct MatrixLabel: View {
     }
 }
 
-struct ConnectionCircle: View {
-    let integration: GatewayClient.IntegrationResponse
-    let size: CGFloat
-    @State private var isHovered = false
-    @State private var showTip = false
-
-    private var statusColor: Color {
-        switch integration.status {
-        case "connected": .green
-        case "degraded": .yellow
-        case "configured": .blue
-        default: .gray
-        }
-    }
-
-    private var iconName: String {
-        switch integration.id {
-        case "telegram": "paperplane.fill"
-        case "discord": "bubble.left.and.text.bubble.right.fill"
-        case "whatsapp": "phone.fill"
-        case "slack": "number"
-        case "signal": "lock.shield.fill"
-        case "email": "envelope.fill"
-        case "homeassistant": "house.fill"
-        default: "circle.grid.2x2.fill"
-        }
-    }
-
-    private var statusLabel: String {
-        switch integration.status {
-        case "connected": "connected"
-        case "degraded": "degraded"
-        case "configured": "configured but not active"
-        default: "not connected"
-        }
-    }
-
-    private var tooltip: String {
-        switch integration.id {
-        case "telegram": "Message agents via Telegram bot"
-        case "discord": "Talk to agents in Discord channels"
-        case "whatsapp": "Chat with agents over WhatsApp"
-        case "slack": "Interact with agents in Slack"
-        case "signal": "Private encrypted messaging with agents"
-        case "email": "Agents send and receive email"
-        case "homeassistant": "Agents control your smart home"
-        case "twilio": "Phone calls and SMS via agents"
-        case "firecrawl": "Web crawling and content extraction"
-        case "openrouter": "Multi-model AI routing"
-        case "fal", "fal.ai": "Image and media generation"
-        case "bland", "bland.ai": "AI-powered phone calls"
-        default: integration.name
-        }
-    }
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(VultiTheme.paper.opacity(0.95))
-                .frame(width: size, height: size)
-            Circle()
-                .stroke(statusColor.opacity(isHovered ? 0.8 : 0.5), lineWidth: 1.5)
-                .frame(width: size, height: size)
-            Image(systemName: iconName)
-                .font(.system(size: size * 0.35))
-                .foregroundStyle(VultiTheme.inkDim)
-            Text(integration.name)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(VultiTheme.inkMuted)
-                .lineLimit(1)
-                .offset(y: size / 2 + 8)
-        }
-        .contentShape(Circle())
-        .highPriorityGesture(
-            TapGesture().onEnded { showTip.toggle() }
-        )
-        .popover(isPresented: $showTip, arrowEdge: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(tooltip)
-                    .font(.system(size: 12, weight: .medium))
-                Text(statusLabel)
-                    .font(.system(size: 11))
-                    .foregroundStyle(statusColor)
-            }
-            .padding(10)
-        }
-        .onHover { isHovered = $0 }
-        .animation(.easeInOut(duration: 0.12), value: isHovered)
-    }
-}
 
 // MARK: - Dot grid
 

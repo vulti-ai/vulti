@@ -132,18 +132,22 @@ struct ChatView: View {
             .padding(.bottom, 16)
         }
         .onAppear {
-            loadSessions()
+            let loadTask = loadSessions()
             // Resume today's session or trigger daily introspection (once per day)
             if sessionId == nil && !didAutoIntrospect {
                 didAutoIntrospect = true
                 Task {
-                    // Wait for sessions to load
-                    try? await Task.sleep(for: .milliseconds(400))
+                    // Wait for sessions to actually finish loading
+                    await loadTask.value
+
                     if let todaySession = recentSessions.first(where: { isSessionFresh($0) }) {
                         // Already have a session from today — resume it
                         switchToSession(todaySession)
+                    } else if !recentSessions.isEmpty {
+                        // Older sessions exist but none from today — daily introspection
+                        triggerIntrospect()
                     } else if autoIntrospect {
-                        // No session today — start daily check-in
+                        // Brand new agent, no sessions at all
                         triggerIntrospect()
                     }
                 }
@@ -267,9 +271,10 @@ struct ChatView: View {
 
     // MARK: - Session Actions
 
-    private func loadSessions() {
+    @discardableResult
+    private func loadSessions() -> Task<Void, Never> {
         isLoadingSessions = true
-        Task {
+        return Task {
             recentSessions = (try? await app.client.listSessions(agentId: agentId)) ?? []
             isLoadingSessions = false
         }

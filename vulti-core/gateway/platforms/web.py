@@ -287,6 +287,11 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return await adapter._delete_agent(agent_id)
 
+        @app.post("/api/reset")
+        async def reset_everything(authorization: str = Header("")):
+            await get_current_user(authorization)
+            return await adapter._reset_everything()
+
         # --- Agent-scoped resource endpoints ---
 
         @app.get("/api/agents/{agent_id}/memories")
@@ -1018,6 +1023,16 @@ class WebAdapter(BasePlatformAdapter):
             if not full_path.is_relative_to(cache_dir.resolve()) or not full_path.is_file():
                 raise HTTPException(status_code=404, detail="File not found")
             return FileResponse(full_path)
+
+        @app.delete("/api/agents/{agent_id}/files/{file_path:path}")
+        async def delete_agent_file(agent_id: str, file_path: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            cache_dir = adapter._get_agent_cache_dir(agent_id)
+            full_path = (cache_dir / file_path).resolve()
+            if not full_path.is_relative_to(cache_dir.resolve()) or not full_path.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+            full_path.unlink()
+            return {"ok": True}
 
         # --- Agent Config ---
 
@@ -1958,6 +1973,103 @@ class WebAdapter(BasePlatformAdapter):
                 runner._hub_agent_registry = None
 
         return {"ok": True}
+
+    async def _reset_everything(self) -> dict:
+        """Factory reset: delete all agents, connections, skills, jobs, rules, sessions.
+
+        Safety: every path is resolved and verified to be inside ~/.vulti/ before deletion.
+        """
+        import shutil
+        home = self._get_vulti_home().resolve()
+
+        def _safe_rmtree(path: Path) -> None:
+            """Only delete if path is strictly inside the vulti home directory."""
+            resolved = path.resolve()
+            if not str(resolved).startswith(str(home) + "/") and resolved != home:
+                logger.warning("Reset safety: refusing to delete '%s' (outside %s)", resolved, home)
+                return
+            if resolved.exists():
+                shutil.rmtree(resolved, ignore_errors=True)
+
+        def _safe_unlink(path: Path) -> None:
+            """Only delete if path is strictly inside the vulti home directory."""
+            resolved = path.resolve()
+            if not str(resolved).startswith(str(home) + "/"):
+                logger.warning("Reset safety: refusing to delete '%s' (outside %s)", resolved, home)
+                return
+            if resolved.exists():
+                resolved.unlink(missing_ok=True)
+
+        registry = self._get_agent_registry()
+        deleted_agents = []
+        errors = []
+
+        # 1. Delete every agent (incl. Matrix cleanup, sessions, cron, rules, memories, skills, config)
+        reg_data = registry._load()
+        for agent_id in list(reg_data.get("agents", {}).keys()):
+            try:
+                await self._delete_agent(agent_id)
+                deleted_agents.append(agent_id)
+            except Exception as e:
+                errors.append(f"agent {agent_id}: {e}")
+
+        # 2. Delete all connections
+        try:
+            from vulti_cli.connection_registry import ConnectionRegistry
+            conn_reg = ConnectionRegistry(home)
+            connections = conn_reg.load()
+            for name in list(connections.keys()):
+                conn_reg.remove(name)
+        except Exception as e:
+            errors.append(f"connections: {e}")
+
+        # 3. Wipe directories (all paths verified inside ~/.vulti/)
+        for dirname in (
+            "skills",           # All skills (bundled + user-created)
+            "cron",             # Legacy global cron
+            "rules",            # Legacy global rules
+            "memories",         # Owner memories
+            "continuwuity",     # Matrix/Conduit server data
+            "audit",            # Audit log
+            "logs",             # Logs
+            "web",              # Web session/widget files
+            "sessions",         # Session files
+            "whatsapp",         # WhatsApp state
+            "x_bookmarks",      # X/Twitter bookmarks
+            "browser_screenshots",  # Browser automation screenshots
+            "audio_cache",      # TTS/STT cache
+            "images",           # Generated images
+            "sandboxes",        # Sandbox environments
+            "hooks",            # Custom hooks
+            "pairing",          # Device pairing
+        ):
+            _safe_rmtree(home / dirname)
+
+        # 4. Wipe files (all paths verified inside ~/.vulti/)
+        for filename in (
+            "connections_deleted.json",
+            "connections.yaml",
+            "sessions.db", "sessions.db-shm", "sessions.db-wal",
+            "state.db", "state.db-shm", "state.db-wal",
+            "gateway_state.json",
+            "channel_directory.json",
+            "owner.json",
+            "SOUL.md",
+            "google_token.json", "google_oauth_pending.json",
+            "x_oauth2_token.json",
+            "gmail_archiver_state.json", "gmail_attachment_state.json",
+            "telegram_user_session.session", "telegram_user_session.session-journal",
+            "processes.json",
+            "interrupt_debug.log",
+            ".hermes_history",
+        ):
+            _safe_unlink(home / filename)
+
+        return {
+            "ok": True,
+            "deleted_agents": deleted_agents,
+            "errors": errors if errors else None,
+        }
 
     async def _cleanup_matrix_agent(self, agent_id: str) -> None:
         """Remove an agent's Matrix user: leave rooms, logout, delete credentials."""
@@ -3599,11 +3711,32 @@ class WebAdapter(BasePlatformAdapter):
         pane_path = registry.agent_home(agent_id) / "pane_widgets.json"
         if pane_path.exists():
             try:
-                return json.loads(pane_path.read_text())
+                data = json.loads(pane_path.read_text())
+                # Refresh default widget titles/entries from live data so counts stay current
+                self._refresh_default_widget_data(agent_id, data)
+                return data
             except Exception:
                 pass
         # No pane file — generate and persist defaults
         return self._reset_default_widgets(agent_id)
+
+    def _refresh_default_widget_data(self, agent_id: str, data: dict) -> None:
+        """Refresh default widget titles and entries from live data so counts stay current."""
+        try:
+            fresh = self._build_default_widgets(agent_id)
+            fresh_by_id = {w["id"]: w for w in fresh}
+
+            for tab_name, tab_data in data.get("tabs", {}).items():
+                widgets = tab_data if isinstance(tab_data, list) else tab_data.get("widgets", [])
+                for widget in widgets:
+                    wid = widget.get("id", "")
+                    if wid in fresh_by_id:
+                        fresh_w = fresh_by_id[wid]
+                        widget["title"] = fresh_w["title"]
+                        if "data" in fresh_w and "entries" in fresh_w["data"]:
+                            widget.setdefault("data", {})["entries"] = fresh_w["data"]["entries"]
+        except Exception:
+            pass
 
     def _sync_role_from_file(self, agent_id: str, registry=None) -> None:
         """If the agent wrote role.txt but the registry role is empty/different, sync it."""

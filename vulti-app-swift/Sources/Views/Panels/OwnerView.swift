@@ -408,20 +408,9 @@ struct SettingsView: View {
 struct GeneralSettingsView: View {
     @Environment(AppState.self) private var app
     @AppStorage("vulti_theme") private var themeRaw: String = "system"
-    @State private var secrets: [GatewayClient.SecretResponse] = []
     @State private var providers: [GatewayClient.ProviderResponse] = []
     @State private var oauthStatuses: [GatewayClient.OAuthResponse] = []
-    @State private var integrations: [GatewayClient.IntegrationResponse] = []
     @State private var pendingPermissions: [GatewayClient.PermissionResponse] = []
-    @State private var newKeyType = "OpenRouter"
-    @State private var newKeyValue = ""
-    @State private var showAddKey = false
-
-    /// Group integrations by category.
-    private var integrationsByCategory: [(String, [GatewayClient.IntegrationResponse])] {
-        Dictionary(grouping: integrations, by: { $0.category ?? "Other" })
-            .sorted { $0.key < $1.key }
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -577,33 +566,7 @@ struct GeneralSettingsView: View {
                 Divider()
             }
 
-            // ── Integrations Status ──
-            if !integrations.isEmpty {
-                ForEach(integrationsByCategory, id: \.0) { category, items in
-                    Section {
-                        ForEach(items, id: \.id) { integ in
-                            HStack {
-                                Circle()
-                                    .fill(integrationStatusColor(integ.status ?? "unknown"))
-                                    .frame(width: 8, height: 8)
-                                Text(integ.name)
-                                    .font(.system(size: 13, weight: .medium))
-                                Spacer()
-                                Text((integ.status ?? "unknown").capitalized)
-                                    .font(.system(size: 10))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(integrationStatusColor(integ.status ?? "unknown").opacity(0.1), in: Capsule())
-                                    .foregroundStyle(integrationStatusColor(integ.status ?? "unknown"))
-                            }
-                        }
-                    } header: {
-                        Text(category.uppercased()).font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
-                    }
-                }
-
-                Divider()
-            }
+            // Integrations moved to Connections tab
 
             // ── Providers ──
             Section {
@@ -624,69 +587,67 @@ struct GeneralSettingsView: View {
                 Text("PROVIDERS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
             }
 
+            // API keys managed via connections
+
+            Spacer().frame(height: 40)
+
             Divider()
 
-            // API Keys
-            Section {
-                ForEach(secrets, id: \.key) { secret in
-                    HStack {
-                        Text(secret.key)
-                            .font(.system(size: 12))
-                            .monospaced()
-                        Spacer()
-                        Text(secret.maskedValue ?? "***")
-                            .font(.system(size: 11))
-                            .foregroundStyle(VultiTheme.inkDim)
-                        Button(role: .destructive) {
-                            Task {
-                                try? await app.client.deleteSecret(key: secret.key)
-                                await reload()
-                            }
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(size: 11))
+            // ── Reset Everything ──
+            VStack(spacing: 12) {
+                if showResetConfirm {
+                    Text("This will delete all agents, connections, skills, jobs, rules, memories, sessions, Matrix server, and all cached data. Are you sure?")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red.opacity(0.8))
+                        .multilineTextAlignment(.center)
+
+                    HStack(spacing: 12) {
+                        Button("No") {
+                            withAnimation(.easeInOut(duration: 0.15)) { showResetConfirm = false }
                         }
                         .buttonStyle(.plain)
-                    }
-                }
+                        .font(.system(size: 12, weight: .medium))
 
-                if showAddKey {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Picker("Type", selection: $newKeyType) {
-                            ForEach(["OpenRouter", "Anthropic", "OpenAI", "DeepSeek", "Google"], id: \.self) { Text($0) }
+                        Button("Yes, delete everything") {
+                            performReset()
                         }
-                        SecureField("API Key", text: $newKeyValue)
-                            .textFieldStyle(.vulti)
-                        HStack {
-                            Button("Cancel") { showAddKey = false; newKeyValue = "" }
-                            Button("Save") {
-                                let key = keyForType(newKeyType)
-                                Task {
-                                    try? await app.client.addSecret(key: key, value: newKeyValue)
-                                    showAddKey = false; newKeyValue = ""
-                                    await reload()
-                                }
-                            }
-                            .buttonStyle(.vultiPrimary)
-                            .disabled(newKeyValue.isEmpty)
-                        }
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .background(.red, in: RoundedRectangle(cornerRadius: 6))
+                        .buttonStyle(.plain)
                     }
                 } else {
-                    Button("Add API Key") { showAddKey = true }
-                        .font(.system(size: 12))
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { showResetConfirm = true }
+                    } label: {
+                        Text("Reset Everything")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
                 }
-            } header: {
-                Text("API KEYS").font(.system(size: 12, weight: .medium)).foregroundStyle(VultiTheme.inkMuted)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
         }
         .task { await reload() }
     }
 
+    @State private var showResetConfirm = false
+
+    private func performReset() {
+        Task {
+            try? await app.client.resetEverything()
+            await app.refreshAgents()
+            showResetConfirm = false
+        }
+    }
+
     private func reload() async {
-        do { secrets = try await app.client.listSecrets() } catch {}
         do { providers = try await app.client.listProviders() } catch {}
         do { oauthStatuses = try await app.client.oauthStatus() } catch {}
-        do { integrations = try await app.client.listIntegrations() } catch {}
         do { pendingPermissions = try await app.client.listPermissions() } catch {}
     }
 
@@ -697,24 +658,6 @@ struct GeneralSettingsView: View {
         }
     }
 
-    private func integrationStatusColor(_ status: String) -> Color {
-        switch status {
-        case "connected": .green
-        case "degraded": .yellow
-        case "configured": .blue
-        default: .red
-        }
-    }
-
-    private func keyForType(_ type: String) -> String {
-        switch type {
-        case "Anthropic": "ANTHROPIC_API_KEY"
-        case "OpenAI": "OPENAI_API_KEY"
-        case "DeepSeek": "DEEPSEEK_API_KEY"
-        case "Google": "GOOGLE_API_KEY"
-        default: "OPENROUTER_API_KEY"
-        }
-    }
 }
 
 struct ConnectionsSettingsView: View {

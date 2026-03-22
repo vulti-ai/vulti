@@ -1135,14 +1135,30 @@ struct AgentFilesView: View {
 
     @ViewBuilder
     private func fileCard(_ file: GatewayClient.AgentFile) -> some View {
-        VStack(spacing: 6) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(VultiTheme.paperDeep)
-                    .frame(width: 64, height: 52)
-                Image(systemName: iconForFile(file))
-                    .font(.system(size: 20))
-                    .foregroundStyle(colorForCategory(file.category))
+        VStack(spacing: 4) {
+            ZStack(alignment: .topTrailing) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(VultiTheme.paperDeep)
+                        .frame(width: 80, height: 56)
+                    Image(systemName: iconForFile(file))
+                        .font(.system(size: 20))
+                        .foregroundStyle(colorForCategory(file.category))
+                }
+
+                // Delete button
+                Button {
+                    Task {
+                        try? await app.client.deleteAgentFile(agentId: agentId, path: file.path)
+                        files.removeAll { $0.path == file.path }
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(VultiTheme.inkDim)
+                }
+                .buttonStyle(.plain)
+                .offset(x: 4, y: -4)
             }
 
             Text(file.name)
@@ -1150,7 +1166,19 @@ struct AgentFilesView: View {
                 .foregroundStyle(VultiTheme.inkSoft)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(width: 64)
+                .frame(width: 80)
+
+            // View button
+            Button {
+                if let url = app.client.agentFileURL(agentId: agentId, path: file.path) {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                Text("View")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(VultiTheme.primary)
+            }
+            .buttonStyle(.plain)
 
             Text(formatSize(file.size))
                 .font(.system(size: 8))
