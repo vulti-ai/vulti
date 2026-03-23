@@ -246,22 +246,16 @@ struct OnboardingView: View {
 
     private var prerequisitesStep: some View {
         VStack(spacing: 20) {
-            Text("Before You Begin")
+            Text("We Insist!")
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundStyle(VultiTheme.inkSoft)
 
-            Text("VultiHub gives you a personal team of AI agents that live on your Mac — always on, always private. They message you, run tasks, and manage services without sending your data to the cloud.")
+            Text("No Tailscale = no remote access. No Element X = no agent messages. Install both.")
                 .font(.system(size: 13))
                 .foregroundStyle(VultiTheme.inkDim)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 480)
-
-            Text("To get started, install these two apps on your Mac and iPhone.")
-                .font(.system(size: 12))
-                .foregroundStyle(VultiTheme.inkMuted)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 480)
+                .frame(maxWidth: 460)
 
             Divider()
                 .frame(maxWidth: 500)
@@ -271,22 +265,63 @@ struct OnboardingView: View {
 
                 // Left column: Tailscale
                 VStack(spacing: 12) {
-                    Image(systemName: "network")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.blue)
+                    ZStack {
+                        Image(systemName: "network")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.blue)
+                        if tailscaleStatus == .running {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(VultiTheme.teal)
+                                .offset(x: 16, y: -12)
+                        }
+                    }
 
                     Text("Tailscale")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
 
-                    Text("Secure private network between your devices. Reach your agents from anywhere.")
+                    Text("Your secure tunnel. Reach your agents from anywhere.")
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .multilineTextAlignment(.center)
                         .frame(width: 180)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    // QR code for iPhone
+                    // Status indicator
+                    switch tailscaleStatus {
+                    case .checking:
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text("Checking...").font(.system(size: 10)).foregroundStyle(VultiTheme.inkMuted)
+                        }
+                    case .running:
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(VultiTheme.teal).font(.system(size: 11))
+                            Text(tailscaleHostname.isEmpty ? "Connected" : tailscaleHostname)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(VultiTheme.teal)
+                                .lineLimit(1)
+                        }
+                    case .notRunning:
+                        Text("Installed but not running \u{2014} open Tailscale")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                    case .notInstalled:
+                        Text("Not installed")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(VultiTheme.coral)
+                    }
+
+                    // Mac install link — only when not detected
+                    if tailscaleStatus == .notInstalled {
+                        Link("Install on this Mac", destination: URL(string: Self.tailscaleMacURL)!)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(VultiTheme.primary)
+                    }
+
+                    // iPhone QR — always shown
                     qrCodeImage(for: Self.tailscaleIOSURL)
                         .interpolation(.none)
                         .resizable()
@@ -298,11 +333,6 @@ struct OnboardingView: View {
                     Text("Scan with iPhone")
                         .font(.system(size: 10))
                         .foregroundStyle(VultiTheme.inkDim)
-
-                    // Mac App Store link
-                    Link("Install on this Mac", destination: URL(string: Self.tailscaleMacURL)!)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(VultiTheme.primary)
                 }
 
                 // Right column: Element X
@@ -315,7 +345,7 @@ struct OnboardingView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
 
-                    Text("VultiHub runs its own messaging server on your Mac. Your data never leaves your machine.")
+                    Text("How your agents talk to you. Runs on your hardware, nowhere else.")
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .multilineTextAlignment(.center)
@@ -342,16 +372,32 @@ struct OnboardingView: View {
                 }
             }
 
-            Button {
-                withAnimation { step = 1 }
-            } label: {
-                Text("Got it, let\u{2019}s go")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(maxWidth: .infinity)
+            if tailscaleStatus == .running {
+                Button {
+                    withAnimation { step = 1 }
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.vultiPrimary)
+                .controlSize(.large)
+                .frame(maxWidth: 300)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for Tailscale...")
+                        .font(.system(size: 13))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                }
             }
-            .buttonStyle(.vultiPrimary)
-            .controlSize(.large)
-            .frame(maxWidth: 300)
+        }
+        .task(id: "tailscale-poll") {
+            // Poll every 3 seconds until Tailscale is running
+            while !Task.isCancelled && tailscaleStatus != .running {
+                checkTailscale()
+                try? await Task.sleep(for: .seconds(3))
+            }
         }
     }
 
@@ -1097,12 +1143,27 @@ struct OnboardingView: View {
         }
     }
 
+    /// Find the tailscale CLI binary. Mac App Store version lives inside the .app bundle.
+    private static let tailscaleCLIPaths = [
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        "/usr/local/bin/tailscale",
+        "/opt/homebrew/bin/tailscale",
+    ]
+
     private func checkTailscale() {
         tailscaleStatus = .checking
         Task {
+            // Find tailscale binary
+            let binary = Self.tailscaleCLIPaths.first { FileManager.default.isExecutableFile(atPath: $0) }
+
+            guard let binary else {
+                await MainActor.run { tailscaleStatus = .notInstalled }
+                return
+            }
+
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["tailscale", "status", "--self", "--json"]
+            process.executableURL = URL(fileURLWithPath: binary)
+            process.arguments = ["status", "--self", "--json"]
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = Pipe()
@@ -1125,7 +1186,6 @@ struct OnboardingView: View {
                     }
                     await MainActor.run { tailscaleStatus = .notRunning }
                 } else {
-                    // Check if tailscale binary exists but daemon isn't running
                     await MainActor.run { tailscaleStatus = .notRunning }
                 }
             } catch {
@@ -1135,20 +1195,17 @@ struct OnboardingView: View {
     }
 
     private func fetchHomeserverURL() async {
-        // Fetch from .well-known/matrix/client endpoint
+        // Use Tailscale MagicDNS hostname so Element X can reach the server from any device.
+        // Fallback to localhost only if Tailscale hostname isn't available.
+        let host = tailscaleHostname.isEmpty ? "localhost" : tailscaleHostname
+
+        // Try .well-known first to get the actual port
         let url = URL(string: "http://localhost:8080/.well-known/matrix/client")!
         var request = URLRequest(url: url)
         if let token = VultiHome.webToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        if let (data, _) = try? await URLSession.shared.data(for: request),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let hs = json["m.homeserver"] as? [String: Any],
-           let baseURL = hs["base_url"] as? String {
-            homeserverURL = baseURL
-        } else {
-            homeserverURL = "http://localhost:6167"
-        }
+        homeserverURL = host
     }
 
     private func autoSelectFirstModel() {

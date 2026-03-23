@@ -109,6 +109,25 @@ final class VultiHome: Sendable {
         readString(from: webTokenPath)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Get or create a persistent web auth token (mirrors Python _get_or_create_web_token).
+    /// If ~/.vulti/web_token exists and is non-empty, returns it.
+    /// Otherwise generates a new token, writes it, and returns it.
+    @discardableResult
+    static func ensureWebToken() -> String {
+        if let existing = webToken(), !existing.isEmpty {
+            return existing
+        }
+        // Generate a URL-safe base64 token (32 random bytes = 43 chars, matching Python secrets.token_urlsafe(32))
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let token = Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        try? atomicWriteString(token, to: webTokenPath)
+        return token
+    }
+
     // MARK: - Directory helpers
 
     static func ensureDir(_ url: URL) throws {

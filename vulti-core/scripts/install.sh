@@ -6,7 +6,7 @@
 # Uses uv for fast Python provisioning and package management.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/NousResearch/vulti-agent/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
 #
 # Or with options:
 #   curl -fsSL ... | bash -s -- --no-venv --skip-setup
@@ -26,10 +26,10 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/vulti-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/vulti-agent.git"
+REPO_URL_SSH="git@github.com:NousResearch/hermes-agent.git"
+REPO_URL_HTTPS="https://github.com/NousResearch/hermes-agent.git"
 VULTI_HOME="$HOME/.vulti"
-INSTALL_DIR="${VULTI_INSTALL_DIR:-$VULTI_HOME/vulti-agent}"
+INSTALL_DIR="${VULTI_INSTALL_DIR:-$VULTI_HOME/hermes-agent}"
 PYTHON_VERSION="3.11"
 NODE_VERSION="22"
 
@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-venv      Don't create virtual environment"
             echo "  --skip-setup   Skip interactive setup wizard"
             echo "  --branch NAME  Git branch to install (default: main)"
-            echo "  --dir PATH     Installation directory (default: ~/.vulti/vulti-agent)"
+            echo "  --dir PATH     Installation directory (default: ~/.vulti/hermes-agent)"
             echo "  -h, --help     Show this help"
             exit 0
             ;;
@@ -140,7 +140,7 @@ detect_os() {
             OS="windows"
             DISTRO="windows"
             log_error "Windows detected. Please use the PowerShell installer:"
-            log_info "  irm https://raw.githubusercontent.com/NousResearch/vulti-agent/main/scripts/install.ps1 | iex"
+            log_info "  irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex"
             exit 1
             ;;
         *)
@@ -610,6 +610,10 @@ clone_repo() {
                     log_info "Restore manually with: git stash apply $autostash_ref"
                 fi
             fi
+        elif [ -f "$INSTALL_DIR/pyproject.toml" ]; then
+            # Local source directory (not a git clone) — use it directly
+            log_info "Using existing source directory: $INSTALL_DIR"
+            cd "$INSTALL_DIR"
         else
             log_error "Directory exists but is not a git repository: $INSTALL_DIR"
             log_info "Remove it or choose a different directory with --dir"
@@ -640,9 +644,15 @@ clone_repo() {
     # Only init mini-swe-agent (terminal tool backend — required).
     # tinker-atropos (RL training) is optional and heavy — users can opt in later
     # with: git submodule update --init tinker-atropos && uv pip install -e ./tinker-atropos
-    log_info "Initializing mini-swe-agent submodule (terminal backend)..."
-    git submodule update --init mini-swe-agent
-    log_success "Submodule ready"
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        log_info "Initializing mini-swe-agent submodule (terminal backend)..."
+        git submodule update --init mini-swe-agent 2>/dev/null && log_success "Submodule ready" \
+            || log_warn "mini-swe-agent submodule not available (terminal tools may not work)"
+    elif [ -d "$INSTALL_DIR/mini-swe-agent" ] && [ -f "$INSTALL_DIR/mini-swe-agent/pyproject.toml" ]; then
+        log_success "mini-swe-agent already present"
+    else
+        log_warn "mini-swe-agent not found (terminal tools may not work)"
+    fi
 
     log_success "Repository ready"
 }
@@ -932,6 +942,84 @@ install_node_deps() {
     fi
 }
 
+install_continuwuity() {
+    log_info "Setting up Continuwuity (Matrix homeserver)..."
+
+    local CONT_DIR="$VULTI_HOME/continuwuity"
+    local CONT_BIN="$CONT_DIR/continuwuity"
+
+    # Already installed?
+    if [ -x "$CONT_BIN" ]; then
+        log_success "Continuwuity already installed"
+        return 0
+    fi
+
+    # Try downloading a prebuilt binary first
+    local ARCH=$(uname -m)
+    local OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+    # Map arch names
+    case "$ARCH" in
+        x86_64)  ARCH="x86_64" ;;
+        aarch64|arm64) ARCH="aarch64" ;;
+    esac
+
+    log_info "Checking for prebuilt Continuwuity binary ($OS/$ARCH)..."
+    local RELEASES_URL="https://api.github.com/repos/continuwuity/continuwuity/releases?per_page=5"
+    local DOWNLOAD_URL=""
+
+    if command -v curl &> /dev/null; then
+        local RELEASES_JSON
+        RELEASES_JSON=$(curl -s "$RELEASES_URL" 2>/dev/null)
+
+        # Look for a binary matching our platform
+        DOWNLOAD_URL=$(echo "$RELEASES_JSON" | \
+            grep -o "\"browser_download_url\": *\"[^\"]*${OS}[^\"]*${ARCH}[^\"]*\"" | \
+            head -1 | \
+            sed 's/"browser_download_url": *"//;s/"//')
+    fi
+
+    if [ -n "$DOWNLOAD_URL" ]; then
+        log_info "Downloading Continuwuity from $DOWNLOAD_URL..."
+        mkdir -p "$CONT_DIR"
+        if curl -fsSL "$DOWNLOAD_URL" -o "$CONT_BIN" && chmod +x "$CONT_BIN"; then
+            log_success "Continuwuity downloaded"
+            return 0
+        fi
+        log_warn "Download failed, will try building from source"
+        rm -f "$CONT_BIN"
+    fi
+
+    # Need Rust/cargo to build from source
+    if ! command -v cargo &> /dev/null; then
+        log_info "Rust not found — installing (needed to build Continuwuity)..."
+        if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --quiet 2>/dev/null; then
+            export PATH="$HOME/.cargo/bin:$PATH"
+            log_success "Rust installed"
+        else
+            log_warn "Failed to install Rust — Matrix messaging will not work"
+            log_warn "Install manually: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            return 0
+        fi
+    fi
+
+    # Build from source
+    log_info "Building Continuwuity from source (this may take a few minutes)..."
+    mkdir -p "$CONT_DIR"
+
+    if cargo install continuwuity --root "$CONT_DIR" 2>/dev/null; then
+        # cargo install puts binary in $CONT_DIR/bin/
+        if [ -x "$CONT_DIR/bin/continuwuity" ]; then
+            mv "$CONT_DIR/bin/continuwuity" "$CONT_BIN"
+            rmdir "$CONT_DIR/bin" 2>/dev/null
+        fi
+        log_success "Continuwuity built and installed"
+    else
+        log_warn "Continuwuity build failed — Matrix messaging will not work"
+        log_warn "Try manually: cargo install continuwuity"
+    fi
+}
+
 run_setup_wizard() {
     if [ "$RUN_SETUP" = false ]; then
         log_info "Skipping setup wizard (--skip-setup)"
@@ -1061,7 +1149,7 @@ print_success() {
     echo -e "   ${YELLOW}Config:${NC}    ~/.vulti/config.yaml"
     echo -e "   ${YELLOW}API Keys:${NC}  ~/.vulti/.env"
     echo -e "   ${YELLOW}Data:${NC}      ~/.vulti/cron/, sessions/, logs/"
-    echo -e "   ${YELLOW}Code:${NC}      ~/.vulti/vulti-agent/"
+    echo -e "   ${YELLOW}Code:${NC}      ~/.vulti/hermes-agent/"
     echo ""
 
     echo -e "${CYAN}─────────────────────────────────────────────────────────${NC}"
@@ -1120,6 +1208,7 @@ main() {
     setup_venv
     install_deps
     install_node_deps
+    install_continuwuity
     setup_path
     copy_config_templates
     run_setup_wizard

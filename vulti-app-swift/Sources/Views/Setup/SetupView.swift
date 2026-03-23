@@ -1,67 +1,119 @@
 import SwiftUI
 
-/// Gateway setup — warm paper background, centered content with live boot log.
+/// Gateway setup — detects whether vulti is installed, runs install.sh if needed,
+/// then starts the gateway. Fully automatic with live log streaming.
 struct SetupView: View {
     @Environment(AppState.self) private var app
-    @State private var isStarting = false
+    @State private var phase: Phase = .checking
     @State private var error: String?
     @State private var logLines: [String] = []
     @State private var logTask: Task<Void, Never>?
+    @State private var installProcess: Process?
+
+    enum Phase: Int, CaseIterable {
+        case checking = 0
+        case installing = 1
+        case starting = 2
+        case failed = -1
+    }
+
+    private static let steps: [(icon: String, label: String)] = [
+        ("magnifyingglass", "Check"),
+        ("arrow.down.circle", "Install"),
+        ("bolt.fill", "Start"),
+    ]
+
+    /// The step index for the progress indicator (0-2), or nil if failed.
+    private var currentStepIndex: Int? {
+        switch phase {
+        case .checking: return 0
+        case .installing: return 1
+        case .starting: return 2
+        case .failed: return nil
+        }
+    }
 
     var body: some View {
         ZStack {
-            VStack(spacing: 24) {
+            VStack(spacing: 20) {
                 Spacer()
 
-                Image(systemName: "brain.head.profile")
-                    .font(.system(size: 64))
-                    .foregroundStyle(VultiTheme.primary)
+                Image(systemName: phase == .failed ? "exclamationmark.triangle" : "brain.head.profile")
+                    .font(.system(size: 48))
+                    .foregroundStyle(phase == .failed ? VultiTheme.coral : VultiTheme.primary)
 
                 Text("Vulti")
                     .font(.largeTitle)
                     .fontWeight(.bold)
                     .foregroundStyle(VultiTheme.inkSoft)
 
-                Text("Start the gateway to connect your agents")
-                    .foregroundStyle(VultiTheme.inkDim)
+                // Step progress indicator
+                HStack(spacing: 0) {
+                    ForEach(Array(Self.steps.enumerated()), id: \.offset) { index, step in
+                        let state = stepState(for: index)
 
-                if let error {
-                    Text(error)
+                        HStack(spacing: 6) {
+                            ZStack {
+                                Circle()
+                                    .fill(state == .active ? VultiTheme.primary : (state == .done ? VultiTheme.teal : VultiTheme.paperDeep))
+                                    .frame(width: 28, height: 28)
+
+                                if state == .done {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(.white)
+                                } else if state == .active {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                        .tint(.white)
+                                } else {
+                                    Image(systemName: step.icon)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(VultiTheme.inkMuted)
+                                }
+                            }
+
+                            Text(step.label)
+                                .font(.system(size: 12, weight: state == .active ? .semibold : .regular))
+                                .foregroundStyle(state == .pending ? VultiTheme.inkMuted : VultiTheme.inkSoft)
+                        }
+
+                        if index < Self.steps.count - 1 {
+                            Rectangle()
+                                .fill(state == .done ? VultiTheme.teal : VultiTheme.paperShadow)
+                                .frame(height: 2)
+                                .frame(maxWidth: 40)
+                                .padding(.horizontal, 8)
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                // Error message + retry
+                if phase == .failed {
+                    Text(error ?? "Something went wrong")
                         .foregroundStyle(VultiTheme.rose)
                         .font(.caption)
-                }
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 400)
 
-                Button {
-                    isStarting = true
-                    error = nil
-                    Task {
-                        do {
-                            try await app.startGateway()
-                        } catch {
-                            self.error = error.localizedDescription
-                        }
-                        try? await Task.sleep(for: .seconds(1))
-                        isStarting = false
-                        logTask?.cancel()
-                    }
-                } label: {
-                    if isStarting {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 140)
-                    } else {
-                        Text("Start Gateway")
+                    Button {
+                        phase = .checking
+                        error = nil
+                        logLines = []
+                        beginSetup()
+                    } label: {
+                        Text("Retry")
                             .frame(width: 140)
                     }
+                    .buttonStyle(.vultiPrimary)
+                    .tint(VultiTheme.primary)
+                    .controlSize(.large)
                 }
-                .buttonStyle(.vultiPrimary)
-                .tint(VultiTheme.primary)
-                .controlSize(.large)
-                .disabled(isStarting)
 
                 Spacer().frame(height: 8)
 
-                // Live boot log
+                // Live log
                 ScrollViewReader { proxy in
                     ScrollView {
                         Text(logAttributedString)
@@ -71,7 +123,7 @@ struct SetupView: View {
                             .padding(12)
                             .id("log-bottom")
                     }
-                    .frame(maxHeight: 180)
+                    .frame(maxHeight: 220)
                     .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
                     .onChange(of: logLines.count) { _, _ in
                         withAnimation(.easeOut(duration: 0.1)) {
@@ -82,38 +134,154 @@ struct SetupView: View {
 
                 Spacer()
             }
-            .frame(maxWidth: 520)
+            .frame(maxWidth: 560)
         }
-        .onAppear { startLogTail() }
-        .onDisappear { logTask?.cancel() }
+        .onDisappear {
+            logTask?.cancel()
+            installProcess?.terminate()
+        }
         .task {
-            // Keep polling health — the gateway may come up after a long first-time build
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                if await app.client.checkHealth() {
-                    app.isGatewayRunning = true
-                    await app.refreshAgents()
-                    break
+            beginSetup()
+        }
+    }
+
+    // MARK: - Main flow: check → install → start
+
+    private func beginSetup() {
+        Task {
+            // Step 1: Check if all components are installed
+            phase = .checking
+            appendLog("Checking installation...")
+
+            let hasBinary = await app.gateway.isInstalled
+            let preflightOk = app.preflightCheck()
+
+            if hasBinary && preflightOk {
+                appendLog("All components found")
+                app.needsInstall = false
+                await startGateway()
+                return
+            }
+
+            // Step 2: Missing components — run install.sh
+            if !hasBinary {
+                appendLog("vulti binary not found, starting installation...")
+            } else {
+                appendLog("Missing components detected, running installer...")
+            }
+            phase = .installing
+
+            let success = await runInstall()
+            guard success else { return } // error already set
+
+            // Step 3: Verify binary exists after install
+            appendLog("Verifying installation...")
+            let nowInstalled = await app.gateway.isInstalled
+            guard nowInstalled else {
+                fail("Install completed but vulti binary was not found. Check the log for errors.")
+                return
+            }
+            appendLog("vulti installed successfully")
+
+            // Step 4: Start gateway
+            await startGateway()
+        }
+    }
+
+    private func startGateway() async {
+        phase = .starting
+        appendLog("Starting gateway...")
+        startGatewayLogTail()
+
+        do {
+            try await app.startGateway()
+        } catch {
+            fail(error.localizedDescription)
+            return
+        }
+
+        // Poll for health in case startGateway didn't confirm
+        for _ in 0..<60 {
+            try? await Task.sleep(for: .seconds(2))
+            if await app.client.checkHealth() {
+                app.isGatewayRunning = true
+                await app.refreshAgents()
+                return
+            }
+        }
+
+        if !app.isGatewayRunning {
+            fail("Gateway started but is not responding. Check logs at ~/.vulti/logs/gateway.log")
+        }
+    }
+
+    // MARK: - Install process with live output
+
+    private func runInstall() async -> Bool {
+        do {
+            let process = try await app.gateway.install()
+
+            // Set up pipes to stream output into the log view
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            process.standardOutput = outPipe
+            process.standardError = errPipe
+
+            // Stream both stdout and stderr
+            let streamTask = Task.detached { [weak outPipe, weak errPipe] in
+                guard let outPipe, let errPipe else { return }
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask {
+                        await self.streamPipe(outPipe)
+                    }
+                    group.addTask {
+                        await self.streamPipe(errPipe)
+                    }
+                }
+            }
+
+            try process.run()
+            installProcess = process
+            process.waitUntilExit()
+            installProcess = nil
+            streamTask.cancel()
+
+            if process.terminationStatus != 0 {
+                fail("Install script exited with code \(process.terminationStatus)")
+                return false
+            }
+            return true
+        } catch {
+            fail(error.localizedDescription)
+            return false
+        }
+    }
+
+    private func streamPipe(_ pipe: Pipe) async {
+        let handle = pipe.fileHandleForReading
+        while true {
+            let data = handle.availableData
+            if data.isEmpty { break } // EOF
+            if let text = String(data: data, encoding: .utf8) {
+                let lines = text.components(separatedBy: .newlines).filter { !$0.isEmpty }
+                let cleaned = lines.map { stripANSI($0) }
+                await MainActor.run {
+                    logLines.append(contentsOf: cleaned)
+                    if logLines.count > 200 {
+                        logLines = Array(logLines.suffix(200))
+                    }
                 }
             }
         }
     }
 
-    private func startLogTail() {
-        logLines = []
+    // MARK: - Gateway log tail (for the starting phase)
+
+    private func startGatewayLogTail() {
+        logTask?.cancel()
         let logPath = VultiHome.root.appending(path: "logs/gateway.log")
 
-        // Load last 20 lines from existing log immediately
-        if let existing = try? String(contentsOf: logPath, encoding: .utf8) {
-            let tail = existing.components(separatedBy: .newlines)
-                .filter { !$0.isEmpty }
-                .suffix(20)
-                .map { formatLogLine($0) }
-            logLines = Array(tail)
-        }
-
         logTask = Task.detached {
-            // Wait for log file to appear if it doesn't exist yet
             for _ in 0..<40 {
                 if FileManager.default.fileExists(atPath: logPath.path()) { break }
                 try? await Task.sleep(for: .milliseconds(250))
@@ -121,19 +289,18 @@ struct SetupView: View {
 
             guard let handle = try? FileHandle(forReadingFrom: logPath) else { return }
             defer { try? handle.close() }
-
-            // Seek to end so we only show new lines going forward
             handle.seekToEndOfFile()
 
             while !Task.isCancelled {
                 let data = handle.availableData
                 if !data.isEmpty, let text = String(data: data, encoding: .utf8) {
-                    let lines = text.components(separatedBy: .newlines).filter { !$0.isEmpty }
-                    let formatted = lines.map { formatLogLine($0) }
+                    let lines = text.components(separatedBy: .newlines)
+                        .filter { !$0.isEmpty }
+                        .map { self.formatGatewayLog($0) }
                     await MainActor.run {
-                        logLines.append(contentsOf: formatted)
-                        if logLines.count > 50 {
-                            logLines = Array(logLines.suffix(50))
+                        logLines.append(contentsOf: lines)
+                        if logLines.count > 200 {
+                            logLines = Array(logLines.suffix(200))
                         }
                     }
                 }
@@ -142,11 +309,30 @@ struct SetupView: View {
         }
     }
 
-    private func formatLogLine(_ line: String) -> String {
-        // Strip timestamp prefix (2026-03-22 13:22:26,013) for compact display
+    // MARK: - Helpers
+
+    private func fail(_ message: String) {
+        error = message
+        phase = .failed
+        appendLog("ERROR: \(message)")
+    }
+
+    private func appendLog(_ line: String) {
+        logLines.append(line)
+    }
+
+    /// Strip ANSI color codes from install script output
+    private func stripANSI(_ str: String) -> String {
+        str.replacingOccurrences(
+            of: "\\x1B\\[[0-9;]*[a-zA-Z]|\\[0[;]?[0-9]*m",
+            with: "",
+            options: .regularExpression
+        )
+    }
+
+    private func formatGatewayLog(_ line: String) -> String {
         if line.count > 24, line.dropFirst(4).prefix(1) == "-" {
-            let afterTimestamp = line.dropFirst(24)
-            return String(afterTimestamp).trimmingCharacters(in: .whitespaces)
+            return String(line.dropFirst(24)).trimmingCharacters(in: .whitespaces)
         }
         return line
     }
@@ -165,9 +351,26 @@ struct SetupView: View {
     }
 
     private func logLineColor(_ line: String) -> Color {
-        if line.contains("ERROR") || line.contains("error") { return .red.opacity(0.8) }
+        if line.contains("ERROR") || line.contains("error") || line.contains("✗") { return .red.opacity(0.8) }
         if line.contains("WARNING") || line.contains("warning") { return .orange.opacity(0.8) }
+        if line.contains("✓") || line.contains("success") { return .green.opacity(0.8) }
+        if line.contains("→") { return .cyan.opacity(0.7) }
         if line.contains("INFO") { return VultiTheme.inkDim }
         return VultiTheme.inkMuted
+    }
+
+    // MARK: - Step state
+
+    enum StepState { case done, active, pending, error }
+
+    private func stepState(for index: Int) -> StepState {
+        guard let current = currentStepIndex else {
+            // Failed — mark everything up to and including the failed step
+            // We don't know which step failed precisely, so mark none as done
+            return .pending
+        }
+        if index < current { return .done }
+        if index == current { return .active }
+        return .pending
     }
 }

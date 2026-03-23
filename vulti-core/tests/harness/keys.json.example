@@ -1,0 +1,6 @@
+{
+  "OPENROUTER_API_KEY": "sk-or-v1-YOUR-KEY-HERE",
+  "default_model": "anthropic/claude-3.5-sonnet",
+  "ELEVENLABS_API_KEY": "",
+  "FAL_KEY": ""
+}

@@ -6,44 +6,93 @@ actor GatewayService {
     private var gatewayProcess: Process?
     private let baseURL = URL(string: "http://localhost:8080")!
 
-    // MARK: - Process management (matches start_gateway, stop_gateway, check_gateway)
+    // MARK: - Binary resolution
 
-    func start() throws {
-        guard gatewayProcess == nil else { return }
-
-        // Find vulti binary (matches Rust search order)
+    /// Find the vulti binary, returning its path or nil.
+    func findBinary() -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path()
         let candidates = [
+            "\(home)/.vulti/vulti-core/venv/bin/vulti",
             "\(home)/.local/bin/vulti",
             "\(home)/.vulti/bin/vulti",
             "/usr/local/bin/vulti",
         ]
 
-        var vultiPath: String?
         for path in candidates {
             if FileManager.default.isExecutableFile(atPath: path) {
-                vultiPath = path
-                break
+                return path
             }
         }
 
         // Fallback: which via login shell
-        if vultiPath == nil {
-            let which = Process()
-            which.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            which.arguments = ["-lc", "which vulti"]
-            let pipe = Pipe()
-            which.standardOutput = pipe
-            try which.run()
-            which.waitUntilExit()
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let output, !output.isEmpty, which.terminationStatus == 0 {
-                vultiPath = output
+        let which = Process()
+        which.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        which.arguments = ["-lc", "which vulti"]
+        let pipe = Pipe()
+        which.standardOutput = pipe
+        try? which.run()
+        which.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let output, !output.isEmpty, which.terminationStatus == 0 {
+            return output
+        }
+        return nil
+    }
+
+    /// Whether the vulti binary is installed.
+    var isInstalled: Bool { findBinary() != nil }
+
+    // MARK: - Install (runs install.sh --skip-setup non-interactively)
+
+    /// Run the install script. Returns the Process so callers can stream output.
+    /// Finds vulti-core locally (sibling dir or bundled) and passes VULTI_INSTALL_DIR
+    /// so the script uses the local source instead of cloning from GitHub.
+    func install() throws -> Process {
+        let fm = FileManager.default
+        var vultiCoreDir: String?
+        var scriptPath: String?
+
+        // 1. Sibling vulti-core directory (dev layout: repo/vulti-app-swift + repo/vulti-core)
+        let appBinary = ProcessInfo.processInfo.arguments[0]
+        var dir = URL(fileURLWithPath: appBinary).deletingLastPathComponent()
+        for _ in 0..<10 {
+            let candidate = dir.appending(path: "vulti-core")
+            if fm.fileExists(atPath: candidate.appending(path: "scripts/install.sh").path()) {
+                vultiCoreDir = candidate.path()
+                scriptPath = candidate.appending(path: "scripts/install.sh").path()
+                break
             }
+            dir = dir.deletingLastPathComponent()
         }
 
-        guard let path = vultiPath else {
+        // 2. Bundled in app resources
+        if scriptPath == nil, let bundled = Bundle.main.path(forResource: "install", ofType: "sh") {
+            scriptPath = bundled
+        }
+
+        guard let script = scriptPath else {
+            throw GatewayError.installScriptNotFound
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        // Pass VULTI_INSTALL_DIR so install.sh uses local source, not git clone
+        var env = ProcessInfo.processInfo.environment
+        if let coreDir = vultiCoreDir {
+            env["VULTI_INSTALL_DIR"] = coreDir
+        }
+        process.environment = env
+        process.arguments = ["-lc", "bash '\(script)' --skip-setup"]
+        return process
+    }
+
+    // MARK: - Process management (matches start_gateway, stop_gateway, check_gateway)
+
+    func start() throws {
+        guard gatewayProcess == nil else { return }
+
+        guard let path = findBinary() else {
             throw GatewayError.binaryNotFound
         }
 
@@ -315,11 +364,15 @@ actor GatewayService {
     enum GatewayError: Error, LocalizedError {
         case badStatus(Int)
         case binaryNotFound
+        case installScriptNotFound
+        case installFailed(String)
 
         var errorDescription: String? {
             switch self {
             case .badStatus(let code): "Gateway returned status \(code)"
             case .binaryNotFound: "vulti binary not found in PATH"
+            case .installScriptNotFound: "install.sh not found"
+            case .installFailed(let msg): "Install failed: \(msg)"
             }
         }
     }

@@ -21,6 +21,7 @@ final class AppState {
     // MARK: - UI State
     var hasToken = false
     var isGatewayRunning = false
+    var needsInstall = false
     var onboardingComplete = Persistence.onboardingComplete
     var activeAgentId: String?
     var panelMode: PanelMode?
@@ -67,8 +68,17 @@ final class AppState {
     // MARK: - Lifecycle
 
     func boot() async {
+        // Ensure a web token exists — generate one if missing (mirrors Python gateway logic)
+        VultiHome.ensureWebToken()
         hasToken = !(VultiHome.webToken() ?? "").isEmpty
         guard hasToken else { return }
+
+        // Preflight: verify critical components are installed
+        if !preflightCheck() {
+            needsInstall = true
+            return
+        }
+
         isGatewayRunning = await client.checkHealth()
         if !isGatewayRunning {
             try? await startGateway()
@@ -77,6 +87,25 @@ final class AppState {
             await refreshAgents()
         }
         startRefreshTimer()
+    }
+
+    /// Check that all critical components are present. Returns false if install is needed.
+    func preflightCheck() -> Bool {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path()
+
+        // 1. vulti/hermes binary must exist
+        let hasBinary = gateway.findBinary() != nil
+
+        // 2. Continuwuity (Matrix homeserver) must exist
+        let continuwuityPaths = [
+            "\(home)/.vulti/continuwuity/continuwuity",
+            "\(home)/.hermes/continuwuity/continuwuity",
+            "/usr/local/bin/continuwuity",
+        ]
+        let hasContinuwuity = continuwuityPaths.contains { fm.isExecutableFile(atPath: $0) }
+
+        return hasBinary && hasContinuwuity
     }
 
     func startGateway() async throws {

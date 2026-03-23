@@ -56,3 +56,6 @@ environments/benchmarks/evals/
 
 # Release script temp files
 .release_notes.md
+
+# E2E harness API keys
+tests/harness/keys.json

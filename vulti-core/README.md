@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://vulti-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-vulti--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://github.com/NousResearch/vulti-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
   <a href="https://nousresearch.com"><img src="https://img.shields.io/badge/Built%20by-Nous%20Research-blueviolet?style=for-the-badge" alt="Built by Nous Research"></a>
 </p>
 
@@ -30,7 +30,7 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), [Open
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NousResearch/vulti-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
 ```
 
 Works on Linux, macOS, and WSL2. The installer handles everything — Python, Node.js, dependencies, and the `vulti` command. No prerequisites except git.
@@ -142,8 +142,8 @@ We welcome contributions! See the [Contributing Guide](https://vulti-agent.nousr
 Quick start for contributors:
 
 ```bash
-git clone https://github.com/NousResearch/vulti-agent.git
-cd vulti-agent
+git clone https://github.com/NousResearch/hermes-agent.git
+cd hermes-agent
 git submodule update --init mini-swe-agent   # required terminal backend
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv .venv --python 3.11
@@ -165,8 +165,8 @@ python -m pytest tests/ -q
 
 - 💬 [Discord](https://discord.gg/NousResearch)
 - 📚 [Skills Hub](https://agentskills.io)
-- 🐛 [Issues](https://github.com/NousResearch/vulti-agent/issues)
-- 💡 [Discussions](https://github.com/NousResearch/vulti-agent/discussions)
+- 🐛 [Issues](https://github.com/NousResearch/hermes-agent/issues)
+- 💡 [Discussions](https://github.com/NousResearch/hermes-agent/discussions)
 
 ---
 
