@@ -72,6 +72,10 @@ final class GatewayClient: Sendable {
         _ = try await gw.postRaw(path: "reset", body: [:] as [String: String])
     }
 
+    func factoryReset() async throws {
+        _ = try await gw.postRaw(path: "reset/factory", body: [:] as [String: String])
+    }
+
     func generateAvatar(agentId: String) async throws {
         try await gw.generateAvatar(agentId: agentId)
     }

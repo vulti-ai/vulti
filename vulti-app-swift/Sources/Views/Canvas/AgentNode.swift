@@ -105,6 +105,16 @@ struct AgentNode: View {
         .overlay {
             ThinkingBorderEffect(cornerRadius: 10, lineWidth: 2)
         }
+        .overlay(alignment: .topTrailing) {
+            if app.unreadAgents.contains(agent.id) {
+                Circle()
+                    .fill(.red)
+                    .frame(width: 10, height: 10)
+                    .offset(x: 2, y: -2)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .animation(.spring(duration: 0.3), value: app.unreadAgents.contains(agent.id))
         .shadow(color: .black.opacity(isHovered ? 0.18 : 0.12), radius: isHovered ? 24 : 18, y: isHovered ? 12 : 8)
         .animation(.easeInOut(duration: 0.12), value: isHovered)
     }

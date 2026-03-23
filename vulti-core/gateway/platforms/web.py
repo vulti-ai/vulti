@@ -304,6 +304,11 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             return await adapter._reset_everything()
 
+        @app.post("/api/reset/factory")
+        async def factory_reset(authorization: str = Header("")):
+            await get_current_user(authorization)
+            return await adapter._factory_reset()
+
         # --- Agent-scoped resource endpoints ---
 
         @app.get("/api/agents/{agent_id}/memories")
@@ -2060,6 +2065,30 @@ class WebAdapter(BasePlatformAdapter):
             "deleted_agents": deleted_agents,
             "errors": errors if errors else None,
         }
+
+    async def _factory_reset(self) -> dict:
+        """Full factory reset: run normal reset, then also wipe .env, connections,
+        user profile, models (whisper), and all remaining files. Returns the app
+        to a fresh-install state."""
+        import shutil
+
+        # First do the normal reset (agents, sessions, cron, etc.)
+        result = await self._reset_everything()
+
+        home = self._get_vulti_home().resolve()
+
+        # Now wipe everything that the normal reset preserves
+        preserve_only = {"bin", "auth.json", "auth.lock", "web_token"}
+        for item in home.iterdir():
+            if item.name in preserve_only:
+                continue
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                item.unlink(missing_ok=True)
+
+        result["factory"] = True
+        return result
 
     async def _cleanup_matrix_agent(self, agent_id: str) -> None:
         """Remove an agent's Matrix user: leave rooms, logout, delete credentials."""

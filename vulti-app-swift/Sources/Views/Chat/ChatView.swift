@@ -139,6 +139,12 @@ struct ChatView: View {
             .padding(.top, 12)
             .padding(.bottom, 16)
         }
+        .onDisappear {
+            // If agent is still processing when panel closes, mark as unread
+            if ws.isTyping || ws.isStreaming || !ws.streamingContent.isEmpty {
+                app.markAgentUnread(agentId)
+            }
+        }
         .onAppear {
             loadSessions()
             // Resume today's session or trigger daily introspection (once per day)

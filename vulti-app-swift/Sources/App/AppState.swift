@@ -25,6 +25,8 @@ final class AppState {
     var panelMode: PanelMode?
     var notifications: [AppNotification] = []
     var pendingOps = 0
+    /// Agents with unread messages (conversation continued after panel was closed)
+    var unreadAgents: Set<String> = []
     /// Tracks which agents have already had their daily introspect triggered this app session.
     var introspectedAgents: Set<String> = []
 
@@ -169,13 +171,24 @@ final class AppState {
         activeAgentId = id
         Persistence.activeAgentId = id
         panelMode = .agent(id)
+        unreadAgents.remove(id)
     }
 
     func openOwner() { panelMode = .owner }
     func openSettings() { panelMode = .settings }
     func openCreate() { panelMode = .create }
     func openAudit() { panelMode = .audit }
-    func closePanel() { panelMode = nil; activeAgentId = nil }
+    func closePanel() {
+        panelMode = nil
+        activeAgentId = nil
+        Task { await refreshAgents() }
+    }
+
+    func markAgentUnread(_ id: String) {
+        if activeAgentId != id {
+            unreadAgents.insert(id)
+        }
+    }
 
     // MARK: - Notifications (max 50)
 

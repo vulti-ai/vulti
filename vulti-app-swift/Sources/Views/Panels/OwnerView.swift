@@ -619,21 +619,27 @@ struct GeneralSettingsView: View {
 
     private var resetSection: some View {
         VStack(spacing: 12) {
-            if showResetConfirm {
-                Text("This will delete all agents, connections, skills, jobs, rules, memories, sessions, Matrix server, and all cached data. Are you sure?")
+            if resetConfirmType != nil {
+                Text(resetConfirmType == .reset
+                    ? "This will delete all agents, skills, jobs, rules, memories, sessions, and Matrix server. Your .env, connections, profile, and downloads are kept."
+                    : "This will wipe EVERYTHING — agents, .env, connections, user profile, whisper model, all data. The app will restart from scratch.")
                     .font(.system(size: 12))
                     .foregroundStyle(.red.opacity(0.8))
                     .multilineTextAlignment(.center)
 
                 HStack(spacing: 12) {
-                    Button("No") {
-                        withAnimation(.easeInOut(duration: 0.15)) { showResetConfirm = false }
+                    Button("Cancel") {
+                        withAnimation(.easeInOut(duration: 0.15)) { resetConfirmType = nil }
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
 
-                    Button("Yes, delete everything") {
-                        performReset()
+                    Button(resetConfirmType == .reset ? "Yes, reset" : "Yes, factory reset") {
+                        if resetConfirmType == .reset {
+                            performReset()
+                        } else {
+                            performFactoryReset()
+                        }
                     }
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.white)
@@ -643,31 +649,57 @@ struct GeneralSettingsView: View {
                     .buttonStyle(.plain)
                 }
             } else {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { showResetConfirm = true }
-                } label: {
-                    Text("Reset Everything")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.red)
+                HStack(spacing: 16) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { resetConfirmType = .reset }
+                    } label: {
+                        Text("Reset")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.orange)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { resetConfirmType = .factory }
+                    } label: {
+                        Text("Reset Everything")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
     }
 
-    @State private var showResetConfirm = false
+    private enum ResetType { case reset, factory }
+    @State private var resetConfirmType: ResetType?
 
     private func performReset() {
         Task {
             try? await app.client.resetEverything()
-            await app.refreshAgents()
-            showResetConfirm = false
-            // Close settings panel, reset onboarding flag, go back to home → onboarding
-            app.closePanel()
+            resetConfirmType = nil
             Persistence.onboardingComplete = false
             app.onboardingComplete = false
+            app.agentList = []
+            app.closePanel()
+        }
+    }
+
+    private func performFactoryReset() {
+        Task {
+            try? await app.client.factoryReset()
+            resetConfirmType = nil
+            Persistence.onboardingComplete = false
+            app.onboardingComplete = false
+            app.agentList = []
+            app.closePanel()
+            // Restart gateway since its state is wiped
+            await app.stopGateway()
+            try? await Task.sleep(for: .seconds(1))
+            try? await app.startGateway()
         }
     }
 
