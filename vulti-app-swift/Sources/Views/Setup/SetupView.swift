@@ -154,7 +154,7 @@ struct SetupView: View {
             appendLog("Checking installation...")
 
             let hasBinary = await app.gateway.isInstalled
-            let preflightOk = app.preflightCheck()
+            let preflightOk = await app.preflightCheck()
 
             if hasBinary && preflightOk {
                 appendLog("All components found")
@@ -181,7 +181,8 @@ struct SetupView: View {
                 fail("Install completed but vulti binary was not found. Check the log for errors.")
                 return
             }
-            appendLog("vulti installed successfully")
+            appendLog("Installation complete")
+            app.needsInstall = false
 
             // Step 4: Start gateway
             await startGateway()

@@ -991,32 +991,63 @@ install_continuwuity() {
     fi
 
     # Need Rust/cargo to build from source
+    # Check PATH first, then ~/.cargo/bin (rustup default location)
+    if [ -x "$HOME/.cargo/bin/cargo" ]; then
+        export PATH="$HOME/.cargo/bin:$PATH"
+    fi
     if ! command -v cargo &> /dev/null; then
         log_info "Rust not found — installing (needed to build Continuwuity)..."
         if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --quiet 2>/dev/null; then
-            export PATH="$HOME/.cargo/bin:$PATH"
+            source "$HOME/.cargo/env" 2>/dev/null || export PATH="$HOME/.cargo/bin:$PATH"
             log_success "Rust installed"
         else
-            log_warn "Failed to install Rust — Matrix messaging will not work"
-            log_warn "Install manually: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-            return 0
+            log_error "Failed to install Rust — Matrix messaging will not work"
+            log_info "Install manually: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            return 1
         fi
     fi
 
-    # Build from source
-    log_info "Building Continuwuity from source (this may take a few minutes)..."
+    # Build from source (git repo — not on crates.io)
+    log_info "Building Continuwuity from source (this may take several minutes)..."
     mkdir -p "$CONT_DIR"
 
-    if cargo install continuwuity --root "$CONT_DIR" 2>/dev/null; then
-        # cargo install puts binary in $CONT_DIR/bin/
-        if [ -x "$CONT_DIR/bin/continuwuity" ]; then
-            mv "$CONT_DIR/bin/continuwuity" "$CONT_BIN"
-            rmdir "$CONT_DIR/bin" 2>/dev/null
-        fi
-        log_success "Continuwuity built and installed"
+    local CONT_REPO="https://github.com/continuwuity/continuwuity.git"
+    local CONT_SRC="$CONT_DIR/source"
+
+    if [ -d "$CONT_SRC/.git" ]; then
+        cd "$CONT_SRC" && git pull --quiet 2>/dev/null
     else
-        log_warn "Continuwuity build failed — Matrix messaging will not work"
-        log_warn "Try manually: cargo install continuwuity"
+        rm -rf "$CONT_SRC"
+        git clone --depth 1 "$CONT_REPO" "$CONT_SRC" 2>/dev/null
+    fi
+
+    if [ ! -d "$CONT_SRC" ]; then
+        log_error "Failed to clone Continuwuity — Matrix messaging will not work"
+        return 1
+    fi
+
+    cd "$CONT_SRC"
+    if cargo build --release 2>&1; then
+        cp "target/release/continuwuity" "$CONT_BIN" 2>/dev/null || \
+        cp target/release/continuwuity-* "$CONT_BIN" 2>/dev/null
+        if [ -x "$CONT_BIN" ]; then
+            log_success "Continuwuity built and installed"
+        else
+            # Find the actual binary name
+            local BUILT_BIN=$(find target/release -maxdepth 1 -type f -perm +111 -name "continuwuity*" | head -1)
+            if [ -n "$BUILT_BIN" ]; then
+                cp "$BUILT_BIN" "$CONT_BIN"
+                chmod +x "$CONT_BIN"
+                log_success "Continuwuity built and installed"
+            else
+                log_error "Build succeeded but binary not found — Matrix messaging will not work"
+                return 1
+            fi
+        fi
+    else
+        log_error "Continuwuity build failed — Matrix messaging will not work"
+        log_info "Try manually: cd $CONT_SRC && cargo build --release"
+        return 1
     fi
 }
 

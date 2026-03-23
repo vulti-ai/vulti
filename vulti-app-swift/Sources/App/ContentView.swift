@@ -16,7 +16,7 @@ struct ContentView: View {
 
             if !app.hasToken {
                 LoginView()
-            } else if !app.isGatewayRunning {
+            } else if app.needsInstall || !app.isGatewayRunning {
                 SetupView()
             } else if !app.onboardingComplete {
                 OnboardingView()

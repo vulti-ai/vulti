@@ -74,7 +74,7 @@ final class AppState {
         guard hasToken else { return }
 
         // Preflight: verify critical components are installed
-        if !preflightCheck() {
+        if !(await preflightCheck()) {
             needsInstall = true
             return
         }
@@ -90,17 +90,17 @@ final class AppState {
     }
 
     /// Check that all critical components are present. Returns false if install is needed.
-    func preflightCheck() -> Bool {
+    func preflightCheck() async -> Bool {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.path()
 
-        // 1. vulti/hermes binary must exist
-        let hasBinary = gateway.findBinary() != nil
+        // 1. vulti binary must exist
+        let hasBinary = await gateway.findBinary() != nil
 
         // 2. Continuwuity (Matrix homeserver) must exist
         let continuwuityPaths = [
             "\(home)/.vulti/continuwuity/continuwuity",
-            "\(home)/.hermes/continuwuity/continuwuity",
+            "\(home)/.vulti/continuwuity/bin/continuwuity",
             "/usr/local/bin/continuwuity",
         ]
         let hasContinuwuity = continuwuityPaths.contains { fm.isExecutableFile(atPath: $0) }
