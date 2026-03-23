@@ -33,6 +33,31 @@ from typing import Dict, Optional, Any, List
 # SSL certificate auto-detection for NixOS and other non-standard systems.
 # Must run BEFORE any HTTP library (discord, aiohttp, etc.) is imported.
 # ---------------------------------------------------------------------------
+def _get_tailscale_hostname() -> Optional[str]:
+    """Get the Tailscale MagicDNS hostname for this machine."""
+    import subprocess
+    # Mac App Store Tailscale lives inside the .app bundle
+    tailscale_paths = [
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        "tailscale",  # fallback to PATH
+    ]
+    for ts_bin in tailscale_paths:
+        try:
+            result = subprocess.run(
+                [ts_bin, "status", "--self", "--json"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                import json
+                data = json.loads(result.stdout)
+                dns_name = data.get("Self", {}).get("DNSName", "")
+                if dns_name:
+                    return dns_name.rstrip(".")
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            continue
+    return None
+
+
 def _ensure_ssl_certs() -> None:
     """Set SSL_CERT_FILE if the system doesn't expose CA certs to Python."""
     if "SSL_CERT_FILE" in os.environ:
@@ -987,9 +1012,8 @@ class GatewayRunner:
                 self.delivery_router.adapters = self.adapters
 
         if not self.adapters:
-            self._exit_reason = adapter.fatal_error_message or "All messaging adapters disconnected"
-            logger.error("No connected messaging platforms remain. Shutting down gateway cleanly.")
-            await self.stop()
+            logger.warning("All messaging adapters disconnected. Gateway will continue running "
+                           "for the web interface. Matrix can be re-initialized through the app.")
 
     def _request_clean_exit(self, reason: str) -> None:
         self._exit_cleanly = True
@@ -1231,7 +1255,10 @@ class GatewayRunner:
         if matrix_config and matrix_config.enabled:
             try:
                 from gateway.continuwuity import ContinuwuityManager
-                server_name = matrix_config.extra.get("server_name", "localhost")
+                server_name = matrix_config.extra.get("server_name", "")
+                if not server_name:
+                    # Auto-detect from Tailscale MagicDNS
+                    server_name = _get_tailscale_hostname() or "localhost"
                 port = int(matrix_config.extra.get("continuwuity_port", 6167))
                 self._continuwuity = ContinuwuityManager(server_name=server_name, port=port)
                 if await self._continuwuity.start():

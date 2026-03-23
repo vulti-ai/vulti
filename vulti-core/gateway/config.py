@@ -374,12 +374,18 @@ def _detect_tailscale_hostname() -> str:
     import subprocess
     import shutil
 
-    if not shutil.which("tailscale"):
+    # Find tailscale binary — Mac App Store version lives inside the .app bundle
+    ts_bin = shutil.which("tailscale")
+    if not ts_bin:
+        mac_app_path = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        if os.path.isfile(mac_app_path):
+            ts_bin = mac_app_path
+    if not ts_bin:
         return "localhost"
 
     try:
         result = subprocess.run(
-            ["tailscale", "status", "--self", "--json"],
+            [ts_bin, "status", "--self", "--json"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:

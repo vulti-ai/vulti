@@ -13,7 +13,7 @@ enum DrillTarget: String {
 
 enum PaneTab: String, CaseIterable {
     case chat = "Chat"
-    case home = "Home"
+    case home = "ScratchPad"
 }
 
 // MARK: - ScratchPadView

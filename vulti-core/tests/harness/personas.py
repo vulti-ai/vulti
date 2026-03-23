@@ -92,6 +92,46 @@ PERSONALITY_TEMPLATES = [
     "You are a versatile {role} who adapts your communication style to the audience.",
 ]
 
+# How different users ask Hector to create agents
+HECTOR_CREATE_REQUESTS = {
+    "verbose": [
+        "Hi Hector! I'd love to set up a new agent. I'm thinking of calling it {name}. I want it to be really good at {role_description}. I'd like it to use {model} as its model. Can you please create this for me and make sure everything is properly configured?",
+        "Hey, so I've been thinking about this for a while and I want to create an agent named {name}. It should specialize in {role_description}. Use {model} for the brain. Go ahead and set up everything — the soul, permissions, Matrix, the whole nine yards. Thanks!",
+        "Hector, I need you to spin up a new agent for me. Name: {name}. What it does: {role_description}. Model: {model}. Please follow the full setup procedure and verify everything works when you're done.",
+    ],
+    "terse": [
+        "make agent {name}, {role_description}",
+        "new agent: {name}. role: {role_description}",
+        "create {name} — {role_description}, {model}",
+        "set up {name} for {role_description}",
+    ],
+    "vague": [
+        "hey can you make me an agent that does {role_description} stuff? call it {name} or whatever works",
+        "I need help with {role_description}. Can you create something for that?",
+        "make an agent. I want it for {role_description} things. you pick the details",
+        "yo hector I need a {role_description} agent, figure out the rest",
+    ],
+    "demanding": [
+        "Create agent {name} immediately. Role: {role_description}. Model: {model}. I need this working NOW. Don't skip any steps.",
+        "I need an agent called {name} for {role_description}. Use {model}. Make it production-ready — I'm deploying this today.",
+    ],
+}
+
+ROLE_DESCRIPTIONS = {
+    "assistant": ["helping me with day-to-day tasks", "general assistance", "being a helpful assistant"],
+    "engineer": ["writing code and debugging", "software engineering", "building stuff"],
+    "researcher": ["research and analysis", "finding papers and information", "deep research"],
+    "analyst": ["data analysis", "analyzing things", "crunching numbers and finding patterns"],
+    "writer": ["writing and editing", "content creation", "writing blog posts and docs"],
+    "therapist": ["emotional support and coaching", "mental wellness", "being supportive"],
+    "coach": ["coaching and accountability", "helping me stay on track", "productivity coaching"],
+    "creative": ["creative work and brainstorming", "design and ideation", "creative projects"],
+    "ops": ["system operations and monitoring", "DevOps stuff", "keeping things running"],
+}
+
+# How different user styles communicate
+USER_STYLES = ["verbose", "terse", "vague", "demanding"]
+
 # Conversation starters by role type
 CONVERSATION_STARTERS = {
     "general": [
@@ -212,6 +252,8 @@ class Persona:
     optional_keys: dict = field(default_factory=dict)
     cron: dict = field(default_factory=dict)
     rule: dict = field(default_factory=dict)
+    user_style: str = "verbose"  # verbose, terse, vague, demanding
+    hector_create_msg: str = ""  # pre-generated message for Hector
     seed: int = 0
 
 
@@ -304,6 +346,19 @@ def generate_persona(seed: int | None = None, api_keys: dict | None = None) -> P
     reserved = {ai_key_name, "default_model"}
     optional_keys = {k: v for k, v in api_keys.items() if k not in reserved and v}
 
+    # User style
+    user_style = rng.choice(USER_STYLES)
+
+    # Generate Hector creation message based on style
+    role_descs = ROLE_DESCRIPTIONS.get(agent_role, ROLE_DESCRIPTIONS["assistant"])
+    role_desc = rng.choice(role_descs)
+    hector_templates = HECTOR_CREATE_REQUESTS.get(user_style, HECTOR_CREATE_REQUESTS["verbose"])
+    hector_msg = rng.choice(hector_templates).format(
+        name=agent_name,
+        role_description=role_desc,
+        model=default_model,
+    )
+
     # Cron + Rule
     cron = rng.choice(CRON_TEMPLATES)
     rule = rng.choice(RULE_TEMPLATES)
@@ -317,5 +372,7 @@ def generate_persona(seed: int | None = None, api_keys: dict | None = None) -> P
         optional_keys=optional_keys,
         cron=cron,
         rule=rule,
+        user_style=user_style,
+        hector_create_msg=hector_msg,
         seed=seed,
     )

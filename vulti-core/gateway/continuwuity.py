@@ -303,7 +303,7 @@ def generate_config(
 [global]
 server_name = "{server_name}"
 database_path = "{data_dir}"
-address = "127.0.0.1"
+address = "0.0.0.0"
 port = {port}
 
 # Registration — open since access is controlled by Tailscale network
@@ -610,13 +610,18 @@ class ContinuwuityManager:
         """
         import shutil
 
-        if not shutil.which("tailscale"):
+        ts_bin = shutil.which("tailscale")
+        if not ts_bin:
+            mac_app_path = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+            if os.path.isfile(mac_app_path):
+                ts_bin = mac_app_path
+        if not ts_bin:
             logger.warning("Continuwuity: tailscale not found, federation will not work without manual setup")
             return
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                "tailscale", "funnel", "--bg", str(self.port),
+                ts_bin, "funnel", "--bg", str(self.port),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

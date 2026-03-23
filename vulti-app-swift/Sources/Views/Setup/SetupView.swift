@@ -111,6 +111,27 @@ struct SetupView: View {
                     .controlSize(.large)
                 }
 
+                // API key suggestion — shown during install
+                if phase == .installing {
+                    VStack(spacing: 10) {
+                        Text("This may take a few minutes — why not grab your AI API keys?")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(VultiTheme.inkSoft)
+                            .multilineTextAlignment(.center)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            apiKeyRow(name: "Anthropic", detail: "Claude — reasoning & code", url: "https://console.anthropic.com/settings/keys")
+                            apiKeyRow(name: "OpenAI", detail: "GPT & image generation", url: "https://platform.openai.com/api-keys")
+                            apiKeyRow(name: "Google Gemini", detail: "Multimodal & search", url: "https://aistudio.google.com/apikey")
+                            apiKeyRow(name: "ElevenLabs", detail: "Voice & speech synthesis", url: "https://elevenlabs.io/app/settings/api-keys")
+                            apiKeyRow(name: "Deepgram", detail: "Speech-to-text transcription", url: "https://console.deepgram.com/")
+                        }
+                    }
+                    .padding(16)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .frame(maxWidth: 420)
+                }
+
                 Spacer().frame(height: 8)
 
                 // Live log
@@ -358,6 +379,35 @@ struct SetupView: View {
         if line.contains("→") { return .cyan.opacity(0.7) }
         if line.contains("INFO") { return VultiTheme.inkDim }
         return VultiTheme.inkMuted
+    }
+
+    // MARK: - API key row
+
+    private func apiKeyRow(name: String, detail: String, url: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "key.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(VultiTheme.primary)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(VultiTheme.inkSoft)
+                Text(detail)
+                    .font(.system(size: 10))
+                    .foregroundStyle(VultiTheme.inkMuted)
+            }
+
+            Spacer()
+
+            Link("Get Key", destination: URL(string: url)!)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(VultiTheme.primary)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(VultiTheme.paperDeep.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
     }
 
     // MARK: - Step state

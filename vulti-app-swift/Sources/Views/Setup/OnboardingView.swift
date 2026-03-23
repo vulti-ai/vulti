@@ -232,7 +232,7 @@ struct OnboardingView: View {
         case 3: return "Sign in to Element X with your VultiHub credentials."
         case 4: return "Connect an AI provider so your agents can think. This is required."
         case 5: return "Optional providers for speech, phone calls, and image generation."
-        case 6: return "Hector is your system wizard — he manages security, integrity, connections, and the file system."
+        case 6: return "Every VultiHub needs a wizard. Say hello to yours."
         default: return ""
         }
     }
@@ -246,12 +246,12 @@ struct OnboardingView: View {
 
     private var prerequisitesStep: some View {
         VStack(spacing: 20) {
-            Text("We Insist!")
+            Text("Your Private Network")
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundStyle(VultiTheme.inkSoft)
 
-            Text("No Tailscale = no remote access. No Element X = no agent messages. Install both.")
+            Text("Set up your whole family on the same server — everyone gets their own agents, and you can even connect with friends\u{2019} agents securely. No cloud, no middlemen, just direct encrypted messaging between devices you control.")
                 .font(.system(size: 13))
                 .foregroundStyle(VultiTheme.inkDim)
                 .multilineTextAlignment(.center)
@@ -281,7 +281,7 @@ struct OnboardingView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
 
-                    Text("Your secure tunnel. Reach your agents from anywhere.")
+                    Text("Your private tunnel. Access your agents from anywhere — phone, laptop, even your family\u{2019}s devices.")
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .multilineTextAlignment(.center)
@@ -345,7 +345,7 @@ struct OnboardingView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
 
-                    Text("How your agents talk to you. Runs on your hardware, nowhere else.")
+                    Text("How you and your family message agents — fully private, no cloud servers involved.")
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .multilineTextAlignment(.center)
@@ -988,13 +988,17 @@ struct OnboardingView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(VultiTheme.paperDeep.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
+            Text("You can find your server URL in the Tailscale app on iOS under your machine name.")
+                .font(.system(size: 11))
+                .foregroundStyle(VultiTheme.inkDim)
+
             HStack {
-                Button("Back") { step = 1 }
+                Button("Back") { step = 2 }
                     .font(.system(size: 13))
                     .foregroundStyle(VultiTheme.inkMuted)
                     .buttonStyle(.plain)
                 Spacer()
-                Button("Next") { step = 3 }
+                Button("Next") { step = 4 }
                     .buttonStyle(.vultiPrimary)
             }
         }
@@ -1077,7 +1081,7 @@ struct OnboardingView: View {
                     Text("Hector")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
-                    Text("He manages security, system integrity, connections, and the file system — and helps you create your first agent.")
+                    Text("Hector guards your system — patching security, watching connections, managing files, and keeping every agent in line. He\u{2019}ll also help you create your first one.")
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1130,6 +1134,24 @@ struct OnboardingView: View {
                 try? await app.client.installSkill(agentId: "hector", name: "matrix")
                 try? await app.client.onboardAgentToMatrix(agentId: "hector")
                 try? await app.client.finalizeOnboarding(agentId: "hector", role: "wizard")
+
+                // Send Hector's introduction prompt so he greets the owner
+                let introPrompt = """
+                Introduce yourself to the owner. This is their first time using VultiHub. \
+                Tell them who you are (Hector, the system wizard), what you do (manage security, \
+                system integrity, connections, and the file system), and what you're about to do \
+                right now (run a status check on the system, verify connections, and make sure \
+                everything is healthy). Keep it warm but brief — 2-3 sentences max.
+                """
+                let session = try? await app.client.createSession(agentId: "hector", name: "Welcome")
+                if let session {
+                    // Send via gateway REST API so Hector responds through the normal flow
+                    _ = try? await app.gateway.postRaw(
+                        path: "sessions/\(session.id)/chat",
+                        body: ["content": introPrompt, "agent_id": "hector"]
+                    )
+                }
+
                 await app.refreshAgents()
                 await MainActor.run {
                     hectorEnabled = true

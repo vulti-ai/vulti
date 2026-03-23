@@ -251,61 +251,151 @@ class Harness:
         return data
 
     # ═══════════════════════════════════════════════════
-    # Phase C: Create Agent (manual — mirrors OwnerView.swift)
+    # Phase C: Create Agent via Hector (the intended flow)
     # ═══════════════════════════════════════════════════
 
+    VALID_ROLES = {"assistant", "engineer", "researcher", "analyst", "writer", "therapist", "coach", "creative", "ops", "wizard"}
+
     async def create_agent(self, http: httpx.AsyncClient):
-        # Full create with all fields
-        r = await http.post(f"{self.base}/api/agents", json={
-            "name": self.p.agent.name,
-            "model": self.p.agent.model,
-            "role": self.p.agent.role,
-            "personality": self.p.agent.personality,
-            "description": f"Test agent created by harness (seed={self.p.seed})",
-        }, headers=self._headers())
+        """Ask Hector to create an agent, then audit the result."""
+        # First ensure we have a session with Hector
+        r = await http.post(f"{self.base}/api/agents/hector/sessions", json={"name": f"Agent creation (seed={self.p.seed})"}, headers=self._headers())
         data = _check(r)
-        agent_id = data.get("id") if isinstance(data, dict) else None
-        if not agent_id:
-            raise StepError(cause=f"No agent id: {data}")
-        self.agent_id = agent_id
-        print(f"         (id: {agent_id}, role: {self.p.agent.role})")
+        hector_session = data.get("id") if isinstance(data, dict) else None
+        if not hector_session:
+            raise StepError(cause=f"No Hector session: {data}")
 
-        # Allowed connections
-        r = await http.put(f"{self.base}/api/agents/{agent_id}", json={"allowedConnections": "matrix"}, headers=self._headers())
-        _check(r)
+        # Store original session_id and use Hector's
+        orig_session = self.session_id
+        orig_agent = self.agent_id
+        self.session_id = hector_session
+        self.agent_id = "hector"
 
-        # Matrix skill (soft)
-        r = await http.post(f"{self.base}/api/agents/{agent_id}/skills", json={"name": "matrix"}, headers=self._headers())
-        if r.status_code >= 400:
-            print(f"         (matrix skill — {r.status_code}, OK)")
+        # Ask Hector to create the agent using the persona's natural-language style
+        create_msg = self.p.hector_create_msg
+        print(f"         → [{self.p.user_style}] \"{create_msg[:100]}{'...' if len(create_msg) > 100 else ''}\"")
+        print(f"         (expecting: name={self.p.agent.name}, role={self.p.agent.role})")
+        frames = await self._ws_send(create_msg, timeout=180)
+        response = self._last_response(frames)
+        print(f"         ← \"{response[:120]}{'...' if len(response) > 120 else ''}\"")
 
-        # Additional skills
-        for skill in self.p.agent.skills:
-            r = await http.post(f"{self.base}/api/agents/{agent_id}/skills", json={"name": skill}, headers=self._headers())
-            if r.status_code >= 400:
-                print(f"         (skill '{skill}' — {r.status_code})")
+        # Restore session state
+        self.session_id = orig_session
 
-        # Matrix onboard (soft)
-        r = await http.post(f"{self.base}/api/matrix/onboard-agent", json={"agent_id": agent_id}, headers=self._headers())
-        if r.status_code >= 400:
-            print(f"         (Matrix onboard — {r.status_code}, OK)")
+        # Find the created agent
+        r = await http.get(f"{self.base}/api/agents", headers=self._headers())
+        agents = _check(r)
+        new_agent = None
+        for a in (agents if isinstance(agents, list) else []):
+            if a.get("name") == self.p.agent.name or a.get("id") == self.p.agent.name.lower().replace(" ", "-"):
+                new_agent = a
+                break
+        # Also try partial match
+        if not new_agent:
+            name_lower = self.p.agent.name.lower()
+            for a in (agents if isinstance(agents, list) else []):
+                if name_lower in (a.get("name", "").lower()) and a.get("id") != "hector":
+                    new_agent = a
+                    break
 
-        return data
+        if not new_agent:
+            agent_names = [a.get("name") for a in (agents if isinstance(agents, list) else [])]
+            raise StepError(cause=f"Hector did not create agent '{self.p.agent.name}'. Agents: {agent_names}")
+
+        self.agent_id = new_agent["id"]
+        print(f"         (created: id={self.agent_id}, status={new_agent.get('status')})")
+        return new_agent
 
     async def verify_agent(self, http: httpx.AsyncClient):
+        """Deep audit of agent against the agent-creation spec."""
         if not self.agent_id:
-            r = await http.get(f"{self.base}/api/agents", headers=self._headers())
-            data = _check(r)
-            for a in (data if isinstance(data, list) else []):
-                if a.get("name") == self.p.agent.name and a.get("id") != "hector":
-                    self.agent_id = a["id"]
-                    break
-            if not self.agent_id:
-                raise StepError(cause=f"Agent '{self.p.agent.name}' not found")
+            raise StepError(cause="No agent_id to verify")
+
+        issues = []
+
+        # 1. Registry check — status should be "active"
         r = await http.get(f"{self.base}/api/agents/{self.agent_id}", headers=self._headers())
         data = _check(r)
-        print(f"         ({data.get('name')}: status={data.get('status')}, role={data.get('role')})")
-        return data
+        status = data.get("status", "") if isinstance(data, dict) else ""
+        name = data.get("name", "?") if isinstance(data, dict) else "?"
+        role_api = data.get("role", "") if isinstance(data, dict) else ""
+
+        if status != "active":
+            issues.append(f"STATUS: '{status}' (expected 'active')")
+        print(f"         1. Registry: {name} status={status}")
+
+        # 2. Role check — must be single word from valid set
+        if role_api:
+            role_words = role_api.strip().split()
+            if len(role_words) != 1:
+                issues.append(f"ROLE: '{role_api}' is {len(role_words)} words (must be 1)")
+            elif role_api.strip().lower() not in self.VALID_ROLES:
+                issues.append(f"ROLE: '{role_api}' not in valid roles: {self.VALID_ROLES}")
+            print(f"         2. Role: '{role_api}' {'✓' if not any('ROLE' in i for i in issues) else '✗'}")
+        else:
+            issues.append("ROLE: empty/missing in API response")
+            print(f"         2. Role: MISSING ✗")
+
+        # 3. SOUL.md — check via API
+        r = await http.get(f"{self.base}/api/agents/{self.agent_id}/soul", headers=self._headers())
+        soul = _soft_check(r, "soul")
+        soul_content = soul.get("content", "") if isinstance(soul, dict) else ""
+        if not soul_content or len(soul_content.strip()) < 20:
+            issues.append(f"SOUL.md: empty or too short ({len(soul_content)} chars)")
+            print(f"         3. SOUL.md: EMPTY/SHORT ({len(soul_content)} chars) ✗")
+        else:
+            print(f"         3. SOUL.md: {len(soul_content)} chars ✓")
+
+        # 4. Config — model should be set
+        r = await http.get(f"{self.base}/api/agents/{self.agent_id}/config", headers=self._headers())
+        config = _soft_check(r, "config")
+        model = ""
+        if isinstance(config, dict):
+            model = config.get("model", "")
+        if not model:
+            issues.append("MODEL: not set in config.yaml")
+            print(f"         4. Model: NOT SET ✗")
+        else:
+            print(f"         4. Model: {model} ✓")
+
+        # 5. Memories — should have user profile
+        r = await http.get(f"{self.base}/api/agents/{self.agent_id}/memories", headers=self._headers())
+        memories = _soft_check(r, "memories")
+        mem_content = memories.get("memory", "") if isinstance(memories, dict) else ""
+        user_content = memories.get("user", "") if isinstance(memories, dict) else ""
+        print(f"         5. Memory: {len(mem_content)} chars, User: {len(user_content)} chars")
+
+        # 6. Skills — should have at least something
+        r = await http.get(f"{self.base}/api/agents/{self.agent_id}/skills", headers=self._headers())
+        skills = _soft_check(r, "skills")
+        n_skills = len(skills) if isinstance(skills, list) else 0
+        print(f"         6. Skills: {n_skills} installed")
+
+        # 7. Data trail — does the owner info flow through?
+        # Check if SOUL.md or memories reference the owner
+        owner_name = self.p.owner.name.split()[0].lower()  # first name
+        owner_about_fragment = self.p.owner.about[:30].lower()
+        soul_lower = soul_content.lower() if soul_content else ""
+        user_lower = user_content.lower() if user_content else ""
+        data_trail_found = owner_name in soul_lower or owner_name in user_lower or owner_about_fragment in user_lower
+        if data_trail_found:
+            print(f"         7. Data trail: owner info found in agent context ✓")
+        else:
+            print(f"         7. Data trail: owner '{self.p.owner.name}' NOT found in soul/memory")
+            # Not a hard failure — just notable
+
+        # Report
+        if issues:
+            print(f"\n         ╔══ AGENT AUDIT ISSUES ({len(issues)}) ══")
+            for issue in issues:
+                print(f"         ║  ✗ {issue}")
+            print(f"         ╚{'═' * 40}")
+            # Don't raise — report but continue so we find ALL issues
+            print(f"         (continuing despite {len(issues)} issue(s))")
+        else:
+            print(f"         ✓ All audit checks passed")
+
+        return {"issues": issues, "data": data}
 
     # ═══════════════════════════════════════════════════
     # Phase D: Chat with agent (real AI via WebSocket)
@@ -555,15 +645,16 @@ class Harness:
         if not self.agent_id:
             raise StepError(cause="No agent_id")
 
-        # Generate agent avatar (requires FAL_KEY or OpenRouter)
-        r = await http.post(f"{self.base}/api/agents/{self.agent_id}/generate-avatar", json={}, headers=self._headers(), timeout=60)
-        result = _soft_check(r, "agent avatar")
-        if result and isinstance(result, dict):
-            ok = result.get("ok", False)
-            fallback = result.get("fallback", "")
-            print(f"         (agent avatar: ok={ok}, fallback={fallback})")
-        else:
-            print(f"         (agent avatar: skipped)")
+        # Generate agent avatar (requires FAL_KEY or OpenRouter — may be slow/timeout)
+        try:
+            r = await http.post(f"{self.base}/api/agents/{self.agent_id}/generate-avatar", json={}, headers=self._headers(), timeout=120)
+            result = _soft_check(r, "agent avatar")
+            if result and isinstance(result, dict):
+                ok = result.get("ok", False)
+                fallback = result.get("fallback", "")
+                print(f"         (agent avatar: ok={ok}{f', fallback={fallback}' if fallback else ''})")
+        except httpx.ReadTimeout:
+            print(f"         (agent avatar: timeout — external service slow, OK)")
 
         # Get agent avatar
         r = await http.get(f"{self.base}/api/agents/{self.agent_id}/avatar", headers=self._headers())
@@ -573,12 +664,13 @@ class Harness:
             print(f"         (has avatar image: {has_img})")
 
         # Generate owner avatar
-        r = await http.post(f"{self.base}/api/owner/generate-avatar", json={}, headers=self._headers(), timeout=60)
-        result = _soft_check(r, "owner avatar")
-        if result and isinstance(result, dict):
-            print(f"         (owner avatar: ok={result.get('ok', '?')})")
-        else:
-            print(f"         (owner avatar: skipped)")
+        try:
+            r = await http.post(f"{self.base}/api/owner/generate-avatar", json={}, headers=self._headers(), timeout=120)
+            result = _soft_check(r, "owner avatar")
+            if result and isinstance(result, dict):
+                print(f"         (owner avatar: ok={result.get('ok', '?')})")
+        except httpx.ReadTimeout:
+            print(f"         (owner avatar: timeout, OK)")
 
         return True
 
@@ -807,17 +899,35 @@ class Harness:
                             raise StepError(cause=f"WS timeout after {timeout}s")
                     return frames
             except websockets.exceptions.ConnectionClosed as e:
-                if attempt < retries and e.rcvd and e.rcvd.code == 1012:
-                    print(f"         (WS restart — retry in 3s)")
-                    await asyncio.sleep(3)
+                if attempt < retries:
+                    code = e.rcvd.code if e.rcvd else 0
+                    print(f"         (WS closed {code} — waiting for gateway, retry {attempt+1}/{retries})")
+                    # Gateway may be restarting — wait longer
+                    for _ in range(15):
+                        await asyncio.sleep(2)
+                        try:
+                            async with httpx.AsyncClient(timeout=5) as probe:
+                                r = await probe.get(f"http://127.0.0.1:{port}/api/status")
+                                if r.status_code == 200:
+                                    break
+                        except Exception:
+                            pass
                     continue
                 raise StepError(cause=f"WS closed: {e}")
             except StepError:
                 raise
             except Exception as e:
                 if attempt < retries:
-                    print(f"         (WS error: {e} — retry)")
-                    await asyncio.sleep(2)
+                    print(f"         (WS error: {e} — waiting for gateway, retry {attempt+1}/{retries})")
+                    for _ in range(15):
+                        await asyncio.sleep(2)
+                        try:
+                            async with httpx.AsyncClient(timeout=5) as probe:
+                                r = await probe.get(f"http://127.0.0.1:{port}/api/status")
+                                if r.status_code == 200:
+                                    break
+                        except Exception:
+                            pass
                     continue
                 raise StepError(cause=f"WS error: {e}")
         return frames
@@ -874,6 +984,8 @@ class Harness:
     async def run(self, http: httpx.AsyncClient):
         print(f"\n{'─'*60}")
         print(f"Persona: {self.p.owner.name} ({self.p.owner.username})")
+        print(f"About:   {self.p.owner.about}")
+        print(f"Style:   {self.p.user_style}")
         print(f"Agent:   {self.p.agent.name} ({self.p.agent.role})")
         print(f"Model:   {self.p.default_model}")
         print(f"Skills:  {self.p.agent.skills}")
@@ -905,9 +1017,9 @@ class Harness:
         await self.step("activate_hector", self.activate_hector(http))
         await self.step("verify_hector", self.verify_hector(http))
 
-        # C: Create agent
-        await self.step(f'create_agent "{self.p.agent.name}"', self.create_agent(http))
-        await self.step("verify_agent", self.verify_agent(http))
+        # C: Create agent via Hector + deep audit
+        await self.step(f'create_agent "{self.p.agent.name}" (via Hector)', self.create_agent(http))
+        await self.step("audit_agent", self.verify_agent(http))
 
         # D: Chat
         await self.step("chat_with_agent", self.chat_with_agent(http))

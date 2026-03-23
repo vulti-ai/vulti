@@ -1028,21 +1028,14 @@ install_continuwuity() {
 
     cd "$CONT_SRC"
     if cargo build --release 2>&1; then
-        cp "target/release/continuwuity" "$CONT_BIN" 2>/dev/null || \
-        cp target/release/continuwuity-* "$CONT_BIN" 2>/dev/null
-        if [ -x "$CONT_BIN" ]; then
+        # Binary is called "conduwuit" (the project's actual name)
+        if [ -f "target/release/conduwuit" ]; then
+            cp "target/release/conduwuit" "$CONT_BIN"
+            chmod +x "$CONT_BIN"
             log_success "Continuwuity built and installed"
         else
-            # Find the actual binary name
-            local BUILT_BIN=$(find target/release -maxdepth 1 -type f -perm +111 -name "continuwuity*" | head -1)
-            if [ -n "$BUILT_BIN" ]; then
-                cp "$BUILT_BIN" "$CONT_BIN"
-                chmod +x "$CONT_BIN"
-                log_success "Continuwuity built and installed"
-            else
-                log_error "Build succeeded but binary not found — Matrix messaging will not work"
-                return 1
-            fi
+            log_error "Build succeeded but conduwuit binary not found"
+            return 1
         fi
     else
         log_error "Continuwuity build failed — Matrix messaging will not work"
