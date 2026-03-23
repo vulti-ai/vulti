@@ -7,6 +7,7 @@ final class AppState {
     let gateway = GatewayService()
     let client: GatewayClient
     let vultisig = VultisigService()
+    let power = PowerManager()
 
     // MARK: - Cached data (fetched from gateway)
     var agentList: [GatewayClient.AgentResponse] = []
@@ -41,12 +42,13 @@ final class AppState {
         case settings
         case create
         case audit
+        case holidayPrep
 
         /// Agent/owner panels slide from bottom; toolbar panels slide from left
         var isBottomPanel: Bool {
             switch self {
             case .agent, .owner: return true
-            case .settings, .create, .audit: return false
+            case .settings, .create, .audit, .holidayPrep: return false
             }
         }
     }
@@ -71,6 +73,7 @@ final class AppState {
         if !isGatewayRunning {
             try? await startGateway()
         } else {
+            power.preventSleep()
             await refreshAgents()
         }
         startRefreshTimer()
@@ -84,12 +87,14 @@ final class AppState {
             try await Task.sleep(for: .milliseconds(500))
             if await client.checkHealth() {
                 isGatewayRunning = true
+                power.preventSleep()
                 await refreshAgents()
                 return
             }
         }
         isGatewayRunning = await client.checkHealth()
         if isGatewayRunning {
+            power.preventSleep()
             await refreshAgents()
         }
     }
@@ -97,6 +102,7 @@ final class AppState {
     func stopGateway() async {
         await client.stop()
         isGatewayRunning = false
+        power.allowSleep()
     }
 
     func refreshAgents() async {
@@ -178,6 +184,7 @@ final class AppState {
     func openSettings() { panelMode = .settings }
     func openCreate() { panelMode = .create }
     func openAudit() { panelMode = .audit }
+    func openHolidayPrep() { panelMode = .holidayPrep }
     func closePanel() {
         panelMode = nil
         activeAgentId = nil

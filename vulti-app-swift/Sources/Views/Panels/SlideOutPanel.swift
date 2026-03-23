@@ -40,6 +40,9 @@ struct SlideOutPanel: View {
             case .audit:
                 Text("Activity")
                     .font(.system(size: 16, weight: .bold)).foregroundStyle(VultiTheme.inkSoft)
+            case .holidayPrep:
+                Text("Away Mode")
+                    .font(.system(size: 16, weight: .bold)).foregroundStyle(VultiTheme.inkSoft)
             }
 
             Spacer()
@@ -74,6 +77,8 @@ struct SlideOutPanel: View {
             CreateAgentView()
         case .audit:
             AuditView()
+        case .holidayPrep:
+            HolidayPrepView()
         }
     }
 }

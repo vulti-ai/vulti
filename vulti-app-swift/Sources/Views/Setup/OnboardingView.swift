@@ -116,7 +116,7 @@ struct OnboardingView: View {
         case checking, notInstalled, notRunning, running
     }
 
-    private static let stepCount = 6
+    private static let stepCount = 7
 
     var body: some View {
         VStack(spacing: 0) {
@@ -158,11 +158,12 @@ struct OnboardingView: View {
                 // Content card
                 VStack(spacing: 16) {
                     switch step {
-                    case 1: identityStep
-                    case 2: elementSignInStep
-                    case 3: intelligenceStep
-                    case 4: providersStep
-                    case 5: completeStep
+                    case 1: energyStep
+                    case 2: identityStep
+                    case 3: elementSignInStep
+                    case 4: intelligenceStep
+                    case 5: providersStep
+                    case 6: completeStep
                     default: EmptyView()
                     }
 
@@ -200,11 +201,12 @@ struct OnboardingView: View {
     private var stepIcon: String {
         switch step {
         case 0: return "" // prerequisites — custom layout
-        case 1: return "brain.head.profile"
-        case 2: return "message.fill"
-        case 3: return "brain"
-        case 4: return "square.grid.2x2"
-        case 5: return "person.2.fill"
+        case 1: return "bolt.fill"
+        case 2: return "brain.head.profile"
+        case 3: return "message.fill"
+        case 4: return "brain"
+        case 5: return "square.grid.2x2"
+        case 6: return "person.2.fill"
         default: return ""
         }
     }
@@ -212,11 +214,12 @@ struct OnboardingView: View {
     private var stepTitle: String {
         switch step {
         case 0: return "" // prerequisites — custom layout
-        case 1: return "Welcome to Vulti"
-        case 2: return "Sign In to Element X"
-        case 3: return "Intelligence"
-        case 4: return "Providers"
-        case 5: return "Meet Hector"
+        case 1: return "Energy Settings"
+        case 2: return "Welcome to Vulti"
+        case 3: return "Sign In to Element X"
+        case 4: return "Intelligence"
+        case 5: return "Providers"
+        case 6: return "Meet Hector"
         default: return ""
         }
     }
@@ -224,11 +227,12 @@ struct OnboardingView: View {
     private var stepSubtitle: String {
         switch step {
         case 0: return "" // prerequisites — custom layout
-        case 1: return "The fastest way to get multiple agents working for you at home."
-        case 2: return "Sign in to Element X with your VultiHub credentials."
-        case 3: return "Connect an AI provider so your agents can think. This is required."
-        case 4: return "Optional providers for speech, phone calls, and image generation."
-        case 5: return "Hector is your system wizard — he manages security, integrity, connections, and the file system."
+        case 1: return "Your agents run 24/7. Let\u{2019}s make sure your Mac stays awake for them."
+        case 2: return "The fastest way to get multiple agents working for you at home."
+        case 3: return "Sign in to Element X with your VultiHub credentials."
+        case 4: return "Connect an AI provider so your agents can think. This is required."
+        case 5: return "Optional providers for speech, phone calls, and image generation."
+        case 6: return "Hector is your system wizard — he manages security, integrity, connections, and the file system."
         default: return ""
         }
     }
@@ -367,7 +371,99 @@ struct OnboardingView: View {
         return Image(nsImage: NSImage(cgImage: cgImage, size: NSSize(width: output.extent.width, height: output.extent.height)))
     }
 
-    // MARK: - Step 1: Identity
+    // MARK: - Step 1: Energy Settings
+
+    @State private var energyStatus: PowerManager.EnergyStatus?
+    @State private var energyApplied = false
+    @State private var energyApplying = false
+
+    private var energyStep: some View {
+        VStack(spacing: 16) {
+            if let status = energyStatus {
+                VStack(spacing: 10) {
+                    energyRow("Prevent Sleep", isOptimal: status.sleepDisabled, detail: "Keeps agents running when idle")
+                    energyRow("Disk Always On", isOptimal: status.diskSleepDisabled, detail: "Avoids database latency after idle")
+                    energyRow("Wake for Network", isOptimal: status.wakeOnNetwork, detail: "Agents can receive messages while sleeping")
+                    energyRow("Auto-Restart", isOptimal: status.autoRestart, detail: "Recovers automatically after power loss")
+                }
+
+                if status.allOptimal || energyApplied {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(VultiTheme.teal)
+                            .font(.system(size: 13))
+                        Text("All set")
+                            .font(.system(size: 12))
+                            .foregroundStyle(VultiTheme.teal)
+                    }
+                    .padding(.top, 4)
+                } else {
+                    Button {
+                        energyApplying = true
+                        let success = app.power.applyOptimalSettings()
+                        energyApplying = false
+                        if success {
+                            energyApplied = true
+                            energyStatus = app.power.currentEnergyStatus()
+                        }
+                    } label: {
+                        if energyApplying {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Text("Optimize Settings")
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.vultiPrimary)
+                    .controlSize(.large)
+                    .disabled(energyApplying)
+                }
+            } else {
+                ProgressView("Checking energy settings...")
+                    .font(.system(size: 12))
+            }
+
+            Button {
+                withAnimation { step = 2 }
+            } label: {
+                Text(energyStatus?.allOptimal == true || energyApplied ? "Continue" : "Skip")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.vultiSecondary)
+            .controlSize(.large)
+        }
+        .onAppear {
+            energyStatus = app.power.currentEnergyStatus()
+        }
+    }
+
+    private func energyRow(_ label: String, isOptimal: Bool, detail: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: isOptimal ? "checkmark.circle.fill" : "exclamationmark.circle")
+                .foregroundStyle(isOptimal ? VultiTheme.teal : .orange)
+                .font(.system(size: 14))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(VultiTheme.inkSoft)
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(VultiTheme.inkMuted)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isOptimal ? VultiTheme.teal.opacity(0.06) : Color.orange.opacity(0.06))
+        )
+    }
+
+    // MARK: - Step 2: Identity
 
     private var identityStep: some View {
         VStack(spacing: 14) {
@@ -534,7 +630,7 @@ struct OnboardingView: View {
             }
 
             HStack {
-                Button("Back") { step = 2 }
+                Button("Back") { step = 3 }
                     .font(.system(size: 13))
                     .foregroundStyle(VultiTheme.inkMuted)
                     .buttonStyle(.plain)
@@ -667,19 +763,19 @@ struct OnboardingView: View {
 
                 // ── Navigation ──
                 HStack {
-                    Button("Back") { step = 3 }
+                    Button("Back") { step = 4 }
                         .font(.system(size: 13))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .buttonStyle(.plain)
 
                     Spacer()
 
-                    Button("Skip") { step = 5 }
+                    Button("Skip") { step = 6 }
                         .font(.system(size: 13))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .buttonStyle(.plain)
 
-                    Button("Next") { step = 5 }
+                    Button("Next") { step = 6 }
                         .buttonStyle(.vultiPrimary)
                 }
             }
@@ -1069,7 +1165,7 @@ struct OnboardingView: View {
         Task {
             try? await app.client.addSecret(key: "VULTI_DEFAULT_MODEL", value: selectedModel)
         }
-        step = 4
+        step = 5
     }
 
     private func submitIdentity() {
@@ -1094,7 +1190,7 @@ struct OnboardingView: View {
                 await app.refreshOwner()
 
                 await MainActor.run {
-                    step = 2
+                    step = 3
                     isSubmitting = false
                 }
             } catch {

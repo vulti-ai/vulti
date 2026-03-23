@@ -18,6 +18,9 @@ struct MainView: View {
                         app.openSettings()
                     }
                     Spacer()
+                    ToolbarButton(icon: "airplane", tooltip: "Away Mode") {
+                        app.openHolidayPrep()
+                    }
                     ToolbarButton(icon: "clock.arrow.circlepath", tooltip: "Activity") {
                         app.openAudit()
                     }
