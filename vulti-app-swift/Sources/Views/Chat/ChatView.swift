@@ -1,12 +1,5 @@
 import SwiftUI
 
-private struct BottomAnchorVisibleKey: PreferenceKey {
-    static var defaultValue = true
-    static func reduce(value: inout Bool, nextValue: () -> Bool) {
-        value = nextValue()
-    }
-}
-
 /// Chat column (416px in agent detail panel).
 /// Matches ChatView.svelte: context hints, streaming, typing indicator,
 /// virtual message window, session management.
@@ -65,9 +58,8 @@ struct ChatView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 8) {
-                            ForEach(visibleMessages) { msg in
-                                MessageBubble(message: msg)
-                                    .id(msg.id)
+                            ForEach(groupMessages(visibleMessages)) { group in
+                                MessageGroupView(group: group)
                             }
 
                             // Streaming content (replace semantics)
@@ -97,19 +89,13 @@ struct ChatView: View {
                             }
 
                             // Invisible bottom anchor for scroll detection and auto-scroll
-                            GeometryReader { geo in
-                                Color.clear
-                                    .preference(key: BottomAnchorVisibleKey.self,
-                                                value: geo.frame(in: .named("chatScroll")).maxY <= geo.frame(in: .global).height + 200)
-                            }
-                            .frame(height: 1)
-                            .id("bottom-anchor")
+                            Color.clear
+                                .frame(height: 1)
+                                .id("bottom-anchor")
+                                .onAppear { isNearBottom = true }
+                                .onDisappear { isNearBottom = false }
                         }
                         .padding(12)
-                    }
-                    .coordinateSpace(name: "chatScroll")
-                    .onPreferenceChange(BottomAnchorVisibleKey.self) { visible in
-                        isNearBottom = visible
                     }
                     .onChange(of: ws.messages.count) {
                         if isNearBottom {
@@ -627,6 +613,93 @@ struct MessageBubble: View {
             if !isUser { Spacer(minLength: 60) }
         }
         } // else (not tool_use)
+    }
+}
+
+// MARK: - Tool Call Grouping
+
+/// Groups consecutive messages for collapsible tool call rendering.
+struct MessageGroup: Identifiable {
+    let id: String
+    let messages: [ChatMessage]
+}
+
+/// Renders a message group — single messages directly, tool call runs as collapsible.
+struct MessageGroupView: View {
+    let group: MessageGroup
+
+    var body: some View {
+        if group.messages.count == 1 {
+            MessageBubble(message: group.messages[0])
+                .id(group.messages[0].id)
+        } else {
+            ToolCallGroup(messages: group.messages)
+                .id(group.id)
+        }
+    }
+}
+
+/// Segments a flat message list into groups: runs of consecutive tool_use messages
+/// become a single group; every other message is its own group.
+private func groupMessages(_ messages: [ChatMessage]) -> [MessageGroup] {
+    var groups: [MessageGroup] = []
+    var toolRun: [ChatMessage] = []
+
+    for msg in messages {
+        if msg.type == "tool_use" {
+            toolRun.append(msg)
+        } else {
+            if !toolRun.isEmpty {
+                groups.append(MessageGroup(id: "tg-\(toolRun[0].id)", messages: toolRun))
+                toolRun = []
+            }
+            groups.append(MessageGroup(id: msg.id, messages: [msg]))
+        }
+    }
+    if !toolRun.isEmpty {
+        groups.append(MessageGroup(id: "tg-\(toolRun[0].id)", messages: toolRun))
+    }
+    return groups
+}
+
+/// Renders a run of consecutive tool calls: all but the last are collapsed in a disclosure.
+struct ToolCallGroup: View {
+    let messages: [ChatMessage]
+    @State private var isExpanded = false
+
+    var collapsed: [ChatMessage] { Array(messages.dropLast()) }
+    var last: ChatMessage { messages.last! }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Collapsed tool calls — tap to expand
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                    Text("\(collapsed.count) more tool call\(collapsed.count == 1 ? "" : "s")")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(VultiTheme.inkMuted)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                ForEach(collapsed) { msg in
+                    MessageBubble(message: msg)
+                }
+            }
+
+            // Always show the last tool call
+            MessageBubble(message: last)
+        }
     }
 }
 

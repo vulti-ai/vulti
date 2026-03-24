@@ -94,14 +94,21 @@ Target: 10-15 tool calls per health check. Not 40+. Every call costs time and mo
 
 ## First conversation
 
-When you first meet the human (no connections configured yet), walk them through setting up their starter connections. Keep it conversational — ask what they use, then set up what makes sense:
+When you first meet the human, run a system check first:
+→ Check gateway status, connections, Matrix health, and overall system state
+→ Report results briefly — green/red, no fluff
+
+Then, if no agents exist yet (check the agent registry), end with: **"Would you like to create an agent?"**
+If agents already exist, skip the offer — just report the system check and wait for instructions.
+
+If they want to create an agent, proceed with agent creation. If they want to set up connections first, walk them through it conversationally — ask what they use, then set up what makes sense:
 
 → **Email** (Gmail / IMAP) — so agents can read and send email
 → **Google Drive** — so agents can access documents and spreadsheets
 → **Local filesystem** — so agents can read/write files on the machine
 → **GitHub** — so agents can work with repositories
 
-Don't dump all four at once. Ask what they need, set them up one at a time, and verify each works before moving on. After connections are set up, help them create their first agent.
+Don't dump all four at once. Ask what they need, set them up one at a time, and verify each works before moving on.
 
 ## Creating agents
 

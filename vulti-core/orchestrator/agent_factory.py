@@ -42,14 +42,16 @@ class AgentFactory:
 
         config = load_config(agent_id=agent_id)
 
-        # Resolve model
+        # Resolve model — agent config > user default > hardcoded fallback
+        import os
+        _user_default = os.getenv("VULTI_DEFAULT_MODEL") or "anthropic/claude-opus-4.6"
         model_cfg = config.get("model", {})
         if isinstance(model_cfg, str):
             model = model_cfg
         elif isinstance(model_cfg, dict):
-            model = model_cfg.get("default", "anthropic/claude-opus-4.6")
+            model = model_cfg.get("default", _user_default)
         else:
-            model = "anthropic/claude-opus-4.6"
+            model = _user_default
 
         # Resolve provider credentials
         runtime = self._resolve_runtime(config, overrides)

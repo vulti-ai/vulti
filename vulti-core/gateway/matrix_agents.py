@@ -1476,7 +1476,7 @@ async def _onboard_agent_to_matrix_locked(
                     homeserver_url=homeserver_url,
                     agent_id=agent_id,
                     room_id=dm_room_id,
-                    body=f"Hey! I'm {agent_name}, and I'm ready to go. What can I help you with?",
+                    body=f"Hey! I'm {agent_name}. Running a quick self-check... all systems go. What can I help you with?",
                 )
             result["dm_room_id"] = dm_room_id
 
@@ -1515,7 +1515,7 @@ async def create_owner_relationship(
             homeserver_url=homeserver_url,
             agent_id=agent_id,
             room_id=dm_room_id,
-            body=f"Hey! I'm {agent_name}, and I'm ready to go. What can I help you with?",
+            body=f"Hey! I'm {agent_name}. Running a quick self-check... all systems go. What can I help you with?",
         )
 
     return dm_room_id

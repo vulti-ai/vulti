@@ -292,7 +292,7 @@ def _resolve_gateway_model() -> str:
     back to the hardcoded default ("anthropic/claude-opus-4.6") which fails
     when the active provider is openai-codex.
     """
-    model = os.getenv("VULTI_MODEL") or os.getenv("LLM_MODEL") or "anthropic/claude-opus-4.6"
+    model = os.getenv("VULTI_MODEL") or os.getenv("LLM_MODEL") or os.getenv("VULTI_DEFAULT_MODEL") or "anthropic/claude-opus-4.6"
     try:
         import yaml as _y
         _cfg_path = _vulti_home / "config.yaml"
@@ -2309,8 +2309,9 @@ class GatewayRunner:
         if not history and not self.session_store.has_any_sessions():
             context_prompt += (
                 "\n\n[System note: This is the user's very first message ever. "
-                "Briefly introduce yourself. "
-                "Keep the introduction concise -- one or two sentences max.]"
+                "Run a self-check first — verify your status, connections, skills, "
+                "and anything relevant to your role. Report briefly. "
+                "Then ask: 'What can I help you with?']"
             )
 
         # Hub channel detection (introspect, profile, actions, etc.)
