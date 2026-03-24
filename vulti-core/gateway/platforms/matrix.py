@@ -202,7 +202,7 @@ class MatrixAdapter(BasePlatformAdapter):
                 await self._notify_fatal_error()
                 return False
 
-            # Auto-set home channels: platform-wide #updates + per-agent channels
+            # Auto-set home channels: platform-wide #agents + per-agent channels
             if self._client:
                 await self._auto_set_home_channels()
 
@@ -321,14 +321,14 @@ class MatrixAdapter(BasePlatformAdapter):
     async def _auto_set_home_channels(self) -> None:
         """Auto-set Matrix home channels.
 
-        Platform default: #chatter room
+        Platform default: #agents room
         Per-agent: DM room with owner (found by scanning joined rooms)
         """
         import nio
 
-        # Resolve #chatter as platform-wide default
+        # Resolve #agents as platform-wide default
         try:
-            alias = f"#chatter:{self.server_name}"
+            alias = f"#agents:{self.server_name}"
             resp = await self._client.room_resolve_alias(alias)
             if isinstance(resp, nio.RoomResolveAliasResponse):
                 if not self.config.home_channel:
@@ -336,12 +336,12 @@ class MatrixAdapter(BasePlatformAdapter):
                     self.config.home_channel = HomeChannel(
                         platform=Platform.MATRIX,
                         chat_id=resp.room_id,
-                        name="Agent Chatter",
+                        name="All Agents",
                     )
                     os.environ["MATRIX_HOME_CHANNEL"] = resp.room_id
                     logger.info("Matrix: platform home channel → %s (%s)", alias, resp.room_id)
         except Exception as e:
-            logger.debug("Matrix: could not resolve #chatter: %s", e)
+            logger.debug("Matrix: could not resolve #agents: %s", e)
 
         # Set per-agent home channels to their owner DM rooms
         try:
@@ -624,19 +624,46 @@ class MatrixAdapter(BasePlatformAdapter):
         DMs: only the DM agent handles, must respond.
         Groups: fan out to all agents in the room. @mentioned agents and
         thread-reply targets must respond; others observe and may stay silent.
+        Agent-to-agent: if an agent @mentions another agent in a group room,
+        the mentioned agent receives the message and must respond concisely.
         """
-        if event.sender in self._agent_user_ids:
-            return
+        from_agent = event.sender in self._agent_user_ids
         if event.server_timestamp and event.server_timestamp < self._connect_timestamp:
             return
 
         chat_type = self._determine_chat_type(room)
 
+        # DMs: ignore agent-sent messages (echo), dispatch human messages
         if chat_type == "dm":
+            if from_agent:
+                return
             await self._dispatch_to_agent(room, event, agent_id, chat_type, response_required=True)
             return
 
-        # Group: dedup — only the first callback to see this event does the fan-out
+        # Group: check for @mentions before dropping agent messages
+        mentioned = self._detect_mentioned_agents(
+            event.body or "",
+            formatted_body=getattr(event, "formatted_body", None),
+        )
+        thread_target = self._detect_thread_target(event)
+
+        # Drop agent messages that don't tag anyone — prevents echo loops
+        if from_agent and not mentioned and not thread_target:
+            return
+
+        # If an agent tags itself, ignore (prevents self-reply loops)
+        sender_agent_id = None
+        if from_agent:
+            for aid, info in self._agent_clients.items():
+                if info.get("user_id") == event.sender:
+                    sender_agent_id = aid
+                    break
+            if sender_agent_id:
+                mentioned = [m for m in mentioned if m != sender_agent_id]
+                if not mentioned and thread_target == sender_agent_id:
+                    return
+
+        # Dedup — only the first callback to see this event does the fan-out
         if event.event_id in self._processed_group_events:
             return
         self._processed_group_events[event.event_id] = time.time()
@@ -648,14 +675,7 @@ class MatrixAdapter(BasePlatformAdapter):
         # Fan out to all agents in the room
         room_agents = self._get_room_agent_ids(room)
         if not room_agents:
-            # Fallback: use all connected agents
             room_agents = [aid for aid, info in self._agent_clients.items() if info.get("client")]
-
-        mentioned = self._detect_mentioned_agents(
-            event.body or "",
-            formatted_body=getattr(event, "formatted_body", None),
-        )
-        thread_target = self._detect_thread_target(event)
 
         # When specific agents are @-mentioned or thread-targeted, only dispatch
         # to those agents — skip observers to prevent uninvited responses.
@@ -665,7 +685,10 @@ class MatrixAdapter(BasePlatformAdapter):
 
         for aid in room_agents:
             if targeted and aid not in targeted:
-                continue  # Skip non-targeted agents when someone is specifically addressed
+                continue
+            # Don't dispatch back to the sender agent
+            if aid == sender_agent_id:
+                continue
             must_respond = (aid in mentioned) or (aid == thread_target)
             await self._dispatch_to_agent(room, event, aid, chat_type, response_required=must_respond)
 

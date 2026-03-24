@@ -59,6 +59,8 @@ def build_channel_directory(adapters: Dict[Any, Any]) -> Dict[str, Any]:
                 platforms["discord"] = _build_discord(adapter)
             elif platform == Platform.SLACK:
                 platforms["slack"] = _build_slack(adapter)
+            elif platform == Platform.MATRIX:
+                platforms["matrix"] = _build_matrix(adapter)
         except Exception as e:
             logger.warning("Channel directory: failed to build %s: %s", platform.value, e)
 
@@ -127,6 +129,91 @@ def _build_slack(adapter) -> List[Dict[str, str]]:
 
     # Fallback to session data
     return _build_from_sessions("slack")
+
+
+def _build_matrix(adapter) -> List[Dict[str, str]]:
+    """Enumerate Matrix rooms from the adapter's connected clients."""
+    import os
+
+    channels: List[Dict[str, str]] = []
+    seen_ids: set = set()
+
+    homeserver_url = os.getenv("MATRIX_HOMESERVER_URL", "http://127.0.0.1:6167")
+    server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
+
+    # Get owner credentials for room inspection
+    try:
+        from gateway.matrix_agents import _get_owner_matrix_credentials
+        owner_creds = _get_owner_matrix_credentials()
+    except Exception:
+        owner_creds = None
+
+    if not owner_creds:
+        return _build_from_sessions("matrix")
+
+    # Query owner's joined rooms to enumerate all known rooms
+    try:
+        import urllib.request
+        import urllib.error
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{os.getenv('MATRIX_CONTINUWUITY_PORT', '6167')}/_matrix/client/v3/joined_rooms",
+            headers={"Authorization": f"Bearer {owner_creds['access_token']}"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            rooms = json.loads(resp.read()).get("joined_rooms", [])
+
+        for room_id in rooms:
+            if room_id in seen_ids:
+                continue
+            seen_ids.add(room_id)
+
+            # Get room name
+            room_name = room_id
+            try:
+                from urllib.parse import quote
+                name_req = urllib.request.Request(
+                    f"http://127.0.0.1:{os.getenv('MATRIX_CONTINUWUITY_PORT', '6167')}/_matrix/client/v3/rooms/{quote(room_id, safe='')}/state/m.room.name",
+                    headers={"Authorization": f"Bearer {owner_creds['access_token']}"},
+                )
+                with urllib.request.urlopen(name_req, timeout=5) as name_resp:
+                    room_name = json.loads(name_resp.read()).get("name", room_id)
+            except Exception:
+                pass
+
+            # Determine type: named rooms = group, unnamed = dm
+            is_dm = room_name == room_id
+            room_type = "dm" if is_dm else "group"
+
+            # For DMs, resolve a friendly name from the other member
+            if is_dm:
+                try:
+                    from urllib.parse import quote
+                    members_req = urllib.request.Request(
+                        f"http://127.0.0.1:{os.getenv('MATRIX_CONTINUWUITY_PORT', '6167')}/_matrix/client/v3/rooms/{quote(room_id, safe='')}/joined_members",
+                        headers={"Authorization": f"Bearer {owner_creds['access_token']}"},
+                    )
+                    with urllib.request.urlopen(members_req, timeout=5) as members_resp:
+                        members = json.loads(members_resp.read()).get("joined", {})
+                        # Find the non-owner member
+                        for uid, info in members.items():
+                            if uid != owner_creds.get("user_id"):
+                                room_name = info.get("display_name") or uid
+                                break
+                except Exception:
+                    pass
+
+            channels.append({
+                "id": room_id,
+                "name": room_name,
+                "type": room_type,
+            })
+
+    except Exception as e:
+        logger.debug("Channel directory: failed to enumerate Matrix rooms: %s", e)
+        return _build_from_sessions("matrix")
+
+    return channels
 
 
 def _build_from_sessions(platform_name: str) -> List[Dict[str, str]]:

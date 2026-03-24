@@ -239,9 +239,11 @@ def create_rule(
         "agent": agent or _current_agent_id(),
     }
 
-    rules = load_rules()
-    rules.append(rule)
-    save_rules(rules)
+    # Save to the target agent's rules directory, not the caller's
+    target_agent = rule["agent"]
+    target_rules = [r for r in load_rules() if r.get("agent") == target_agent]
+    target_rules.append(rule)
+    save_rules(target_rules, agent_id=target_agent)
 
     return rule
 

@@ -251,7 +251,7 @@ struct OnboardingView: View {
                 .fontWeight(.bold)
                 .foregroundStyle(VultiTheme.inkSoft)
 
-            Text("Set up your whole family on the same server — everyone gets their own agents, and you can even connect with friends\u{2019} agents securely. No cloud, no middlemen, just direct encrypted messaging between devices you control.")
+            Text("Your agents, your server. Talk to them from any device \u{2014} no cloud, fully private.")
                 .font(.system(size: 13))
                 .foregroundStyle(VultiTheme.inkDim)
                 .multilineTextAlignment(.center)
@@ -281,7 +281,7 @@ struct OnboardingView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
 
-                    Text("Your private tunnel. Access your agents from anywhere — phone, laptop, even your family\u{2019}s devices.")
+                    Text("Access your agents from any device, anywhere.")
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .multilineTextAlignment(.center)
@@ -345,7 +345,7 @@ struct OnboardingView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(VultiTheme.inkSoft)
 
-                    Text("How you and your family message agents — fully private, no cloud servers involved.")
+                    Text("Message your agents privately from your phone.")
                         .font(.system(size: 11))
                         .foregroundStyle(VultiTheme.inkMuted)
                         .multilineTextAlignment(.center)
@@ -884,7 +884,7 @@ struct OnboardingView: View {
                 .labelsHidden()
                 .frame(width: 130)
 
-                SecureField("Paste API key", text: keyValue)
+                TextField("Paste API key", text: keyValue)
                     .textFieldStyle(.vulti)
 
                 Button(isAdding.wrappedValue ? "Saving..." : "Save") {
@@ -926,7 +926,7 @@ struct OnboardingView: View {
     ) -> some View {
         if showBinding.wrappedValue {
             HStack(spacing: 8) {
-                SecureField(placeholder, text: keyValue)
+                TextField(placeholder, text: keyValue)
                     .textFieldStyle(.vulti)
 
                 Button(isAdding.wrappedValue ? "Saving..." : "Save") {
@@ -1131,7 +1131,7 @@ struct OnboardingView: View {
                 _ = try? await app.client.updateAgent("hector", updates: [
                     "allowedConnections": "matrix"
                 ])
-                try? await app.client.installSkill(agentId: "hector", name: "matrix")
+                try? await app.client.installSkill(agentId: "hector", name: "system/matrix")
                 try? await app.client.onboardAgentToMatrix(agentId: "hector")
                 try? await app.client.finalizeOnboarding(agentId: "hector", role: "wizard")
 

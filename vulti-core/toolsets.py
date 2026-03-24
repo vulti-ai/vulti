@@ -66,6 +66,8 @@ _VULTI_CORE_TOOLS = [
     "rule",
     # Cross-platform messaging (gated on gateway running via check_fn)
     "send_message",
+    # Matrix room history (gated on gateway running via check_fn)
+    "read_channel",
     # Hub UI pane manipulation
     "modify_pane",
     # Honcho memory tools (gated on honcho being active via check_fn)

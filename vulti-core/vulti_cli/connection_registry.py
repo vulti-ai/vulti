@@ -382,11 +382,27 @@ def inject_credentials(agent_id: Optional[str] = None):
         yield
         return
 
+    # Load .env values so we can resolve credential references.
+    # connections.yaml credentials map {ENV_VAR: SOURCE_ENV_VAR_NAME},
+    # where the source name points to the actual secret in .env.
+    env_values: Dict[str, str] = {}
+    env_path = registry._vulti_home / ".env"
+    if env_path.exists():
+        try:
+            from dotenv import dotenv_values
+            env_values = {k: v for k, v in dotenv_values(str(env_path)).items() if v is not None}
+        except ImportError:
+            pass
+
     # Save originals and inject
     originals: Dict[str, Optional[str]] = {}
-    for key, value in creds.items():
+    for key, source_name in creds.items():
         originals[key] = os.environ.get(key)
-        os.environ[key] = value
+        # Resolve: if the value looks like an env-var reference (matches a key
+        # in .env), use the real secret.  Otherwise treat it as a literal value
+        # (e.g. file paths for OAuth tokens).
+        resolved = env_values.get(source_name, source_name)
+        os.environ[key] = resolved
 
     # Generate per-agent himalaya config if agent has email connections
     try:

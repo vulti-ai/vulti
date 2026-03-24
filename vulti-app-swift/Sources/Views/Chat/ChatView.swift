@@ -1,5 +1,12 @@
 import SwiftUI
 
+private struct BottomAnchorVisibleKey: PreferenceKey {
+    static var defaultValue = true
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = nextValue()
+    }
+}
+
 /// Chat column (416px in agent detail panel).
 /// Matches ChatView.svelte: context hints, streaming, typing indicator,
 /// virtual message window, session management.
@@ -16,6 +23,7 @@ struct ChatView: View {
     @State private var recentSessions: [GatewayClient.SessionResponse] = []
     @State private var isLoadingSessions = false
     @State private var renameCount = 0  // tracks how many times we've auto-renamed
+    @State private var isNearBottom = true
 
     // Chat context hints per tab (matches original)
     static let tabHints: [String: String] = [
@@ -88,24 +96,36 @@ struct ChatView: View {
                                 .id("typing")
                             }
 
-                            // Invisible bottom anchor for reliable scroll-to-bottom
-                            Color.clear
-                                .frame(height: 1)
-                                .id("bottom-anchor")
+                            // Invisible bottom anchor for scroll detection and auto-scroll
+                            GeometryReader { geo in
+                                Color.clear
+                                    .preference(key: BottomAnchorVisibleKey.self,
+                                                value: geo.frame(in: .named("chatScroll")).maxY <= geo.frame(in: .global).height + 200)
+                            }
+                            .frame(height: 1)
+                            .id("bottom-anchor")
                         }
                         .padding(12)
                     }
+                    .coordinateSpace(name: "chatScroll")
+                    .onPreferenceChange(BottomAnchorVisibleKey.self) { visible in
+                        isNearBottom = visible
+                    }
                     .onChange(of: ws.messages.count) {
-                        withAnimation {
-                            proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                        if isNearBottom {
+                            withAnimation {
+                                proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                            }
                         }
                         autoRenameIfNeeded()
                     }
                     .onChange(of: ws.streamingContent) {
-                        proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                        if isNearBottom {
+                            proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                        }
                     }
                     .onChange(of: ws.isTyping) {
-                        if ws.isTyping {
+                        if ws.isTyping && isNearBottom {
                             withAnimation {
                                 proxy.scrollTo("bottom-anchor", anchor: .bottom)
                             }

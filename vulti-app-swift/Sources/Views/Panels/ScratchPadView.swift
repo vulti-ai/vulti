@@ -12,8 +12,8 @@ enum DrillTarget: String {
 // MARK: - Pane Tab
 
 enum PaneTab: String, CaseIterable {
-    case chat = "Chat"
-    case home = "ScratchPad"
+    case chat = "ScratchPad"
+    case home = "Home"
 }
 
 // MARK: - ScratchPadView
@@ -68,7 +68,13 @@ struct ScratchPadView: View {
         }
         .onAppear {
             if isOnboarding { activeTab = .chat }
-            Task { await loadWidgets() }
+            Task {
+                await loadWidgets()
+                // Default to ScratchPad tab if agent has put content there
+                if !chatWidgets.isEmpty {
+                    activeTab = .chat
+                }
+            }
             startPolling()
         }
         .onDisappear {
@@ -76,26 +82,33 @@ struct ScratchPadView: View {
         }
         .onChange(of: sessionId) {
             chatWidgets = []
+            rows = []
             deletedIds.removeAll()
-            Task { await loadWidgetsForced() }
+            Task {
+                await loadWidgetsForced()
+                // Switch to ScratchPad if session has content, otherwise Home
+                if !chatWidgets.isEmpty {
+                    withAnimation(.easeInOut(duration: 0.15)) { activeTab = .chat }
+                } else if activeTab == .chat {
+                    withAnimation(.easeInOut(duration: 0.15)) { activeTab = .home }
+                }
+            }
         }
         .onChange(of: homeWidgets.map(\.id)) { rebuildRows() }
-        .onChange(of: chatWidgets.map(\.id)) { rebuildRows() }
+        .onChange(of: chatWidgets.map(\.id)) { old, new in
+            rebuildRows()
+            // Auto-switch to ScratchPad when agent adds content
+            if old.isEmpty && !new.isEmpty {
+                withAnimation(.easeInOut(duration: 0.15)) { activeTab = .chat }
+            }
+        }
         .onChange(of: activeTab) { rebuildRows() }
     }
 
-    /// Rebuild rows only when the SET of widgets changes (added/removed).
-    /// Preserves user's manual row order on reorder or tab switch.
+    /// Rebuild rows from the current tab's widgets.
     private func rebuildRows() {
         guard draggingRowId == nil else { return } // never during drag
-
-        let currentWidgetIds = Set(rows.flatMap { $0.widgets.map(\.id) })
-        let newWidgetIds = Set(widgets.map(\.id))
-
-        // Only rebuild if widgets were added or removed
-        if currentWidgetIds != newWidgetIds {
-            rows = buildRows(from: widgets)
-        }
+        rows = buildRows(from: widgets)
     }
 
     // MARK: - Tab Header
@@ -116,6 +129,24 @@ struct ScratchPadView: View {
             }
 
             Spacer()
+
+            if activeTab == .chat && !chatWidgets.isEmpty {
+                Button {
+                    clearScratchPad()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.circle")
+                            .font(.system(size: 10, weight: .medium))
+                        Text("Clear ScratchPad")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(VultiTheme.coral)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(VultiTheme.coral.opacity(0.1), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
 
             if activeTab == .home {
                 Button {
@@ -237,7 +268,7 @@ struct ScratchPadView: View {
                         .font(.system(size: 24))
                         .foregroundStyle(VultiTheme.inkMuted.opacity(0.5))
                     Text(activeTab == .chat
-                         ? "Chat widgets will appear here as you talk"
+                         ? "Scratchpad widgets will appear here as you talk"
                          : "No home widgets")
                         .font(.system(size: 12))
                         .foregroundStyle(VultiTheme.inkDim)
@@ -520,6 +551,21 @@ struct ScratchPadView: View {
     }
 
     // MARK: - Reset Defaults (Home tab only)
+
+    private func clearScratchPad() {
+        suppressPoll = true
+        withAnimation(.spring(duration: 0.3)) { chatWidgets = [] }
+        rows = []
+        Task {
+            // Clear session-scoped widgets
+            if let sid = sessionId {
+                try? await app.client.clearSessionPaneWidgets(sessionId: sid)
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+            await loadWidgetsForced()
+            suppressPoll = false
+        }
+    }
 
     private func resetDefaults() {
         suppressPoll = true

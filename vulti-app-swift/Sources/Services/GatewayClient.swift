@@ -68,7 +68,7 @@ final class GatewayClient: Sendable {
         try await gw.delete(path: "agents/\(id)")
     }
 
-    func resetEverything() async throws {
+    func reset() async throws {
         _ = try await gw.postRaw(path: "reset", body: [:] as [String: String])
     }
 
@@ -670,6 +670,10 @@ final class GatewayClient: Sendable {
     func clearPaneWidgets(agentId: String, tab: String? = nil) async throws {
         let query = tab != nil ? "?tab=\(tab!)" : ""
         try await gw.delete(path: "agents/\(agentId)/pane\(query)")
+    }
+
+    func clearSessionPaneWidgets(sessionId: String) async throws {
+        try await gw.delete(path: "sessions/\(sessionId)/pane")
     }
 
     func removePaneWidget(agentId: String, widgetId: String) async throws {

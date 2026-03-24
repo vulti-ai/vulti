@@ -25,11 +25,8 @@ SEND_MESSAGE_SCHEMA = {
     "name": "send_message",
     "description": (
         "Send a message to a connected messaging platform, or list available targets.\n\n"
-        "IMPORTANT: When the user asks to send to a specific channel or person "
-        "(not just a bare platform name), call send_message(action='list') FIRST to see "
-        "available targets, then send to the correct one.\n"
-        "If the user just says a platform name like 'send to telegram', send directly "
-        "to the home channel without listing first."
+        "If you already know the target (room ID, agent ID, platform name), send directly.\n"
+        "Only use action='list' when you need to discover available targets you don't know yet."
     ),
     "parameters": {
         "type": "object",

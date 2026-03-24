@@ -322,7 +322,7 @@ struct AgentAvatar: View {
                 .frame(width: size, height: size)
 
             if let avatarStr = agent.avatar, !avatarStr.isEmpty {
-                if avatarStr.count <= 2, avatarStr.unicodeScalars.allSatisfy({ $0.properties.isEmoji }) {
+                if avatarStr.count <= 2, avatarStr.unicodeScalars.allSatisfy({ $0.properties.isEmoji || $0.properties.isEmojiPresentation || $0 == "\u{200D}" || $0 == "\u{FE0F}" }) {
                     Text(avatarStr)
                         .font(.system(size: size * 0.5))
                 } else if let data = Data(base64Encoded: avatarStr),

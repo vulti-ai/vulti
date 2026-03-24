@@ -88,6 +88,7 @@ def rule(
     cooldown_minutes: Optional[int] = None,
     tags: Optional[List[str]] = None,
     include_disabled: bool = False,
+    agent_id: Optional[str] = None,
     task_id: str = None,
 ) -> str:
     """Unified rule management tool."""
@@ -118,6 +119,7 @@ def rule(
                 max_triggers=max_triggers,
                 cooldown_minutes=cooldown_minutes,
                 tags=tags,
+                agent=agent_id,  # explicit target — falls back to current agent if None
             )
             return json.dumps(
                 {
@@ -297,6 +299,10 @@ Example: rule(action='create', condition='message is a purchase receipt', action
             "include_disabled": {
                 "type": "boolean",
                 "description": "For list: include disabled rules"
+            },
+            "agent_id": {
+                "type": "string",
+                "description": "Target agent ID. Use this when creating a rule for a DIFFERENT agent (e.g. Hector creating a rule for a new agent). If omitted, defaults to the current agent."
             }
         },
         "required": ["action"]
@@ -340,6 +346,7 @@ registry.register(
         cooldown_minutes=args.get("cooldown_minutes"),
         tags=args.get("tags"),
         include_disabled=args.get("include_disabled", False),
+        agent_id=args.get("agent_id"),
         task_id=kw.get("task_id"),
     ),
     check_fn=check_rule_requirements,

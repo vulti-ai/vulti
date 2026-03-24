@@ -438,9 +438,28 @@ def create_job(
     if parsed_schedule["kind"] == "once" and repeat is None:
         repeat = 1
 
-    # Default delivery to origin if available, otherwise local
-    if deliver is None:
-        deliver = "origin" if origin else "local"
+    # Resolve agent early so delivery can reference the agent's home channel
+    _effective_agent = agent or _current_agent_id()
+
+    # Default delivery: prefer agent's Matrix home channel over web/app origin.
+    # The web/hub origin (platform="app") can't receive deliveries, so when
+    # deliver is "origin" with an app origin, or deliver is None, resolve to
+    # the agent's Matrix DM if they have one configured.
+    _origin_is_app = origin and origin.get("platform") == "app"
+    if deliver is None or (deliver == "origin" and _origin_is_app):
+        if origin and not _origin_is_app:
+            deliver = "origin"
+        else:
+            try:
+                from vulti_cli.agent_registry import AgentRegistry
+                _agent_meta = AgentRegistry().get_agent(_effective_agent)
+                _matrix_hc = (_agent_meta.home_channels or {}).get("matrix", {}) if _agent_meta else {}
+                if _matrix_hc.get("chat_id"):
+                    deliver = f"matrix:{_matrix_hc['chat_id']}"
+                else:
+                    deliver = "local"
+            except Exception:
+                deliver = "local"
 
     job_id = uuid.uuid4().hex[:12]
     now = _vulti_now().isoformat()
@@ -485,9 +504,11 @@ def create_job(
         "agent": agent or _current_agent_id(),
     }
 
-    jobs = load_jobs()
-    jobs.append(job)
-    save_jobs(jobs)
+    # Save to the target agent's cron directory, not the caller's
+    target_agent = job["agent"]
+    target_jobs = [j for j in load_jobs() if j.get("agent") == target_agent]
+    target_jobs.append(job)
+    save_jobs(target_jobs, agent_id=target_agent)
 
     return job
 

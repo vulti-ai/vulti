@@ -1,7 +1,7 @@
 ---
 name: agent-creation
-description: Create and configure new agents via the gateway API. Handles registry, SOUL.md, role.txt, Matrix onboarding, permissions, cron, and verification.
-version: 2.0.0
+description: Create and configure new agents via the gateway API.
+version: 3.0.0
 author: Vulti
 license: MIT
 triggers:
@@ -16,120 +16,93 @@ metadata:
     category: system
 ---
 
-# Agent Creation Procedure
+# Agent Creation — Fast Path
 
-Follow every step. Do not skip any. Verify at the end.
+**Target: 6 tool calls. Not 30. Every extra call wastes time and money.**
 
-## Step 1: Create agent via API
+The server handles: role validation, owner profile seeding, model writing, auto-finalize, avatar emoji, permissions. You only do what the server can't.
+
+If the user is vague, fill in sensible defaults. Ask at most ONE question, then build.
+
+## Step 1: Look up the model ID (1 tool call)
 
 ```bash
-curl -X POST http://localhost:8080/api/agents \
+curl -s http://localhost:8080/api/providers -H "Authorization: Bearer $(cat ~/.vulti/web_token)" | python3 -c "import json,sys; [print(m) for p in json.load(sys.stdin) if p.get('authenticated') for m in (p.get('models') or [])]"
+```
+
+Pick the model that matches what the user asked for. If they said "gemini flash" or "cheap", pick the cheapest. If they didn't specify, use `anthropic/claude-sonnet-4`. **Use the EXACT ID from this list. Do not guess.**
+
+## Step 2: Create agent (1 tool call)
+
+```bash
+curl -s -X POST http://localhost:8080/api/agents \
   -H "Authorization: Bearer $(cat ~/.vulti/web_token)" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "AgentName",
-    "model": "anthropic/claude-sonnet-4",
-    "role": "researcher",
-    "personality": "Brief description of what this agent does"
+    "model": "exact/model-id-from-step-1",
+    "role": "SINGLE_WORD",
+    "description": "One sentence about what this agent does"
   }'
 ```
 
-Agent ID rules: lowercase, letters/numbers/hyphens, starts with letter, max 32 chars.
+**Role MUST be exactly one of:** assistant, engineer, researcher, analyst, writer, therapist, coach, creative, ops
 
-## Step 2: Write SOUL.md
+The server automatically: sets status to active, seeds the owner profile, validates the role, writes the model to config, sets permissions to matrix, assigns an emoji avatar, registers the agent on Matrix and creates the owner DM room.
 
-Create `~/.vulti/agents/{id}/SOUL.md` with the agent's full personality, role, instructions, tone, and responsibilities.
+**Matrix onboarding runs in the background and takes 5-10 seconds.** Do NOT check for Matrix credentials immediately after creating the agent — they won't be there yet. Do NOT debug Matrix registration. Do NOT write Python scripts for Matrix. Do NOT curl port 6167. The server handles all of it. Just move on to writing SOUL.md, installing skills, creating cron/rules.
 
-## Step 3: Write role.txt
+## Step 3: Write SOUL.md (1 tool call)
 
-Create `~/.vulti/agents/{id}/role.txt` containing a SINGLE WORD — the agent's role. This file MUST exist.
+Use `write_file` to create `~/.vulti/agents/{id}/SOUL.md`.
 
-```bash
-echo -n "researcher" > ~/.vulti/agents/{id}/role.txt
-```
+**Requirements:**
+- Start with `# AgentName`
+- At least 4 sections: identity, responsibilities, reporting format, tone
+- Only reference tools/skills the agent actually has
+- 1000+ characters minimum
 
-Valid roles: assistant, engineer, researcher, analyst, writer, therapist, coach, creative, ops, wizard.
-
-## Step 4: Matrix onboarding
-
-```bash
-curl -X POST http://localhost:8080/api/agents/{id}/onboard-to-matrix \
-  -H "Authorization: Bearer $(cat ~/.vulti/web_token)"
-```
-
-This creates the agent's Matrix account and DM room with the owner. Without this, the agent cannot communicate.
-
-## Step 5: Set permissions
-
-Ensure `~/.vulti/agents/{id}/permissions.json` has `"allowed_connections": ["matrix"]`.
-
-## Step 6: Set model in config.yaml
+## Step 4: Install skills (1 tool call)
 
 ```bash
-python3 -c "
-import yaml
-path = '$HOME/.vulti/agents/{id}/config.yaml'
-with open(path) as f:
-    cfg = yaml.safe_load(f) or {}
-cfg['model'] = 'anthropic/claude-sonnet-4'
-with open(path, 'w') as f:
-    yaml.dump(cfg, f, default_flow_style=False)
-"
-```
-
-## Step 7: Finalize onboarding
-
-```bash
-curl -X POST http://localhost:8080/api/agents/{id}/finalize-onboarding \
+curl -s -X POST http://localhost:8080/api/agents/{id}/skills \
   -H "Authorization: Bearer $(cat ~/.vulti/web_token)" \
   -H "Content-Type: application/json" \
-  -d '{"role": "researcher"}'
+  -d '{"name": "skill-name"}'
 ```
 
-This moves status from "onboarding" to "active". Agents stuck in "onboarding" have limited UI.
+Run once per skill. Available skills: research, productivity, software-development, creative, data-science, feeds, media, self-improvement, smart-home, system, domain, note-taking.
 
-## Step 8: Add cron jobs (if needed)
+## Step 5: Cron jobs (1 tool call per job)
+
+**IMPORTANT: Set agent_id to the NEW agent's ID so the job is created on the new agent, not on you.**
+
+```
+cronjob(action="create", name="Job name", prompt="What to do", schedule="0 */6 * * *", deliver="matrix", agent_id="{id}")
+```
+
+## Step 6: Rules (1 tool call per rule)
+
+**IMPORTANT: Set agent_id to the NEW agent's ID.**
+
+```
+rule(action="create", condition="...", action_prompt="...", name="...", agent_id="{id}")
+```
+
+## That's it.
+
+Do NOT:
+- Run `execute_code` with Python scripts — use `terminal` with curl or `write_file`
+- Write role.txt manually — the server handles it
+- Write permissions.json manually — the server handles it
+- Write config.yaml manually — the server handles it via the model field in Step 2
+- Run a matrix registration script — the server does this automatically
+- Run a verification checklist with 7 separate commands — just check `GET /api/agents/{id}` and confirm status=active
+
+## Quick verify (1 tool call)
 
 ```bash
-curl -X POST http://localhost:8080/api/cron \
-  -H "Authorization: Bearer $(cat ~/.vulti/web_token)" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_id": "{id}",
-    "name": "Daily task name",
-    "prompt": "What the agent should do on schedule",
-    "schedule": "0 9 * * *",
-    "deliver": "matrix"
-  }'
+curl -s http://localhost:8080/api/agents/{id} -H "Authorization: Bearer $(cat ~/.vulti/web_token)"
 ```
 
-ALWAYS set `"deliver": "matrix"`. Never use "local".
-
-## Verification checklist
-
-Run this EVERY TIME after creating an agent. Do not report success until all checks pass.
-
-```bash
-AGENT_ID="{id}"
-echo "=== Agent $AGENT_ID Checklist ==="
-
-# 1. Registry — must be "active"
-python3 -c "from vulti_cli.agent_registry import AgentRegistry; a=AgentRegistry().get_agent('$AGENT_ID'); print(f'1. Registry: {a.status}' if a else '1. Registry: MISSING')"
-
-# 2. SOUL.md — must exist and not be empty
-test -s ~/.vulti/agents/$AGENT_ID/SOUL.md && echo "2. SOUL.md: OK" || echo "2. SOUL.md: MISSING"
-
-# 3. role.txt — must exist with a single word
-test -s ~/.vulti/agents/$AGENT_ID/role.txt && echo "3. role.txt: $(cat ~/.vulti/agents/$AGENT_ID/role.txt)" || echo "3. role.txt: MISSING"
-
-# 4. permissions.json — must have matrix
-python3 -c "import json; d=json.load(open('$HOME/.vulti/agents/$AGENT_ID/permissions.json')); print('4. Matrix perm:', 'matrix' in d.get('allowed_connections',[]))"
-
-# 5. Model — must be set
-python3 -c "import yaml; c=yaml.safe_load(open('$HOME/.vulti/agents/$AGENT_ID/config.yaml')); print('5. Model:', c.get('model','NOT SET'))"
-
-# 6. Matrix account — check credentials exist
-test -f ~/.vulti/continuwuity/tokens/$AGENT_ID.json && echo "6. Matrix creds: OK" || echo "6. Matrix creds: MISSING"
-```
-
-If ANY check fails, fix it before telling the user the agent is ready.
+Confirm: status=active, role is correct, model is set. Done.

@@ -321,7 +321,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                     logger.warning("Job '%s': failed to parse prefill messages file '%s': %s", job_id, pfpath, e)
                     prefill_messages = None
 
-        max_iterations = _cfg.get("agent", {}).get("max_turns") or _cfg.get("max_turns") or 90
+        max_iterations = job.get("max_turns") or _cfg.get("agent", {}).get("max_turns") or _cfg.get("max_turns") or 90
         pr = _cfg.get("provider_routing", {})
         smart_routing = _cfg.get("smart_model_routing", {}) or {}
 

@@ -57,14 +57,14 @@ def wallet_tool(args: dict) -> str:
             "name": cc.get("name", ""),
             "number": cc["number"],
             "expiry": cc.get("expiry", ""),
-            "cvv": cc.get("code", ""),
+            "cvv_note": "CVV is not stored for security. Ask the owner for it at transaction time.",
         })
 
     if action == "save_credit_card":
         name = args.get("name", "")
         number = args.get("number", "")
         expiry = args.get("expiry", "")
-        code = args.get("code", "")
+        # CVV is intentionally NOT stored — security best practice
 
         if not number:
             return json.dumps({"success": False, "error": "Card number is required."})
@@ -73,14 +73,14 @@ def wallet_tool(args: dict) -> str:
             "name": name,
             "number": number,
             "expiry": expiry,
-            "code": code,
+            # CVV never persisted to disk — ask owner at transaction time
         }
         _save_wallet(data)
 
         last4 = number[-4:] if len(number) >= 4 else number
         return json.dumps({
             "success": True,
-            "message": f"Credit card saved (ending {last4}).",
+            "message": f"Credit card saved (ending {last4}). CVV is not stored — you'll need to ask the owner for it when making a purchase.",
         })
 
     if action == "remove_credit_card":
@@ -104,10 +104,10 @@ WALLET_SCHEMA = {
     "name": "wallet",
     "description": (
         "Manage your stored payment card. Actions:\n"
-        "- save_credit_card: Save a credit card (requires name, number, expiry, code)\n"
-        "- get_credit_card: Retrieve stored card details for a purchase\n"
-        "- remove_credit_card: Delete the stored card\n"
-        "When the user wants to add a credit card, collect the details and save them."
+        "- save_credit_card: Save a credit card (requires name, number, expiry). CVV is NOT stored for security.\n"
+        "- get_credit_card: Retrieve stored card details for a purchase. Returns card number and expiry but NOT the CVV.\n"
+        "- remove_credit_card: Delete the stored card.\n"
+        "When making a purchase, you MUST ask the owner for their CVV — it is never stored."
     ),
     "parameters": {
         "type": "object",

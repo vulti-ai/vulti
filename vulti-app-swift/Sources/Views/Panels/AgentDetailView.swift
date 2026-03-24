@@ -9,6 +9,7 @@ struct AgentDetailView: View {
     @State private var pollTimer: Timer?
     @State private var currentSessionId: String? = nil
     @State private var scratchPadHidden = true
+    @State private var chatWidgetCount = 0
 
     private var isOnboarding: Bool {
         app.agent(byId: agentId)?.status == "onboarding"
@@ -75,6 +76,12 @@ struct AgentDetailView: View {
             }
         }
         .animation(.spring(duration: 0.4), value: showScratchPad)
+        .onChange(of: chatWidgetCount) {
+            // Auto-reveal panel when chat widgets arrive
+            if chatWidgetCount > 0 && scratchPadHidden {
+                withAnimation(.spring(duration: 0.4)) { scratchPadHidden = false }
+            }
+        }
         .onAppear {
             // All agents start hidden; regular agents auto-reveal when soul appears
             scratchPadHidden = true
@@ -108,13 +115,25 @@ struct AgentDetailView: View {
 
     private func checkForWidgets() {
         Task {
+            // If we don't have a session ID yet, try to get it from the latest session
+            if currentSessionId == nil {
+                if let sessions = try? await app.client.listSessions(agentId: agentId),
+                   let latest = sessions.first {
+                    await MainActor.run { currentSessionId = latest.id }
+                }
+            }
+
             // Check for pane widget content
-            if !scratchPadHasContent {
-                if let pane = try? await app.client.getPaneWidgets(agentId: agentId, sessionId: currentSessionId),
-                   let tabs = pane.tabs {
-                    let hasWidgets = tabs.values.contains { !$0.isEmpty }
-                    if hasWidgets {
-                        await MainActor.run { scratchPadHasContent = true }
+            if let pane = try? await app.client.getPaneWidgets(agentId: agentId, sessionId: currentSessionId),
+               let tabs = pane.tabs {
+                let hasWidgets = tabs.values.contains { !$0.isEmpty }
+                let chatCount = tabs["chat"]?.count ?? 0
+                await MainActor.run {
+                    if hasWidgets && !scratchPadHasContent {
+                        scratchPadHasContent = true
+                    }
+                    if chatCount != chatWidgetCount {
+                        chatWidgetCount = chatCount
                     }
                 }
             }

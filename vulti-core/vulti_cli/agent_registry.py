@@ -42,19 +42,19 @@ HECTOR_AGENT_ID = "hector"
 
 
 def _role_emoji(role: str) -> str:
-    """Pick an emoji that fits the agent's role."""
+    """Pick a person-like emoji that fits the agent's role."""
     return {
-        "assistant": "✦",
-        "engineer": "⚙",
-        "researcher": "◎",
-        "analyst": "◆",
-        "writer": "✎",
-        "therapist": "☯",
-        "coach": "⚑",
-        "creative": "✧",
-        "ops": "⚿",
+        "assistant": "🧑‍💼",
+        "engineer": "👩‍💻",
+        "researcher": "🔬",
+        "analyst": "📊",
+        "writer": "✍️",
+        "therapist": "🧘",
+        "coach": "🏋️",
+        "creative": "🎨",
+        "ops": "🛠️",
         "wizard": "🧙",
-    }.get((role or "").lower(), "◇")
+    }.get((role or "").lower(), "🤖")
 
 
 @dataclass
@@ -209,14 +209,18 @@ class AgentRegistry:
         logger.info("Created agent '%s' (cloned from: %s)", agent_id, clone_from or "none")
         return meta
 
-    def delete_agent(self, agent_id: str) -> bool:
-        """Delete an agent and all its data."""
+    def delete_agent(self, agent_id: str, force: bool = False) -> bool:
+        """Delete an agent and all its data.
+
+        Args:
+            force: If True, allows deleting system agents (used by factory reset).
+        """
         data = self._load()
 
         if agent_id not in data.get("agents", {}):
             return False
 
-        if agent_id == HECTOR_AGENT_ID:
+        if agent_id == HECTOR_AGENT_ID and not force:
             raise ValueError("Cannot delete the hector system agent")
 
         # Remove directory
@@ -294,122 +298,13 @@ class AgentRegistry:
     # Migration from single-agent layout
     # ------------------------------------------------------------------
 
-    def needs_migration(self) -> bool:
-        """Check if we need to migrate from single-agent to multi-agent layout."""
-        # If agents dir already has a registry, no migration needed
-        if self._registry_path.exists():
-            return False
-        # If the agents directory already exists (e.g. after a reset), skip migration
-        if (self._home / "agents").exists():
-            return False
-        # Only real files (not symlinks) at root indicate a genuine old single-agent install.
-        # The migration itself leaves symlinks, so symlinks should not re-trigger it.
-        config_real = (self._home / "config.yaml").exists() and not (self._home / "config.yaml").is_symlink()
-        soul_real = (self._home / "SOUL.md").exists() and not (self._home / "SOUL.md").is_symlink()
-        return config_real or soul_real
-
-    def migrate_single_agent(self) -> str:
-        """Migrate existing single-agent installation to multi-agent layout.
-
-        Moves config, soul, memories, cron into agents/vulti/.
-        Leaves symlinks at old locations for backward compatibility.
-
-        Returns the agent_id of the migrated agent.
-        """
-        agent_id = "vulti"
-        agent_home = self.agent_home(agent_id)
-
-        logger.info("Migrating single-agent installation to multi-agent layout...")
-
-        # Create directory structure
-        for subdir in ("memories", "cron", "sessions", "skills"):
-            (agent_home / subdir).mkdir(parents=True, exist_ok=True)
-
-        # Move files and leave symlinks
-        migrations = [
-            ("config.yaml", "config.yaml"),
-            ("SOUL.md", "SOUL.md"),
-        ]
-        for src_rel, dst_rel in migrations:
-            src = self._home / src_rel
-            dst = agent_home / dst_rel
-            if src.exists() and not src.is_symlink():
-                shutil.copy2(str(src), str(dst))
-                src.unlink()
-                src.symlink_to(dst)
-                logger.debug("Migrated %s -> %s (symlinked)", src_rel, dst)
-
-        # Move directories and leave symlinks
-        dir_migrations = [
-            ("memories", "memories"),
-            ("cron", "cron"),
-        ]
-        for src_rel, dst_rel in dir_migrations:
-            src = self._home / src_rel
-            dst = agent_home / dst_rel
-            if src.exists() and not src.is_symlink():
-                # Copy contents, not the directory itself
-                for item in src.iterdir():
-                    dst_item = dst / item.name
-                    if item.is_file():
-                        shutil.copy2(str(item), str(dst_item))
-                    elif item.is_dir():
-                        if dst_item.exists():
-                            shutil.rmtree(dst_item)
-                        shutil.copytree(str(item), str(dst_item))
-                # Remove original and symlink
-                shutil.rmtree(src)
-                src.symlink_to(dst)
-                logger.debug("Migrated %s/ -> %s/ (symlinked)", src_rel, dst)
-
-        # Read agent name from config.yaml if set
-        agent_name = "Vulti"
-        try:
-            import yaml
-            config_path = self.agent_home(agent_id) / "config.yaml"
-            if config_path.exists():
-                with open(config_path, encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
-                agent_name = cfg.get("agent_name", agent_name)
-        except Exception:
-            pass
-
-        # Create registry
-        now = datetime.now(timezone.utc).isoformat()
-        self._data = {
-            "version": 2,
-            "agents": {
-                agent_id: {
-                    "id": agent_id,
-                    "name": agent_name,
-                    "status": "active",
-                    "created_at": now,
-                    "created_from": None,
-                    "avatar": None,
-                    "description": "Primary agent (migrated from single-agent install)",
-                }
-            },
-        }
-        self._save()
-
-        logger.info("Migration complete. Agent: '%s'", agent_id)
-        return agent_id
-
     def ensure_initialized(self) -> None:
-        """Ensure the agent registry is initialized. Migrates if needed."""
-        if self.needs_migration():
-            self.migrate_single_agent()
-        elif not self._registry_path.exists():
+        """Ensure the agent registry is initialized."""
+        if not self._registry_path.exists():
             self._seed_fresh_install()
 
-        # v1 → v2: remove default_agent concept
-        self._migrate_v1_to_v2()
-
-        # Ensure hector exists (covers migrations and upgrades)
+        # Ensure hector exists
         self._seed_hector()
-
-        # Migrate allowed_connections from registry to per-agent permissions.json
-        self._migrate_permissions()
 
     def _migrate_v1_to_v2(self) -> None:
         """Remove default_agent key from v1 registries."""
@@ -561,6 +456,7 @@ class AgentRegistry:
         pkg_root = Path(vulti_cli.__file__).resolve().parent.parent
         default_skills = [
             ("agent-creation", pkg_root / "optional-skills" / "system" / "agent-creation"),
+            ("matrix", pkg_root / "optional-skills" / "system" / "matrix"),
             ("whatsapp-reader", pkg_root / "optional-skills" / "productivity" / "whatsapp-reader"),
         ]
         for name, src in default_skills:

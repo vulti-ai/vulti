@@ -277,10 +277,9 @@ class WebAdapter(BasePlatformAdapter):
             await get_current_user(authorization)
             data = await req.json()
             result = adapter._create_agent(data)
-            # Register on Matrix and create owner DM in background
-            asyncio.create_task(
-                adapter._setup_agent_matrix(result["id"], result["name"])
-            )
+            # Register on Matrix and create owner DM inline (not background)
+            # so the response includes matrix info and callers don't race
+            await adapter._setup_agent_matrix(result["id"], result["name"])
             return result
 
         @app.get("/api/agents/{agent_id}")
@@ -302,7 +301,7 @@ class WebAdapter(BasePlatformAdapter):
         @app.post("/api/reset")
         async def reset_everything(authorization: str = Header("")):
             await get_current_user(authorization)
-            return await adapter._reset_everything()
+            return await adapter._reset()
 
         @app.post("/api/reset/factory")
         async def factory_reset(authorization: str = Header("")):
@@ -551,15 +550,24 @@ class WebAdapter(BasePlatformAdapter):
             if not result:
                 raise HTTPException(status_code=500, detail="Registration failed")
 
-            # Set display name
-            if display_name:
-                import httpx
-                async with httpx.AsyncClient(timeout=5.0) as hc:
-                    await hc.put(
-                        f"{homeserver_url}/_matrix/client/v3/profile/{result['user_id']}/displayname",
-                        headers={"Authorization": f"Bearer {result['access_token']}"},
-                        json={"displayname": display_name},
-                    )
+            # Set display name: use explicit display_name, fall back to owner.json name
+            if not display_name:
+                try:
+                    owner_json = Path.home() / ".vulti" / "owner.json"
+                    if owner_json.exists():
+                        display_name = json.loads(owner_json.read_text()).get("name", "").strip()
+                except Exception:
+                    pass
+            if not display_name:
+                display_name = username  # last resort: use the username
+
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as hc:
+                await hc.put(
+                    f"{homeserver_url}/_matrix/client/v3/profile/{result['user_id']}/displayname",
+                    headers={"Authorization": f"Bearer {result['access_token']}"},
+                    json={"displayname": display_name},
+                )
 
             # Save credentials
             owner_creds_path.write_text(json.dumps({
@@ -569,16 +577,16 @@ class WebAdapter(BasePlatformAdapter):
                 "access_token": result["access_token"],
             }, indent=2))
 
-            # Create #chatter room (owner is the creator)
+            # Create #agents room (owner is the creator)
             try:
                 import httpx
                 from gateway.matrix_agents import _BASE_INITIAL_STATE, _POWER_LEVEL_OVERRIDE
                 server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
                 owner_headers = {"Authorization": f"Bearer {result['access_token']}"}
                 async with httpx.AsyncClient(timeout=10.0) as hc:
-                    # Check if #chatter already exists
+                    # Check if #agents already exists
                     resp = await hc.get(
-                        f"{homeserver_url}/_matrix/client/v3/directory/room/%23chatter:{server_name}",
+                        f"{homeserver_url}/_matrix/client/v3/directory/room/%23agents:{server_name}",
                     )
                     if resp.status_code == 200:
                         # Already exists — just join
@@ -594,9 +602,9 @@ class WebAdapter(BasePlatformAdapter):
                             f"{homeserver_url}/_matrix/client/v3/createRoom",
                             headers=owner_headers,
                             json={
-                                "name": "Agent Chatter",
-                                "topic": "Casual chat — agents talk freely, no restrictions",
-                                "room_alias_name": "chatter",
+                                "name": "All Agents",
+                                "topic": "Shared room for all agents",
+                                "room_alias_name": "agents",
                                 "visibility": "private",
                                 "preset": "private_chat",
                                 "initial_state": _BASE_INITIAL_STATE,
@@ -604,8 +612,8 @@ class WebAdapter(BasePlatformAdapter):
                             },
                         )
                         if resp.status_code == 200:
-                            chatter_room_id = resp.json().get("room_id")
-                            logger.info("[web] Created #chatter room")
+                            agents_room_id = resp.json().get("room_id")
+                            logger.info("[web] Created #agents room")
                             # Set room avatar
                             try:
                                 from gateway.matrix_agents import _render_emoji_to_png
@@ -614,21 +622,21 @@ class WebAdapter(BasePlatformAdapter):
                                     up = await hc.post(
                                         f"{homeserver_url}/_matrix/media/v3/upload",
                                         headers={"Authorization": f"Bearer {result['access_token']}", "Content-Type": "image/png"},
-                                        params={"filename": "chatter_avatar.png"},
+                                        params={"filename": "agents_avatar.png"},
                                         content=avatar_data,
                                     )
                                     if up.status_code == 200:
                                         mxc = up.json().get("content_uri")
                                         if mxc:
                                             await hc.put(
-                                                f"{homeserver_url}/_matrix/client/v3/rooms/{chatter_room_id}/state/m.room.avatar",
+                                                f"{homeserver_url}/_matrix/client/v3/rooms/{agents_room_id}/state/m.room.avatar",
                                                 headers={"Authorization": f"Bearer {result['access_token']}"},
                                                 json={"url": mxc},
                                             )
                             except Exception:
                                 pass
             except Exception as e:
-                logger.warning("[web] Failed to create #chatter: %s", e)
+                logger.warning("[web] Failed to create #agents: %s", e)
 
             return {"user_id": result["user_id"], "username": username}
 
@@ -757,6 +765,28 @@ class WebAdapter(BasePlatformAdapter):
                 agent_id=agent_id,
                 agent_name=agent_name,
             )
+
+            # Seed owner profile into USER.md if missing
+            try:
+                from vulti_cli.agent_registry import AgentRegistry
+                _reg = AgentRegistry()
+                _mem_dir = _reg.agent_home(agent_id) / "memories"
+                _mem_dir.mkdir(parents=True, exist_ok=True)
+                _user_md = _mem_dir / "USER.md"
+                if not _user_md.exists():
+                    owner = adapter._get_owner()
+                    _oname = owner.get("name", "").strip()
+                    _oabout = owner.get("about", "").strip()
+                    if _oname:
+                        _user_md.write_text(
+                            f"# Owner Profile\n\n"
+                            f"- **Name**: {_oname}\n"
+                            f"- **About**: {_oabout}\n"
+                            f"\nThis was seeded at agent creation. Update as you learn more.\n",
+                            encoding="utf-8",
+                        )
+            except Exception:
+                pass
 
             # Hot-add agent to the running Matrix adapter
             if result.get("matrix_user_id"):
@@ -1150,6 +1180,11 @@ class WebAdapter(BasePlatformAdapter):
         async def clear_pane_widgets(agent_id: str, tab: str = None, authorization: str = Header("")):
             await get_current_user(authorization)
             return adapter._clear_pane_widgets(agent_id, tab)
+
+        @app.delete("/api/sessions/{session_id}/pane")
+        async def clear_session_pane(session_id: str, authorization: str = Header("")):
+            await get_current_user(authorization)
+            return adapter._clear_session_pane_widgets(session_id)
 
         @app.delete("/api/agents/{agent_id}/pane/widgets/{widget_id}")
         async def remove_pane_widget(agent_id: str, widget_id: str, authorization: str = Header("")):
@@ -1814,6 +1849,7 @@ class WebAdapter(BasePlatformAdapter):
                 "createdAt": a.created_at,
                 "createdFrom": a.created_from,
                 "allowed_connections": self._get_agent_allowed_connections(a.id),
+                "home_channels": a.home_channels or {},
             } for a in agents]
         except Exception as e:
             logger.error("[web] Failed to list agents: %s", e)
@@ -1836,7 +1872,10 @@ class WebAdapter(BasePlatformAdapter):
             "createdAt": agent.created_at,
             "createdFrom": agent.created_from,
             "allowed_connections": self._get_agent_allowed_connections(agent.id),
+            "home_channels": agent.home_channels or {},
         }
+
+    _VALID_ROLES = {"assistant", "engineer", "researcher", "analyst", "writer", "therapist", "coach", "creative", "ops", "wizard"}
 
     def _create_agent(self, data: dict) -> dict:
         """Create a new agent."""
@@ -1844,6 +1883,18 @@ class WebAdapter(BasePlatformAdapter):
         name = data.get("name", "").strip()
         if not name:
             raise HTTPException(status_code=400, detail="Agent name is required")
+
+        # Validate role — must be a single word from the valid set
+        role = data.get("role", "").strip().lower()
+        if role and role not in self._VALID_ROLES:
+            # Try to extract a valid role from a multi-word string (e.g. "analytical researcher" → "researcher")
+            for word in role.split():
+                if word in self._VALID_ROLES:
+                    role = word
+                    break
+            else:
+                role = "assistant"  # fallback
+            logger.info("[web] Normalized role to '%s' for agent '%s'", role, name)
 
         # Generate agent_id from name
         import re
@@ -1865,7 +1916,7 @@ class WebAdapter(BasePlatformAdapter):
                 clone_from=data.get("inherit_from"),
                 avatar=data.get("avatar"),
                 description=data.get("description", ""),
-                role=data.get("role", ""),
+                role=role,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -1878,21 +1929,74 @@ class WebAdapter(BasePlatformAdapter):
             # Empty soul so onboarding starts fresh — agent has no identity yet
             soul_path.write_text("", encoding="utf-8")
 
+        # Seed owner profile into agent's USER.md so it knows who it's working for
+        try:
+            owner = self._get_owner()
+            owner_name = owner.get("name", "").strip()
+            owner_about = owner.get("about", "").strip()
+            if owner_name:
+                mem_dir = registry.agent_home(agent_id) / "memories"
+                mem_dir.mkdir(parents=True, exist_ok=True)
+                user_md = mem_dir / "USER.md"
+                user_md.write_text(
+                    f"# Owner Profile\n\n"
+                    f"- **Name**: {owner_name}\n"
+                    f"- **About**: {owner_about}\n"
+                    f"\nThis was seeded at agent creation. Update as you learn more.\n",
+                    encoding="utf-8",
+                )
+        except Exception as e:
+            logger.debug("Failed to seed owner profile for %s: %s", agent_id, e)
+
         # Write model to agent's config.yaml if provided
         if data.get("model"):
             try:
                 import yaml
+                model_id = data["model"].strip()
+
+                # Validate model against known providers — fuzzy match if exact not found
+                try:
+                    providers = self._get_providers()
+                    all_models = []
+                    for p in providers:
+                        all_models.extend(p.get("models") or [])
+                    if all_models and model_id not in all_models:
+                        # Try prefix match (e.g. "google/gemini-2.0-flash" → "google/gemini-2.0-flash-001")
+                        matches = [m for m in all_models if m.startswith(model_id)]
+                        if matches:
+                            logger.info("[web] Model '%s' not exact — using '%s'", model_id, matches[0])
+                            model_id = matches[0]
+                        else:
+                            # Try substring match
+                            matches = [m for m in all_models if model_id in m]
+                            if matches:
+                                logger.info("[web] Model '%s' fuzzy-matched to '%s'", model_id, matches[0])
+                                model_id = matches[0]
+                            else:
+                                logger.warning("[web] Model '%s' not found in any provider", model_id)
+                except Exception:
+                    pass  # If provider check fails, use the model as-is
+
                 config_path = registry.agent_config_path(agent_id)
                 if config_path.exists():
                     with open(config_path, encoding="utf-8") as f:
                         agent_cfg = yaml.safe_load(f) or {}
                 else:
                     agent_cfg = {}
-                agent_cfg["model"] = data["model"]
+                agent_cfg["model"] = model_id
                 with open(config_path, "w", encoding="utf-8") as f:
                     yaml.dump(agent_cfg, f, default_flow_style=False, allow_unicode=True)
             except Exception as e:
                 logger.debug("Failed to write model to agent config: %s", e)
+
+        # Auto-finalize if role is set — no reason to leave agents in "onboarding"
+        # when we already have everything needed to make them active.
+        if role:
+            try:
+                registry.update_agent(agent_id, status="active")
+                meta = registry.get_agent(agent_id)
+            except Exception as e:
+                logger.debug("Auto-finalize failed for %s: %s", agent_id, e)
 
         return {
             "id": meta.id,
@@ -1942,6 +2046,19 @@ class WebAdapter(BasePlatformAdapter):
             if field in data:
                 updates[field] = data[field]
 
+        # Validate role if being updated
+        if "role" in updates:
+            role = updates["role"].strip().lower()
+            if role and role not in self._VALID_ROLES:
+                for word in role.split():
+                    if word in self._VALID_ROLES:
+                        role = word
+                        break
+                else:
+                    role = "assistant"
+                logger.info("[web] Normalized role to '%s' for agent '%s'", role, agent_id)
+            updates["role"] = role
+
         # Handle allowed_connections — write to per-agent permissions.json
         if "allowedConnections" in data or "allowed_connections" in data:
             raw = data.get("allowedConnections", data.get("allowed_connections", []))
@@ -1989,8 +2106,12 @@ class WebAdapter(BasePlatformAdapter):
             "description": meta.description,
         }
 
-    async def _delete_agent(self, agent_id: str) -> dict:
-        """Delete an agent and all its data, including Matrix cleanup."""
+    async def _delete_agent(self, agent_id: str, force: bool = False) -> dict:
+        """Delete an agent and all its data, including Matrix cleanup.
+
+        Args:
+            force: If True, allows deleting system agents (used by factory reset).
+        """
         from fastapi import HTTPException
         registry = self._get_agent_registry()
 
@@ -2005,7 +2126,7 @@ class WebAdapter(BasePlatformAdapter):
             pass
 
         try:
-            if not registry.delete_agent(agent_id):
+            if not registry.delete_agent(agent_id, force=force):
                 raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -2020,8 +2141,8 @@ class WebAdapter(BasePlatformAdapter):
 
         return {"ok": True}
 
-    async def _reset_everything(self) -> dict:
-        """Factory reset: delete all agents, connections, skills, jobs, rules, sessions.
+    async def _reset(self) -> dict:
+        """Reset: delete all agents, connections, skills, jobs, rules, sessions.
 
         Safety: every path is resolved and verified to be inside ~/.vulti/ before deletion.
         """
@@ -2045,13 +2166,13 @@ class WebAdapter(BasePlatformAdapter):
         reg_data = registry._load()
         for agent_id in list(reg_data.get("agents", {}).keys()):
             try:
-                await self._delete_agent(agent_id)
+                await self._delete_agent(agent_id, force=True)
                 deleted_agents.append(agent_id)
             except Exception as e:
                 errors.append(f"agent {agent_id}: {e}")
 
-        # 2. Wipe ~/.vulti/ except bin/ (installed binaries), .env (credentials), models/ (large downloads)
-        preserve = {"bin", "models", ".env", "auth.json", "auth.lock", "web_token"}
+        # 2. Wipe ~/.vulti/ except bin/, .env, models/, continuwuity/ (running homeserver DB)
+        preserve = {"bin", "models", "continuwuity", ".env", "auth.json", "auth.lock", "web_token"}
         for item in home.iterdir():
             if item.name in preserve:
                 continue
@@ -2067,25 +2188,55 @@ class WebAdapter(BasePlatformAdapter):
         }
 
     async def _factory_reset(self) -> dict:
-        """Full factory reset: run normal reset, then also wipe .env, connections,
-        user profile, models (whisper), and all remaining files. Returns the app
-        to a fresh-install state."""
+        """Full factory reset: wipe user data and Matrix state but preserve
+        infrastructure (venv, binary, skills) so the app doesn't need to
+        reinstall from scratch."""
         import shutil
 
         # First do the normal reset (agents, sessions, cron, etc.)
-        result = await self._reset_everything()
+        result = await self._reset()
+
+        # Stop Continuwuity before wiping its data directory to avoid DB corruption
+        from gateway.run import _active_runner
+        continuwuity = getattr(_active_runner, '_continuwuity', None) if _active_runner else None
+        if continuwuity:
+            await continuwuity.stop()
+            import asyncio
+            await asyncio.sleep(1)
 
         home = self._get_vulti_home().resolve()
 
-        # Now wipe everything that the normal reset preserves
-        preserve_only = {"bin", "auth.json", "auth.lock", "web_token"}
+        # Preserve infrastructure that is expensive to rebuild.
+        # Wipe user data: .env (API keys), owner profile, continuwuity DB,
+        # sessions, connections, memories, etc.
+        preserve = {
+            "bin",              # vulti binary / continuwuity binary
+            "venv",             # Python virtual environment (~500MB)
+            "skills",           # installed skill definitions
+            "models",           # downloaded ML models (whisper etc.)
+            "auth.json",        # gateway auth token
+            "auth.lock",        # auth lock file
+            "web_token",        # web auth token
+        }
         for item in home.iterdir():
-            if item.name in preserve_only:
+            if item.name in preserve:
                 continue
             if item.is_dir():
                 shutil.rmtree(item, ignore_errors=True)
             else:
                 item.unlink(missing_ok=True)
+
+        # Verify the continuwuity data dir is actually gone — if rmtree missed
+        # locked files (e.g. RocksDB WAL), wait for release and retry
+        continuwuity_data = home / "continuwuity" / "data"
+        if continuwuity_data.exists():
+            logger.warning("Factory reset: continuwuity data dir survived first wipe, retrying...")
+            import asyncio
+            await asyncio.sleep(2)
+            shutil.rmtree(home / "continuwuity", ignore_errors=True)
+
+        if continuwuity_data.exists():
+            logger.error("Factory reset: continuwuity data dir could not be fully removed")
 
         result["factory"] = True
         return result
@@ -2302,14 +2453,12 @@ class WebAdapter(BasePlatformAdapter):
             try:
                 import fal_client
                 handler = fal_client.submit(
-                    "fal-ai/flux-2-pro",
+                    "fal-ai/flux/schnell",
                     arguments={
                         "prompt": prompt,
-                        "image_size": "square",
-                        "num_inference_steps": 30,
-                        "guidance_scale": 4.5,
+                        "image_size": "square_hd",
+                        "num_inference_steps": 4,
                         "num_images": 1,
-                        "output_format": "png",
                         "enable_safety_checker": False,
                     },
                 )
@@ -2437,6 +2586,7 @@ class WebAdapter(BasePlatformAdapter):
                             "schedule": sched,
                             "status": j.get("state", "active" if j.get("enabled", True) else "paused"),
                             "enabled": j.get("enabled", True),
+                            "deliver": j.get("deliver"),
                             "last_run": j.get("last_run_at"),
                             "last_output": j.get("last_output"),
                         })
@@ -3142,16 +3292,10 @@ class WebAdapter(BasePlatformAdapter):
             for d in skills_dir.iterdir():
                 if d.is_dir():
                     skill_file = d / "SKILL.md"
-                    meta = {"name": d.name, "description": "", "category": ""}
                     if skill_file.exists():
-                        content = skill_file.read_text(encoding="utf-8")
-                        for line in content.splitlines():
-                            if line.startswith("# "):
-                                meta["name"] = line[2:].strip()
-                            elif line.lower().startswith("category:"):
-                                meta["category"] = line.split(":", 1)[1].strip()
-                            elif not meta["description"] and line.strip() and not line.startswith("#"):
-                                meta["description"] = line.strip()
+                        meta = self._parse_skill_meta(skill_file, fallback_name=d.name)
+                    else:
+                        meta = {"name": d.name, "description": "", "category": ""}
                     result.append(meta)
             return result
         except Exception as e:
@@ -3167,16 +3311,35 @@ class WebAdapter(BasePlatformAdapter):
         for d in skills_dir.iterdir():
             if d.is_dir() or d.is_symlink():
                 meta = {"name": d.name, "description": "", "category": ""}
-                skill_file = d / "SKILL.md" if d.is_dir() else (d.resolve() / "SKILL.md" if d.is_symlink() else None)
+                target = d.resolve() if d.is_symlink() else d
+                skill_file = target / "SKILL.md" if target.is_dir() else None
                 if skill_file and skill_file.exists():
-                    content = skill_file.read_text(encoding="utf-8")
-                    for line in content.splitlines():
-                        if line.startswith("# "):
-                            meta["name"] = line[2:].strip()
-                        elif not meta["description"] and line.strip() and not line.startswith("#"):
-                            meta["description"] = line.strip()
+                    meta = self._parse_skill_meta(skill_file, fallback_name=d.name)
                 result.append(meta)
         return result
+
+    @staticmethod
+    def _parse_skill_meta(skill_file: Path, fallback_name: str = "") -> dict:
+        """Parse SKILL.md — prefer YAML frontmatter fields over body headings."""
+        meta = {"name": fallback_name, "description": "", "category": ""}
+        try:
+            content = skill_file.read_text(encoding="utf-8")
+            lines = content.splitlines()
+
+            # Parse YAML frontmatter (between --- delimiters)
+            if lines and lines[0].strip() == "---":
+                for i, line in enumerate(lines[1:], 1):
+                    if line.strip() == "---":
+                        break
+                    if line.startswith("name:"):
+                        meta["name"] = line.split(":", 1)[1].strip().strip("'\"")
+                    elif line.startswith("description:"):
+                        meta["description"] = line.split(":", 1)[1].strip().strip("'\"")
+                    elif line.startswith("category:"):
+                        meta["category"] = line.split(":", 1)[1].strip().strip("'\"")
+        except Exception:
+            pass
+        return meta
 
     def _install_agent_skill(self, agent_id: str, skill_name: str) -> dict:
         from fastapi import HTTPException
@@ -3420,7 +3583,15 @@ class WebAdapter(BasePlatformAdapter):
         wallet_path = registry.agent_home(agent_id) / "creditcard.json"
         if wallet_path.exists():
             try:
-                return json.loads(wallet_path.read_text())
+                data = json.loads(wallet_path.read_text())
+                # Mask sensitive fields — never return full card number or CVV
+                cc = data.get("credit_card", {})
+                if cc.get("number"):
+                    cc["number"] = "●●●● " * 3 + cc["number"][-4:]
+                cc.pop("cvv", None)
+                cc.pop("cvc", None)
+                cc.pop("security_code", None)
+                return data
             except Exception:
                 pass
         return {}
@@ -3437,7 +3608,17 @@ class WebAdapter(BasePlatformAdapter):
             except Exception:
                 pass
         current.update(data)
+        # Never persist CVV/CVC — strip before writing to disk
+        cc = current.get("credit_card", {})
+        cc.pop("cvv", None)
+        cc.pop("cvc", None)
+        cc.pop("security_code", None)
         wallet_path.write_text(json.dumps(current, indent=2))
+        # Set restrictive permissions on wallet file
+        try:
+            os.chmod(str(wallet_path), 0o600)
+        except Exception:
+            pass
         return {"ok": True}
 
     # --- Agent Vault ---
@@ -3783,15 +3964,38 @@ class WebAdapter(BasePlatformAdapter):
         pane_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return data
 
+    def _clear_session_pane_widgets(self, session_id: str) -> dict:
+        """Clear per-session (chat tab) widgets."""
+        from vulti_cli.config import get_vulti_home
+        sessions_dir = get_vulti_home() / "web" / "sessions"
+        candidates = [
+            sessions_dir / f"{session_id}_widgets.json",
+            sessions_dir / f"app:{session_id}_widgets.json",
+        ]
+        for path in candidates:
+            if path.exists():
+                try:
+                    path.unlink()
+                except Exception:
+                    pass
+        return {"ok": True}
+
     def _get_session_pane_widgets(self, session_id: str) -> dict:
         """Get per-session (chat tab) widgets."""
         from vulti_cli.config import get_vulti_home
-        path = get_vulti_home() / "web" / "sessions" / f"{session_id}_widgets.json"
-        if path.exists():
-            try:
-                return json.loads(path.read_text())
-            except Exception:
-                pass
+        sessions_dir = get_vulti_home() / "web" / "sessions"
+        # The modify_pane tool saves with the chat_id which may have a platform
+        # prefix (e.g. "app:abc123"), but the API receives just the session id.
+        candidates = [
+            sessions_dir / f"{session_id}_widgets.json",
+            sessions_dir / f"app:{session_id}_widgets.json",
+        ]
+        for path in candidates:
+            if path.exists():
+                try:
+                    return json.loads(path.read_text())
+                except Exception:
+                    pass
         return {"version": 1, "tabs": {}}
 
     def _get_pane_widgets(self, agent_id: str) -> dict:

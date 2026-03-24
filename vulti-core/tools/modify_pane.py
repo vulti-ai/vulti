@@ -38,10 +38,11 @@ def _widgets_path(agent_id: str, tab: str = "home", session_id: str = "") -> Pat
 
 
 def _session_id_from_env() -> str:
-    """Extract session_id from VULTI_SESSION_CHAT_ID (format: 'web:{session_id}')."""
+    """Extract session_id from VULTI_SESSION_CHAT_ID (format: 'web:{session_id}' or 'app:{session_id}')."""
     chat_id = os.getenv("VULTI_SESSION_CHAT_ID", "")
-    if chat_id.startswith("web:"):
-        return chat_id[4:]
+    for prefix in ("web:", "app:"):
+        if chat_id.startswith(prefix):
+            return chat_id[len(prefix):]
     return chat_id
 
 

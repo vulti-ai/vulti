@@ -1698,17 +1698,22 @@ class GatewayRunner:
             return None
         
         # Resolve which agent should handle this message
-        # Priority: target_agent_id (from adapter) > _agent_id (web hub) > _resolve_agent_for_source
-        _pre_resolved = getattr(event, 'target_agent_id', "") or getattr(event, '_agent_id', "")
-        if _pre_resolved:
-            _resolved_agent_id = _pre_resolved
-            _resolved_text = event.text or ""
+        # Priority: @mention in text > target_agent_id (from adapter) > _agent_id (web hub) > routing table
+        _mention_agent, _mention_text = self._resolve_agent_for_source(source, event.text or "")
+        if _mention_agent and _mention_text != (event.text or ""):
+            # @mention found — it wins over session/payload agent_id
+            _resolved_agent_id = _mention_agent
+            _resolved_text = _mention_text
+            event.text = _resolved_text
         else:
-            _resolved_agent_id, _resolved_text = self._resolve_agent_for_source(source, event.text or "")
-            if _resolved_text != (event.text or ""):
-                event.text = _resolved_text  # Strip @mention from text
-            # Store resolved agent_id on event so command handlers can access it
-            event._agent_id = _resolved_agent_id
+            _pre_resolved = getattr(event, 'target_agent_id', "") or getattr(event, '_agent_id', "")
+            if _pre_resolved:
+                _resolved_agent_id = _pre_resolved
+                _resolved_text = event.text or ""
+            else:
+                _resolved_agent_id = _mention_agent
+                _resolved_text = _mention_text
+        event._agent_id = _resolved_agent_id
 
         # --- Handle unrouted messages: return to sender ---
         if not _resolved_agent_id:
@@ -2721,8 +2726,30 @@ class GatewayRunner:
             }
             await self.hooks.emit("agent:start", hook_ctx)
             
+            # Inject allowed connections so the agent knows what it has access to
+            try:
+                from vulti_cli.connection_registry import ConnectionRegistry
+                _creg = ConnectionRegistry(self._vulti_home)
+                _allowed = set(_creg._get_agent_allowed(_resolved_agent_id))
+                if _allowed:
+                    context_prompt += f"\n\n[System: Your allowed connections: {', '.join(sorted(_allowed))}. You can use these directly without checking.]"
+            except Exception:
+                pass
+
             # Context: tell the agent where this message came from
             _response_required = getattr(event, 'response_required', True)
+
+            # Nudge agents to save memories in messaging conversations
+            if source.platform in (Platform.MATRIX, Platform.TELEGRAM, Platform.DISCORD,
+                                    Platform.WHATSAPP, Platform.SLACK, Platform.SIGNAL):
+                context_prompt += (
+                    "\n\n[System: MEMORY REMINDER — After responding, consider whether "
+                    "this conversation revealed anything worth remembering: user preferences, "
+                    "facts about them, corrections, or important context. If so, use the "
+                    "memory tool to save it. Even small details (name, interests, timezone, "
+                    "communication style) are valuable for future conversations.]"
+                )
+
             if source.chat_type == "group":
                 _chat_label = source.chat_name or source.chat_id
                 context_prompt += (
@@ -2730,7 +2757,8 @@ class GatewayRunner:
                     "You are in this group chat right now. Your text response is posted here automatically — "
                     "never use send_message to this chat. "
                     "Other agents mentioned in the same message will each receive it separately and respond on their own — "
-                    "do not relay, forward, or coordinate for them. Only respond for yourself.]"
+                    "do not relay, forward, or coordinate for them. Only respond for yourself. "
+                    "Keep group chat replies concise — 1-3 sentences max unless a detailed answer is needed.]"
                 )
 
             # Group observe mode: agent reads but may stay silent
@@ -3894,6 +3922,7 @@ class GatewayRunner:
                 Platform.SIGNAL: "vulti-signal",
                 Platform.HOMEASSISTANT: "vulti-homeassistant",
                 Platform.EMAIL: "vulti-email",
+                Platform.MATRIX: "vulti-matrix",
                 Platform.APP: "vulti-cli",
             }
             platform_toolsets_config = {}
@@ -3916,6 +3945,7 @@ class GatewayRunner:
                 Platform.SIGNAL: "signal",
                 Platform.HOMEASSISTANT: "homeassistant",
                 Platform.EMAIL: "email",
+                Platform.MATRIX: "matrix",
                 Platform.APP: "app",
             }.get(source.platform, "telegram")
 
@@ -3929,7 +3959,7 @@ class GatewayRunner:
             platform_key = "cli" if source.platform == Platform.LOCAL else ("app" if source.platform == Platform.APP else source.platform.value)
 
             pr = self._provider_routing
-            max_iterations = int(os.getenv("VULTI_MAX_ITERATIONS", "90"))
+            max_iterations = int(os.getenv("VULTI_MAX_ITERATIONS", "15"))
             reasoning_config = self._load_reasoning_config()
             self._reasoning_config = reasoning_config
             turn_route = self._resolve_turn_agent_config(prompt, model, runtime_kwargs)
@@ -5161,7 +5191,7 @@ class GatewayRunner:
             os.environ["VULTI_AGENT_ID"] = agent_id
 
             # Read from env var or use default (same as CLI)
-            max_iterations = int(os.getenv("VULTI_MAX_ITERATIONS", "90"))
+            max_iterations = int(os.getenv("VULTI_MAX_ITERATIONS", "15"))
 
             # Map platform enum to the platform hint key the agent understands.
             # Platform.LOCAL ("local") maps to "cli"; others pass through as-is.

@@ -634,7 +634,7 @@ struct GeneralSettingsView: View {
                     .buttonStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
 
-                    Button(resetConfirmType == .reset ? "Yes, reset" : "Yes, factory reset") {
+                    Button(resetConfirmType == .reset ? "Yes, reset agents" : "Yes, factory reset") {
                         if resetConfirmType == .reset {
                             performReset()
                         } else {
@@ -653,7 +653,7 @@ struct GeneralSettingsView: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) { resetConfirmType = .reset }
                     } label: {
-                        Text("Reset")
+                        Text("Reset Agents")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.orange)
                     }
@@ -662,7 +662,7 @@ struct GeneralSettingsView: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) { resetConfirmType = .factory }
                     } label: {
-                        Text("Reset Everything")
+                        Text("Factory Reset")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.red)
                     }
@@ -679,7 +679,7 @@ struct GeneralSettingsView: View {
 
     private func performReset() {
         Task {
-            try? await app.client.resetEverything()
+            try? await app.client.reset()
             resetConfirmType = nil
             Persistence.onboardingComplete = false
             app.onboardingComplete = false
@@ -1238,7 +1238,7 @@ struct CreateAgentView: View {
                 _ = try? await app.client.updateAgent(agent.id, updates: [
                     "allowedConnections": "matrix"
                 ])
-                try? await app.client.installSkill(agentId: agent.id, name: "matrix")
+                try? await app.client.installSkill(agentId: agent.id, name: "system/matrix")
 
                 await app.refreshAgents()
 

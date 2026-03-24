@@ -137,9 +137,11 @@ final class AppState {
     func refreshAgents() async {
         do {
             var agents = try await client.listAgents()
-            // Detect default agent (the one with platforms set)
-            if let def = agents.first(where: { !($0.platforms ?? []).isEmpty }) {
-                defaultAgentId = def.id
+            // Detect default agent: first non-system active agent, or any active agent
+            let activeAgents = agents.filter { $0.status == "active" && $0.id != "hector" }
+            if defaultAgentId == nil || !activeAgents.contains(where: { $0.id == defaultAgentId }) {
+                defaultAgentId = activeAgents.first?.id
+                    ?? agents.first(where: { $0.status == "active" })?.id
             }
             // Merge avatars: use cache first, fetch missing ones
             var needsFetch: [(Int, String)] = []

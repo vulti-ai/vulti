@@ -57,5 +57,6 @@ environments/benchmarks/evals/
 # Release script temp files
 .release_notes.md
 
-# E2E harness API keys
+# E2E harness API keys and scratchpad
 tests/harness/keys.json
+tests/harness/scratchpad.md

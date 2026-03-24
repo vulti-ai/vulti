@@ -141,7 +141,7 @@ def _mirror_to_matrix(
 ) -> None:
     """Mirror an inter-agent exchange to the appropriate Matrix room.
 
-    Finds the best room: relationship channel > team room > Agent Chatter.
+    Finds the best room: relationship channel > team room > All Agents.
     Posts the sender's message and the target's response.
     """
     import asyncio
@@ -187,7 +187,7 @@ def _find_shared_room(
     """Find a Matrix room shared by two agents.
 
     Checks relationship rooms from the registry first,
-    then falls back to the #chatter room.
+    then falls back to the #agents room.
     """
     try:
         registry = AgentRegistry()
@@ -203,7 +203,7 @@ def _find_shared_room(
     except Exception:
         pass
 
-    # Fall back to #chatter
+    # Fall back to #agents
     try:
         import httpx
         from gateway.matrix_agents import get_agent_matrix_credentials
@@ -212,7 +212,7 @@ def _find_shared_room(
             return None
         server_name = os.getenv("MATRIX_SERVER_NAME", "localhost")
         resp = httpx.get(
-            f"{homeserver_url}/_matrix/client/v3/directory/room/%23chatter:{server_name}",
+            f"{homeserver_url}/_matrix/client/v3/directory/room/%23agents:{server_name}",
             headers={"Authorization": f"Bearer {creds['access_token']}"},
             timeout=5.0,
         )

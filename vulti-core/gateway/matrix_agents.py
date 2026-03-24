@@ -7,12 +7,16 @@ gets a corresponding Matrix user. Standard rooms are auto-created for
 different communication patterns.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Per-agent lock to prevent concurrent onboarding (e.g. background task + API call)
+_onboard_locks: Dict[str, asyncio.Lock] = {}
 
 # Shared initial_state events for all rooms: readable history + block encryption.
 # Setting m.room.encryption to power level 101 (above admin=100) prevents anyone
@@ -230,8 +234,8 @@ async def ensure_agent_matrix_user(
                             )
                         if not profile.get("avatar_url"):
                             await _sync_avatar_to_matrix(agent_id, matrix_user_id, creds["access_token"], homeserver_url)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Matrix: profile sync error for %s: %s", agent_id, e)
                     logger.debug("Matrix: agent %s already registered as %s", agent_id, matrix_user_id)
                     return matrix_user_id
         except Exception:
@@ -281,36 +285,70 @@ async def ensure_agent_matrix_user(
 
 
 def _render_emoji_to_png(emoji: str, size: int = 160) -> Optional[bytes]:
-    """Render an emoji character to a PNG image. Returns bytes or None."""
+    """Render an emoji or symbol character to a PNG image. Returns bytes or None."""
     try:
         from PIL import Image, ImageDraw, ImageFont
         import io
 
         img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        font = None
-        # Apple Color Emoji only supports specific sizes (20,32,40,48,64,96,160)
-        for font_path in [
+
+        # Try emoji fonts first, then fall back to system fonts for symbols
+        emoji_fonts = [
             "/System/Library/Fonts/Apple Color Emoji.ttc",
             "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-        ]:
+        ]
+        symbol_fonts = [
+            "/System/Library/Fonts/Supplemental/Apple Symbols.ttf",
+            "/System/Library/Fonts/SFPro.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+
+        font = None
+        use_color = True
+        # Try emoji font first
+        for font_path in emoji_fonts:
             try:
                 font = ImageFont.truetype(font_path, size)
-                break
+                bbox = draw.textbbox((0, 0), emoji, font=font)
+                if (bbox[2] - bbox[0]) > 0 and (bbox[3] - bbox[1]) > 0:
+                    break  # Glyph exists in this font
+                font = None  # Empty glyph, try next
             except (OSError, IOError):
                 continue
+
+        # Fall back to symbol/system font (no embedded_color)
+        if not font:
+            use_color = False
+            for font_path in symbol_fonts:
+                try:
+                    font = ImageFont.truetype(font_path, size - 20)
+                    bbox = draw.textbbox((0, 0), emoji, font=font)
+                    if (bbox[2] - bbox[0]) > 0 and (bbox[3] - bbox[1]) > 0:
+                        break
+                    font = None
+                except (OSError, IOError):
+                    continue
+
         if not font:
             return None
+
         bbox = draw.textbbox((0, 0), emoji, font=font)
         x = (size - (bbox[2] - bbox[0])) // 2 - bbox[0]
         y = (size - (bbox[3] - bbox[1])) // 2 - bbox[1]
-        draw.text((x, y), emoji, font=font, embedded_color=True)
+        if use_color:
+            draw.text((x, y), emoji, font=font, embedded_color=True)
+        else:
+            draw.text((x, y), emoji, font=font, fill=(180, 180, 180, 255))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return buf.getvalue()
     except ImportError:
+        logger.warning("Matrix: Pillow not installed — cannot render emoji avatars. Install with: pip install Pillow")
         return None
-    except Exception:
+    except Exception as e:
+        logger.warning("Matrix: emoji render failed: %s", e)
         return None
 
 
@@ -359,11 +397,14 @@ async def _sync_avatar_to_matrix(
             if not mxc_uri:
                 return False
 
-            await client.put(
+            set_resp = await client.put(
                 f"{homeserver_url}/_matrix/client/v3/profile/{user_id}/avatar_url",
                 headers={"Authorization": f"Bearer {access_token}"},
                 json={"avatar_url": mxc_uri},
             )
+            if set_resp.status_code != 200:
+                logger.warning("Matrix: avatar_url PUT failed for %s: %s", agent_id, set_resp.text[:200])
+                return False
 
         logger.info("Matrix: set avatar for %s (%s)", agent_id, mxc_uri)
         return True
@@ -522,8 +563,7 @@ async def ensure_room_topology(
     """Create standard rooms for agent communication.
 
     Creates:
-    - #chatter:{server_name} — Agent Chatter: casual, agents talk freely
-    - #updates:{server_name} — Updates: agent reports, cron output, status updates
+    - #agents:{server_name} — All Agents: shared room for every agent
 
     Returns dict mapping room alias -> room_id.
     """
@@ -534,7 +574,7 @@ async def ensure_room_topology(
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         for alias_local, room_name, topic in [
-            ("chatter", "Agent Chatter", "Casual chat — agents talk freely, no restrictions"),
+            ("agents", "All Agents", "Shared room for all agents"),
         ]:
             full_alias = f"#{alias_local}:{server_name}"
 
@@ -666,7 +706,7 @@ async def reset_all_rooms(
     """Delete all rooms and recreate from scratch.
 
     1. Every agent + owner leaves and forgets all rooms
-    2. Recreate the global rooms (chatter, updates)
+    2. Recreate the global rooms (#agents)
     3. All agents join global rooms
     4. Recreate owner DMs for agents with owner relationships
     5. Recreate team rooms for manages relationships
@@ -899,17 +939,25 @@ async def ensure_owner_matrix_account(
     homeserver_url: str,
     server_name: str,
     registration_token: str,
+    username: str = "owner",
+    password: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Register the owner as a Matrix user if not already registered.
+
+    Requires an explicit password — the owner must choose their own password
+    via the setup flow (POST /api/matrix/register).  If no password is
+    provided and no existing credentials are found, returns None.
 
     Reads the owner name from ~/.vulti/owner.json.
     Returns credentials dict or None on failure.
     """
-    import secrets as _secrets
-
     creds = _get_owner_matrix_credentials()
     if creds:
         return creds
+
+    if not password:
+        logger.warning("Matrix: cannot register owner — no password provided. Use /api/matrix/register.")
+        return None
 
     # Read owner profile for display name
     owner_name = "Owner"
@@ -920,9 +968,6 @@ async def ensure_owner_matrix_account(
             owner_name = data.get("name", "Owner")
     except Exception:
         pass
-
-    username = "owner"
-    password = _secrets.token_urlsafe(32)
 
     result = await register_matrix_user(
         homeserver_url=homeserver_url,
@@ -966,10 +1011,10 @@ async def create_owner_dm_room(
     homeserver_url: str,
     server_name: str,
     agent_id: str,
-) -> Optional[str]:
+) -> tuple:
     """Create a DM room between an agent and the owner.
 
-    Returns the room_id on success, None on failure.
+    Returns (room_id, is_new) on success, (None, False) on failure.
     """
     import httpx
 
@@ -1017,7 +1062,7 @@ async def create_owner_dm_room(
                         members = set(members_resp.json().get("joined", {}).keys())
                         if members == {agent_user_id, owner_user_id}:
                             logger.debug("Matrix: owner DM already exists for %s: %s", agent_id, room_id)
-                            return room_id
+                            return room_id, False  # existing
 
             resp = await client.post(
                 f"{homeserver_url}/_matrix/client/v3/createRoom",
@@ -1046,11 +1091,11 @@ async def create_owner_dm_room(
             )
 
             logger.info("Matrix: created owner DM %s for agent %s", room_id, agent_id)
-            return room_id
+            return room_id, True  # newly created
 
     except Exception as e:
         logger.error("Matrix: error creating owner DM for %s: %s", agent_id, e)
-        return None
+        return None, False
 
 
 async def send_room_message(
@@ -1311,15 +1356,48 @@ async def onboard_agent_to_matrix(
 ) -> Dict[str, Any]:
     """Full Matrix onboarding for a newly created agent.
 
+    Uses a per-agent lock to prevent concurrent onboarding (e.g. background
+    task from POST /api/agents racing with POST /api/matrix/onboard-agent).
+
     1. Register as Matrix user
-    2. Join the global rooms (chatter, updates)
-    3. Say hi in Agent Chatter
+    2. Join the #agents room
+    3. Say hi in All Agents
     4. Create owner DM (if owner is registered)
-    5. Create daily update cron job
+    5. Set DM as agent's home channel
 
     Returns dict with matrix_user_id.
     """
+    # Acquire per-agent lock to prevent concurrent onboarding
+    if agent_id not in _onboard_locks:
+        _onboard_locks[agent_id] = asyncio.Lock()
+    async with _onboard_locks[agent_id]:
+        return await _onboard_agent_to_matrix_locked(
+            homeserver_url, server_name, registration_token, agent_id, agent_name,
+        )
+
+
+async def _onboard_agent_to_matrix_locked(
+    homeserver_url: str,
+    server_name: str,
+    registration_token: str,
+    agent_id: str,
+    agent_name: str,
+) -> Dict[str, Any]:
+    """Inner onboarding logic — must be called under _onboard_locks[agent_id]."""
     result: Dict[str, Any] = {"matrix_user_id": None}
+
+    # Short-circuit: if agent already has credentials and a home channel, skip
+    creds = get_agent_matrix_credentials(agent_id)
+    if creds and creds.get("user_id"):
+        try:
+            from vulti_cli.agent_registry import AgentRegistry
+            agent = AgentRegistry().get_agent(agent_id)
+            existing_home = (agent.home_channels or {}).get("matrix", {}).get("chat_id") if agent else None
+            if existing_home:
+                logger.debug("Matrix: %s already fully onboarded, skipping", agent_id)
+                return {"matrix_user_id": creds["user_id"], "dm_room_id": existing_home}
+        except Exception:
+            pass
 
     # Step 1: Register
     matrix_user_id = await ensure_agent_matrix_user(
@@ -1335,7 +1413,7 @@ async def onboard_agent_to_matrix(
 
     import httpx
 
-    # Step 2: Join #chatter
+    # Step 2: Join #agents
     chatter_room_id = None
     creds = get_agent_matrix_credentials(agent_id)
     if creds:
@@ -1355,7 +1433,7 @@ async def onboard_agent_to_matrix(
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     resp = await client.get(
-                        f"{homeserver_url}/_matrix/client/v3/directory/room/%23chatter:{server_name}",
+                        f"{homeserver_url}/_matrix/client/v3/directory/room/%23agents:{server_name}",
                     )
                     if resp.status_code == 200:
                         rid = resp.json().get("room_id")
@@ -1372,9 +1450,9 @@ async def onboard_agent_to_matrix(
                             )
                             chatter_room_id = rid
             except Exception as e:
-                logger.warning("Matrix: error joining #chatter for %s: %s", agent_id, e)
+                logger.warning("Matrix: error joining #agents for %s: %s", agent_id, e)
 
-    # Step 3: Say hi in #chatter
+    # Step 3: Say hi in #agents
     if chatter_room_id:
         await send_room_message(
             homeserver_url=homeserver_url,
@@ -1386,18 +1464,20 @@ async def onboard_agent_to_matrix(
     # Step 5: Create owner DM (if owner is registered on Matrix)
     owner_creds = _get_owner_matrix_credentials()
     if owner_creds:
-        dm_room_id = await create_owner_dm_room(
+        dm_room_id, is_new_dm = await create_owner_dm_room(
             homeserver_url=homeserver_url,
             server_name=server_name,
             agent_id=agent_id,
         )
         if dm_room_id:
-            await send_room_message(
-                homeserver_url=homeserver_url,
-                agent_id=agent_id,
-                room_id=dm_room_id,
-                body=f"Hey! I'm {agent_name}, and I'm ready to go. What can I help you with?",
-            )
+            # Only greet in newly created DMs — don't re-greet on gateway restart
+            if is_new_dm:
+                await send_room_message(
+                    homeserver_url=homeserver_url,
+                    agent_id=agent_id,
+                    room_id=dm_room_id,
+                    body=f"Hey! I'm {agent_name}, and I'm ready to go. What can I help you with?",
+                )
             result["dm_room_id"] = dm_room_id
 
             # Set the DM as this agent's Matrix home channel
@@ -1424,13 +1504,13 @@ async def create_owner_relationship(
 
     Returns dm_room_id or None.
     """
-    dm_room_id = await create_owner_dm_room(
+    dm_room_id, is_new = await create_owner_dm_room(
         homeserver_url=homeserver_url,
         server_name=server_name,
         agent_id=agent_id,
     )
 
-    if dm_room_id:
+    if dm_room_id and is_new:
         await send_room_message(
             homeserver_url=homeserver_url,
             agent_id=agent_id,

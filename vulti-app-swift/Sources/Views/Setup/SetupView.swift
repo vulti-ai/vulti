@@ -122,9 +122,9 @@ struct SetupView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             apiKeyRow(name: "Anthropic", detail: "Claude — reasoning & code", url: "https://console.anthropic.com/settings/keys")
                             apiKeyRow(name: "OpenAI", detail: "GPT & image generation", url: "https://platform.openai.com/api-keys")
-                            apiKeyRow(name: "Google Gemini", detail: "Multimodal & search", url: "https://aistudio.google.com/apikey")
                             apiKeyRow(name: "ElevenLabs", detail: "Voice & speech synthesis", url: "https://elevenlabs.io/app/settings/api-keys")
-                            apiKeyRow(name: "Deepgram", detail: "Speech-to-text transcription", url: "https://console.deepgram.com/")
+                            apiKeyRow(name: "Bland", detail: "AI phone calls", url: "https://app.bland.ai/dashboard/api-keys")
+                            apiKeyRow(name: "Fal.ai", detail: "Fast image & video generation", url: "https://fal.ai/dashboard/keys")
                         }
                     }
                     .padding(16)

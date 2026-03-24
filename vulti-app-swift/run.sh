@@ -64,6 +64,9 @@ PLIST
 
 echo "Built $APP_BUNDLE"
 
+# Re-sign so macOS renders at Retina resolution on Apple Silicon
+codesign --force --sign - --deep "$APP_BUNDLE" 2>/dev/null || true
+
 # Kill any existing instance
 pkill -f "$APP_NAME.app/Contents/MacOS/$APP_NAME" 2>/dev/null || true
 sleep 0.3

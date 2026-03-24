@@ -153,6 +153,7 @@ def cronjob(
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
     reason: Optional[str] = None,
+    agent_id: Optional[str] = None,
     task_id: str = None,
 ) -> str:
     """Unified cron job management tool."""
@@ -183,6 +184,7 @@ def cronjob(
                 model=_normalize_optional_job_value(model),
                 provider=_normalize_optional_job_value(provider),
                 base_url=_normalize_optional_job_value(base_url, strip_trailing_slash=True),
+                agent=agent_id,  # explicit agent target — falls back to current agent if None
             )
             return json.dumps(
                 {
@@ -402,6 +404,10 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
             "reason": {
                 "type": "string",
                 "description": "Optional pause reason"
+            },
+            "agent_id": {
+                "type": "string",
+                "description": "Target agent ID. Use this when creating a cron job for a DIFFERENT agent (e.g. Hector creating a job for a new agent). If omitted, defaults to the current agent."
             }
         },
         "required": ["action"]
@@ -451,6 +457,7 @@ registry.register(
         provider=args.get("provider"),
         base_url=args.get("base_url"),
         reason=args.get("reason"),
+        agent_id=args.get("agent_id"),
         task_id=kw.get("task_id"),
     ),
     check_fn=check_cronjob_requirements,

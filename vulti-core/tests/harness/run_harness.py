@@ -30,9 +30,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -116,6 +118,7 @@ class Harness:
         self.agent_id: str = ""
         self.agent2_id: str = ""  # second agent for relationships
         self.session_id: str = ""
+        self.audit_issues: list[str] = []  # accumulated across all steps
         self._start_time = time.monotonic()
 
     def _headers(self) -> dict:
@@ -187,6 +190,9 @@ class Harness:
 
     async def matrix_register(self, http: httpx.AsyncClient):
         r = await http.post(f"{self.base}/api/matrix/register", json={"username": self.p.owner.username, "password": self.p.owner.password}, headers=self._headers())
+        if r.status_code == 409:
+            print(f"         (owner already registered, OK)")
+            return {"already_exists": True}
         if r.status_code >= 500:
             print(f"         (Matrix not available — {r.status_code}, continuing)")
             return {"skipped": True}
@@ -271,6 +277,13 @@ class Harness:
         self.session_id = hector_session
         self.agent_id = "hector"
 
+        # Snapshot current agents so we can find the new one after
+        r = await http.get(f"{self.base}/api/agents", headers=self._headers())
+        before_agents = {a.get("id") for a in (_check(r) if isinstance(_check(r), list) else [])}
+        # Re-fetch since _check consumed it
+        r = await http.get(f"{self.base}/api/agents", headers=self._headers())
+        before_ids = {a.get("id") for a in (r.json() if r.status_code == 200 and isinstance(r.json(), list) else [])}
+
         # Ask Hector to create the agent using the persona's natural-language style
         create_msg = self.p.hector_create_msg
         print(f"         → [{self.p.user_style}] \"{create_msg[:100]}{'...' if len(create_msg) > 100 else ''}\"")
@@ -282,25 +295,37 @@ class Harness:
         # Restore session state
         self.session_id = orig_session
 
-        # Find the created agent
+        # Find the created agent — try exact name, partial match, or most recently created
         r = await http.get(f"{self.base}/api/agents", headers=self._headers())
         agents = _check(r)
+        agent_list = agents if isinstance(agents, list) else []
         new_agent = None
-        for a in (agents if isinstance(agents, list) else []):
+
+        # Exact name match
+        for a in agent_list:
             if a.get("name") == self.p.agent.name or a.get("id") == self.p.agent.name.lower().replace(" ", "-"):
                 new_agent = a
                 break
-        # Also try partial match
+
+        # Partial match
         if not new_agent:
             name_lower = self.p.agent.name.lower()
-            for a in (agents if isinstance(agents, list) else []):
+            for a in agent_list:
                 if name_lower in (a.get("name", "").lower()) and a.get("id") != "hector":
                     new_agent = a
                     break
 
+        # Fallback: find NEW agent (not in before_ids)
         if not new_agent:
-            agent_names = [a.get("name") for a in (agents if isinstance(agents, list) else [])]
-            raise StepError(cause=f"Hector did not create agent '{self.p.agent.name}'. Agents: {agent_names}")
+            new_ids = [a for a in agent_list if a.get("id") not in before_ids]
+            if new_ids:
+                new_agent = new_ids[0]
+                print(f"         ⚠ Hector used different name: expected '{self.p.agent.name}', got '{new_agent.get('name')}'")
+                self.audit_issues.append(f"NAME MISMATCH: asked for '{self.p.agent.name}', Hector created '{new_agent.get('name')}'")
+
+        if not new_agent:
+            agent_names = [a.get("name") for a in agent_list]
+            raise StepError(cause=f"Hector did not create any new agent. Before: {before_ids}, After: {agent_names}")
 
         self.agent_id = new_agent["id"]
         print(f"         (created: id={self.agent_id}, status={new_agent.get('status')})")
@@ -390,6 +415,7 @@ class Harness:
             for issue in issues:
                 print(f"         ║  ✗ {issue}")
             print(f"         ╚{'═' * 40}")
+            self.audit_issues.extend(issues)
             # Don't raise — report but continue so we find ALL issues
             print(f"         (continuing despite {len(issues)} issue(s))")
         else:
@@ -645,32 +671,29 @@ class Harness:
         if not self.agent_id:
             raise StepError(cause="No agent_id")
 
-        # Generate agent avatar (requires FAL_KEY or OpenRouter — may be slow/timeout)
-        try:
-            r = await http.post(f"{self.base}/api/agents/{self.agent_id}/generate-avatar", json={}, headers=self._headers(), timeout=120)
-            result = _soft_check(r, "agent avatar")
-            if result and isinstance(result, dict):
-                ok = result.get("ok", False)
-                fallback = result.get("fallback", "")
-                print(f"         (agent avatar: ok={ok}{f', fallback={fallback}' if fallback else ''})")
-        except httpx.ReadTimeout:
-            print(f"         (agent avatar: timeout — external service slow, OK)")
+        # Generate agent avatar — uses flux/schnell (~2-5s) or emoji fallback
+        r = await http.post(f"{self.base}/api/agents/{self.agent_id}/generate-avatar", json={}, headers=self._headers(), timeout=30)
+        result = _soft_check(r, "agent avatar")
+        if result and isinstance(result, dict):
+            ok = result.get("ok", False)
+            fallback = result.get("fallback", "")
+            path = result.get("path", "")
+            print(f"         (agent avatar: ok={ok}{f', fallback={fallback}' if fallback else ''}{f', path={path}' if path else ''})")
+            if not ok:
+                self.audit_issues.append(f"AVATAR: agent generate failed: {result}")
 
-        # Get agent avatar
+        # Verify avatar is retrievable
         r = await http.get(f"{self.base}/api/agents/{self.agent_id}/avatar", headers=self._headers())
         avatar = _soft_check(r, "get avatar")
         if avatar and isinstance(avatar, dict):
             has_img = bool(avatar.get("avatar"))
-            print(f"         (has avatar image: {has_img})")
+            print(f"         (has avatar: {has_img})")
 
         # Generate owner avatar
-        try:
-            r = await http.post(f"{self.base}/api/owner/generate-avatar", json={}, headers=self._headers(), timeout=120)
-            result = _soft_check(r, "owner avatar")
-            if result and isinstance(result, dict):
-                print(f"         (owner avatar: ok={result.get('ok', '?')})")
-        except httpx.ReadTimeout:
-            print(f"         (owner avatar: timeout, OK)")
+        r = await http.post(f"{self.base}/api/owner/generate-avatar", json={}, headers=self._headers(), timeout=30)
+        result = _soft_check(r, "owner avatar")
+        if result and isinstance(result, dict):
+            print(f"         (owner avatar: ok={result.get('ok', '?')})")
 
         return True
 
@@ -1065,6 +1088,48 @@ class Harness:
         print(f"{'═'*60}")
 
 
+# ── Scratchpad ──
+
+SCRATCHPAD_PATH = Path(__file__).parent / "scratchpad.md"
+
+def scratchpad_write(seed: int, persona: Persona, step_failed: str | None, step_n: int,
+                     issues: list[str] | None = None, error_msg: str = ""):
+    """Append a run result to the scratchpad file."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    passed = step_failed is None
+    status = "PASS" if passed else f"FAIL at step {step_n}: {step_failed}"
+
+    lines = [
+        f"\n## Run seed={seed} — {ts}",
+        f"- **Status**: {status}",
+        f"- **Persona**: {persona.owner.name} ({persona.user_style})",
+        f"- **About**: {persona.owner.about}",
+        f"- **Agent**: {persona.agent.name} ({persona.agent.role})",
+        f"- **Model**: {persona.default_model}",
+        f"- **Hector msg**: \"{persona.hector_create_msg[:120]}{'...' if len(persona.hector_create_msg) > 120 else ''}\"",
+    ]
+
+    if error_msg:
+        lines.append(f"- **Error**: `{error_msg[:200]}`")
+
+    if issues:
+        lines.append(f"- **Audit issues** ({len(issues)}):")
+        for issue in issues:
+            lines.append(f"  - {issue}")
+
+    lines.append("")
+
+    with open(SCRATCHPAD_PATH, "a") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def scratchpad_init():
+    """Write header if scratchpad doesn't exist."""
+    if not SCRATCHPAD_PATH.exists():
+        with open(SCRATCHPAD_PATH, "w") as f:
+            f.write("# VultiHub E2E Harness — Scratchpad\n\nRunning log of all harness runs, findings, and bugs.\n")
+
+
 # ── Entrypoint ──
 
 async def main():
@@ -1085,9 +1150,12 @@ async def main():
     base = f"http://127.0.0.1:{args.port}"
     skip_to = SKIP_POINTS.get(args.skip_to, 0) if args.skip_to else 0
 
+    scratchpad_init()
+
     print(f"VultiHub E2E Harness ({TOTAL_STEPS} steps)")
     print(f"Target: {base}")
     print(f"Count:  {args.count}")
+    print(f"Scratchpad: {SCRATCHPAD_PATH}")
     if args.skip_to:
         print(f"Skip:   → {args.skip_to} (step {skip_to})")
 
@@ -1102,8 +1170,10 @@ async def main():
             try:
                 await harness.run(http)
                 passed += 1
+                scratchpad_write(seed, persona, step_failed=None, step_n=TOTAL_STEPS, issues=harness.audit_issues)
             except SystemExit:
                 failed += 1
+                scratchpad_write(seed, persona, step_failed=f"step_{harness.step_n}", step_n=harness.step_n, issues=harness.audit_issues)
                 if args.count == 1:
                     sys.exit(1)
                 print(f"\n(Continuing to next persona...)\n")
