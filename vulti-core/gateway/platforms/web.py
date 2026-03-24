@@ -2222,7 +2222,10 @@ class WebAdapter(BasePlatformAdapter):
             if item.name in preserve:
                 continue
             if item.is_dir():
-                shutil.rmtree(item, ignore_errors=True)
+                try:
+                    shutil.rmtree(item)
+                except OSError as e:
+                    logger.warning("Factory reset: failed to remove %s: %s", item.name, e)
             else:
                 item.unlink(missing_ok=True)
 
@@ -2233,7 +2236,10 @@ class WebAdapter(BasePlatformAdapter):
             logger.warning("Factory reset: continuwuity data dir survived first wipe, retrying...")
             import asyncio
             await asyncio.sleep(2)
-            shutil.rmtree(home / "continuwuity", ignore_errors=True)
+            try:
+                shutil.rmtree(home / "continuwuity")
+            except OSError as e:
+                logger.error("Factory reset: continuwuity retry failed: %s", e)
 
         if continuwuity_data.exists():
             logger.error("Factory reset: continuwuity data dir could not be fully removed")

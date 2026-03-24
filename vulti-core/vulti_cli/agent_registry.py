@@ -456,6 +456,7 @@ class AgentRegistry:
         pkg_root = Path(vulti_cli.__file__).resolve().parent.parent
         default_skills = [
             ("agent-creation", pkg_root / "optional-skills" / "system" / "agent-creation"),
+            ("validate-connections", pkg_root / "skills" / "system" / "validate-connections"),
             ("matrix", pkg_root / "optional-skills" / "system" / "matrix"),
             ("whatsapp-reader", pkg_root / "optional-skills" / "productivity" / "whatsapp-reader"),
         ]
