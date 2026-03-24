@@ -665,9 +665,12 @@ setup_venv() {
 
     log_info "Creating virtual environment with Python $PYTHON_VERSION..."
 
-    if [ -d "venv" ]; then
-        log_info "Virtual environment already exists, recreating..."
-        rm -rf venv
+    if [ -d "venv" ] && [ -x "venv/bin/python3" ]; then
+        log_success "Virtual environment already exists and valid, reusing"
+        return 0
+    elif [ -d "venv" ]; then
+        log_info "Virtual environment exists but invalid, recreating..."
+        rm -rf venv 2>/dev/null || true
     fi
 
     # uv creates the venv and pins the Python version in one step

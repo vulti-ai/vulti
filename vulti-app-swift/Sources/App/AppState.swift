@@ -31,6 +31,8 @@ final class AppState {
     var unreadAgents: Set<String> = []
     /// Tracks which agents have already had their daily introspect triggered this app session.
     var introspectedAgents: Set<String> = []
+    /// Guard against overlapping refresh cycles
+    private var isRefreshing = false
 
     var isBusy: Bool { pendingOps > 0 }
 
@@ -97,8 +99,9 @@ final class AppState {
         // 1. vulti binary must exist
         let hasBinary = await gateway.findBinary() != nil
 
-        // 2. Continuwuity (Matrix homeserver) must exist
+        // 2. Continuwuity (Matrix homeserver) binary must exist
         let continuwuityPaths = [
+            "\(home)/.vulti/bin/continuwuity",
             "\(home)/.vulti/continuwuity/continuwuity",
             "\(home)/.vulti/continuwuity/bin/continuwuity",
             "/usr/local/bin/continuwuity",
@@ -135,6 +138,9 @@ final class AppState {
     }
 
     func refreshAgents() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
         do {
             var agents = try await client.listAgents()
             // Detect default agent: first non-system active agent, or any active agent

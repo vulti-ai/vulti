@@ -12,6 +12,7 @@ actor GatewayService {
     func findBinary() -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path()
         let candidates = [
+            "\(home)/dev/vulti/vulti-core/venv/bin/vulti",
             "\(home)/.vulti/vulti-core/venv/bin/vulti",
             "\(home)/.local/bin/vulti",
             "\(home)/.vulti/bin/vulti",
@@ -24,19 +25,6 @@ actor GatewayService {
             }
         }
 
-        // Fallback: which via login shell
-        let which = Process()
-        which.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        which.arguments = ["-lc", "which vulti"]
-        let pipe = Pipe()
-        which.standardOutput = pipe
-        try? which.run()
-        which.waitUntilExit()
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let output, !output.isEmpty, which.terminationStatus == 0 {
-            return output
-        }
         return nil
     }
 
@@ -106,13 +94,19 @@ actor GatewayService {
         gatewayProcess = process
     }
 
-    func stop() {
+    func stop() async {
         guard let process = gatewayProcess, process.isRunning else {
             gatewayProcess = nil
             return
         }
         process.terminate()
-        process.waitUntilExit()
+        // Avoid blocking the actor's executor with synchronous waitUntilExit()
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                process.waitUntilExit()
+                continuation.resume()
+            }
+        }
         gatewayProcess = nil
     }
 

@@ -123,11 +123,10 @@ def _discover_bundled_skills(bundled_dir: Path) -> List[Tuple[str, Path]]:
 
 def _compute_relative_dest(skill_dir: Path, bundled_dir: Path) -> Path:
     """
-    Compute the destination path in SKILLS_DIR preserving the category structure.
-    e.g., bundled/skills/mlops/axolotl -> ~/.vulti/skills/mlops/axolotl
+    Compute the destination path in SKILLS_DIR using a flat structure.
+    e.g., bundled/skills/mlops/axolotl -> ~/.vulti/skills/axolotl
     """
-    rel = skill_dir.relative_to(bundled_dir)
-    return SKILLS_DIR / rel
+    return SKILLS_DIR / skill_dir.name
 
 
 def _dir_hash(directory: Path) -> str:

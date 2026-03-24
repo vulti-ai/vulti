@@ -1131,7 +1131,7 @@ struct OnboardingView: View {
                 _ = try? await app.client.updateAgent("hector", updates: [
                     "allowedConnections": "matrix"
                 ])
-                try? await app.client.installSkill(agentId: "hector", name: "system/matrix")
+                try? await app.client.installSkill(agentId: "hector", name: "matrix")
                 try? await app.client.onboardAgentToMatrix(agentId: "hector")
                 try? await app.client.finalizeOnboarding(agentId: "hector", role: "wizard")
 

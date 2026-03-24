@@ -3352,14 +3352,30 @@ class WebAdapter(BasePlatformAdapter):
         if not skill_name:
             raise HTTPException(status_code=400, detail="Skill name is required")
         registry = self._get_agent_registry()
-        source = self._get_vulti_home() / "skills" / skill_name
+        skills_root = self._get_vulti_home() / "skills"
+
+        # Support both flat ("matrix") and nested ("system/matrix") names.
+        # First try exact path, then search all category subdirectories.
+        source = skills_root / skill_name
+        if not source.exists():
+            # Search for skill by basename across category directories
+            basename = Path(skill_name).name
+            for category_dir in skills_root.iterdir():
+                if category_dir.is_dir():
+                    candidate = category_dir / basename
+                    if candidate.is_dir() and (candidate / "SKILL.md").exists():
+                        source = candidate
+                        break
         if not source.exists():
             raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+        # Always install with the flat basename (no category nesting)
+        flat_name = Path(skill_name).name
         dest = registry.agent_skills_dir(agent_id)
         dest.mkdir(parents=True, exist_ok=True)
-        link = dest / skill_name
+        link = dest / flat_name
         if link.exists() or link.is_symlink():
-            return {"ok": True, "name": skill_name, "already_installed": True}
+            return {"ok": True, "name": flat_name, "already_installed": True}
         link.symlink_to(source)
         # Sync skill-declared connection into the global registry
         try:

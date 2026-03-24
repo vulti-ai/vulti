@@ -304,6 +304,7 @@ struct SetupView: View {
         let logPath = VultiHome.root.appending(path: "logs/gateway.log")
 
         logTask = Task.detached {
+            // Wait for log file to appear
             for _ in 0..<40 {
                 if FileManager.default.fileExists(atPath: logPath.path()) { break }
                 try? await Task.sleep(for: .milliseconds(250))
@@ -313,21 +314,30 @@ struct SetupView: View {
             defer { try? handle.close() }
             handle.seekToEndOfFile()
 
-            while !Task.isCancelled {
+            let fd = handle.fileDescriptor
+            // Use DispatchSource to get notified when new data is written — no polling
+            let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global(qos: .utility))
+            let stream = AsyncStream<Void> { continuation in
+                source.setEventHandler { continuation.yield() }
+                source.setCancelHandler { continuation.finish() }
+                source.resume()
+            }
+
+            for await _ in stream {
+                if Task.isCancelled { break }
                 let data = handle.availableData
-                if !data.isEmpty, let text = String(data: data, encoding: .utf8) {
-                    let lines = text.components(separatedBy: .newlines)
-                        .filter { !$0.isEmpty }
-                        .map { self.formatGatewayLog($0) }
-                    await MainActor.run {
-                        logLines.append(contentsOf: lines)
-                        if logLines.count > 200 {
-                            logLines = Array(logLines.suffix(200))
-                        }
+                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { continue }
+                let lines = text.components(separatedBy: .newlines)
+                    .filter { !$0.isEmpty }
+                    .map { self.formatGatewayLog($0) }
+                await MainActor.run {
+                    logLines.append(contentsOf: lines)
+                    if logLines.count > 200 {
+                        logLines = Array(logLines.suffix(200))
                     }
                 }
-                try? await Task.sleep(for: .milliseconds(200))
             }
+            source.cancel()
         }
     }
 
@@ -352,7 +362,7 @@ struct SetupView: View {
         )
     }
 
-    private func formatGatewayLog(_ line: String) -> String {
+    private nonisolated func formatGatewayLog(_ line: String) -> String {
         if line.count > 24, line.dropFirst(4).prefix(1) == "-" {
             return String(line.dropFirst(24)).trimmingCharacters(in: .whitespaces)
         }

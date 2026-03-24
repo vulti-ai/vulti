@@ -1238,7 +1238,7 @@ struct CreateAgentView: View {
                 _ = try? await app.client.updateAgent(agent.id, updates: [
                     "allowedConnections": "matrix"
                 ])
-                try? await app.client.installSkill(agentId: agent.id, name: "system/matrix")
+                try? await app.client.installSkill(agentId: agent.id, name: "matrix")
 
                 await app.refreshAgents()
 
