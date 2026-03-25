@@ -1310,7 +1310,7 @@ def setup_model_provider(config: dict):
         if existing_custom:
             save_env_value("OPENAI_BASE_URL", "")
             save_env_value("OPENAI_API_KEY", "")
-        _update_config_for_provider("ai-gateway", pconfig.inference_base_url, default_model="anthropic/claude-opus-4.6")
+        _update_config_for_provider("ai-gateway", pconfig.inference_base_url, default_model=os.getenv("VULTI_DEFAULT_MODEL", ""))
         _set_model_provider(config, "ai-gateway", pconfig.inference_base_url)
 
     elif provider_idx == 11:  # OpenCode Zen
@@ -1476,11 +1476,11 @@ def setup_model_provider(config: dict):
     if selected_provider != "custom":  # Custom already prompted for model name
         print_header("Default Model")
 
-        _raw_model = config.get("model", "anthropic/claude-opus-4.6")
+        _raw_model = config.get("model", os.getenv("VULTI_DEFAULT_MODEL", ""))
         current_model = (
-            _raw_model.get("default", "anthropic/claude-opus-4.6")
+            _raw_model.get("default", os.getenv("VULTI_DEFAULT_MODEL", ""))
             if isinstance(_raw_model, dict)
-            else (_raw_model or "anthropic/claude-opus-4.6")
+            else (_raw_model or os.getenv("VULTI_DEFAULT_MODEL", ""))
         )
         print_info(f"Current: {current_model}")
 
@@ -1594,7 +1594,7 @@ def setup_model_provider(config: dict):
             if model_idx < len(ids):
                 _set_default_model(config, ids[model_idx])
             elif model_idx == len(ids):  # Custom
-                custom = prompt("Enter model name (e.g., anthropic/claude-opus-4.6)")
+                custom = prompt("Enter model name (e.g., anthropic/claude-sonnet-4.6, openai/gpt-4o)")
                 if custom:
                     _set_default_model(config, custom)
             # else: Keep current

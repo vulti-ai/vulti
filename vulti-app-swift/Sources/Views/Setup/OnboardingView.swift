@@ -1123,10 +1123,29 @@ struct OnboardingView: View {
 
     // MARK: - Actions
 
+    /// Request macOS file system permissions by touching protected directories.
+    /// This triggers the TCC popup so the user grants access during setup,
+    /// rather than having agents fail silently later.
+    private func requestFileSystemPermissions() {
+        let fm = FileManager.default
+        let protectedDirs = [
+            fm.homeDirectoryForCurrentUser.appendingPathComponent("Documents"),
+            fm.homeDirectoryForCurrentUser.appendingPathComponent("Downloads"),
+            fm.homeDirectoryForCurrentUser.appendingPathComponent("Desktop"),
+        ]
+        for dir in protectedDirs {
+            // Reading the directory triggers the macOS permission popup
+            _ = try? fm.contentsOfDirectory(atPath: dir.path)
+        }
+    }
+
     private func activateHector() {
         isActivatingHector = true
         Task {
             do {
+                // Trigger macOS file system permission popups before Hector starts
+                requestFileSystemPermissions()
+
                 // Hector is auto-seeded by the registry, just needs Matrix onboarding
                 _ = try? await app.client.updateAgent("hector", updates: [
                     "allowedConnections": "matrix"

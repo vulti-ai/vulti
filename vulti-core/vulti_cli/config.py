@@ -124,8 +124,26 @@ def ensure_vulti_home():
 # Config loading/saving
 # =============================================================================
 
+def get_default_model() -> str:
+    """Return the user's chosen default model from VULTI_DEFAULT_MODEL.
+
+    Raises RuntimeError if not set — onboarding must set this.
+    """
+    model = os.getenv("VULTI_DEFAULT_MODEL")
+    if not model:
+        raise RuntimeError(
+            "No default model configured. Please run onboarding or set "
+            "VULTI_DEFAULT_MODEL in settings."
+        )
+    return model
+
+
+def get_default_model_or_none() -> "str | None":
+    """Return the user's chosen default model, or None if not yet configured."""
+    return os.getenv("VULTI_DEFAULT_MODEL") or None
+
+
 DEFAULT_CONFIG = {
-    "model": "anthropic/claude-opus-4.6",
     "toolsets": ["vulti-cli"],
     "agent": {
         "max_turns": 90,
@@ -1058,7 +1076,12 @@ def load_config(agent_id: Optional[str] = None) -> Dict[str, Any]:
     config_path = get_config_path(agent_id)
     
     config = copy.deepcopy(DEFAULT_CONFIG)
-    
+
+    # Inject user's chosen default model (set during onboarding / settings)
+    _user_model = get_default_model_or_none()
+    if _user_model:
+        config["model"] = _user_model
+
     if config_path.exists():
         try:
             with open(config_path, encoding="utf-8") as f:

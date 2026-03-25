@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from threading import Lock
@@ -170,8 +171,7 @@ class SessionManager:
 
         config = load_config()
         model_cfg = config.get("model")
-        import os
-        default_model = os.getenv("VULTI_DEFAULT_MODEL") or "anthropic/claude-opus-4.6"
+        default_model = os.getenv("VULTI_DEFAULT_MODEL") or ""
         requested_provider = None
         if isinstance(model_cfg, dict):
             default_model = str(model_cfg.get("default") or default_model)

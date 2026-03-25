@@ -151,7 +151,7 @@ def load_cli_config() -> Dict[str, Any]:
     # Default configuration
     defaults = {
         "model": {
-            "default": "anthropic/claude-opus-4.6",
+            "default": os.getenv("VULTI_DEFAULT_MODEL", ""),
             "base_url": OPENROUTER_BASE_URL,
             "provider": "auto",
         },
@@ -1050,7 +1050,8 @@ class VultiCLI:
         # env vars would stomp each other.
         _model_config = CLI_CONFIG.get("model", {})
         _config_model = _model_config.get("default", "") if isinstance(_model_config, dict) else (_model_config or "")
-        self.model = model or _config_model or "anthropic/claude-opus-4.6"
+        from vulti_cli.config import get_default_model
+        self.model = model or _config_model or get_default_model()
         # Track whether model was explicitly chosen by the user or fell back
         # to the global default.  Provider-specific normalisation may override
         # the default silently but should warn when overriding an explicit choice.

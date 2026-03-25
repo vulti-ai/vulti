@@ -845,12 +845,44 @@ class MatrixAdapter(BasePlatformAdapter):
                     self._track_sent_event(resp.event_id, current_agent)
                 return SendResult(success=True, message_id=resp.event_id)
             else:
-                error_msg = str(resp) if resp else "Unknown error"
-                logger.warning("Matrix: send failed to %s: %s", chat_id, error_msg)
-                return SendResult(success=False, error=error_msg)
+                # nio failed (stale client state) — fall back to httpx direct send
+                logger.warning("Matrix: nio send failed to %s (%s), trying httpx fallback",
+                               chat_id, type(resp).__name__)
+                return await self._send_via_httpx(client, chat_id, msg_content)
 
         except Exception as e:
             logger.error("Matrix: send error: %s", e)
+            return SendResult(success=False, error=str(e))
+
+    async def _send_via_httpx(self, client, room_id: str, content: dict) -> SendResult:
+        """Fallback: send a message via httpx when nio room_send fails."""
+        import httpx
+        import uuid
+        from urllib.parse import quote
+
+        txn_id = str(uuid.uuid4())
+        url = (
+            f"{self.homeserver_url}/_matrix/client/v3/rooms/"
+            f"{quote(room_id, safe='')}/send/m.room.message/{txn_id}"
+        )
+        headers = {"Authorization": f"Bearer {client.access_token}"}
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as hc:
+                resp = await hc.put(url, json=content, headers=headers)
+            if resp.status_code == 200:
+                event_id = resp.json().get("event_id", "")
+                current_agent = os.environ.get("VULTI_AGENT_ID", "")
+                if current_agent:
+                    self._track_sent_event(event_id, current_agent)
+                logger.info("Matrix: httpx fallback sent to %s (event %s)", room_id, event_id)
+                return SendResult(success=True, message_id=event_id)
+            else:
+                error = resp.text[:200]
+                logger.warning("Matrix: httpx fallback failed to %s: %s %s", room_id, resp.status_code, error)
+                return SendResult(success=False, error=error)
+        except Exception as e:
+            logger.error("Matrix: httpx fallback error: %s", e)
             return SendResult(success=False, error=str(e))
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:

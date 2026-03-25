@@ -273,7 +273,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             if delivery_target.get("thread_id") is not None:
                 os.environ["VULTI_CRON_AUTO_DELIVER_THREAD_ID"] = str(delivery_target["thread_id"])
 
-        model = job.get("model") or os.getenv("VULTI_MODEL") or "anthropic/claude-opus-4.6"
+        model = job.get("model") or os.getenv("VULTI_MODEL") or os.getenv("VULTI_DEFAULT_MODEL") or ""
 
         _cfg = {}
         try:

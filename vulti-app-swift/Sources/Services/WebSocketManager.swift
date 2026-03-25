@@ -137,20 +137,31 @@ final class WebSocketManager {
             let content = json["content"] as? String ?? streamingContent
             streamingContent = ""
             let role = json["role"] as? String ?? "assistant"
+            let messageId = json["message_id"] as? String
+
+            // Deduplicate by message_id
+            if let mid = messageId, messages.contains(where: { $0.messageId == mid }) {
+                break
+            }
+
+            // Deduplicate by content — skip if the last assistant message has identical text
+            let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if role == "assistant",
+               let lastAssistant = messages.last(where: { $0.role == "assistant" && $0.type == "message" }),
+               (lastAssistant.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == trimmedContent {
+                break
+            }
 
             // Merge consecutive assistant messages into one bubble
             // (agent sends multiple messages across tool call boundaries)
-            if role == "assistant",
+            if role == "assistant", !trimmedContent.isEmpty,
                let lastIdx = messages.lastIndex(where: { $0.role == "assistant" && $0.type == "message" }),
                lastIdx == messages.count - 1 || messages[lastIdx...].allSatisfy({ $0.role == "assistant" || $0.type == "tool_use" }) {
-                // Only merge if the content is different (not a duplicate)
                 let existing = messages[lastIdx].content ?? ""
-                if content != existing && !content.isEmpty {
-                    messages[lastIdx].content = existing.isEmpty ? content : existing + "\n\n" + content
-                }
+                messages[lastIdx].content = existing.isEmpty ? content : existing + "\n\n" + content
             } else {
                 let msg = ChatMessage(
-                    messageId: json["message_id"] as? String ?? UUID().uuidString,
+                    messageId: messageId ?? UUID().uuidString,
                     type: "message",
                     role: role,
                     content: content,

@@ -277,7 +277,7 @@ class AIAgent:
         api_key: str = None,
         provider: str = None,
         api_mode: str = None,
-        model: str = "anthropic/claude-opus-4.6",  # OpenRouter format
+        model: str = None,  # Resolved from VULTI_DEFAULT_MODEL if not provided
         max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
         tool_delay: float = 1.0,
         enabled_toolsets: List[str] = None,
@@ -326,7 +326,7 @@ class AIAgent:
             api_key (str): API key for authentication (optional, uses env var if not provided)
             provider (str): Provider identifier (optional; used for telemetry/routing hints)
             api_mode (str): API mode override: "chat_completions" or "codex_responses"
-            model (str): Model name to use (default: "anthropic/claude-opus-4.6")
+            model (str): Model name to use (default: from VULTI_DEFAULT_MODEL)
             max_iterations (int): Maximum number of tool calling iterations (default: 90)
             tool_delay (float): Delay between tool calls in seconds (default: 1.0)
             enabled_toolsets (List[str]): Only enable tools from these toolsets (optional)
@@ -365,9 +365,11 @@ class AIAgent:
 
         # Handle model being a dict (from config.yaml where model: {default: ..., provider: ...})
         if isinstance(model, dict):
-            self.model = model.get("default", "anthropic/claude-opus-4.6")
+            from vulti_cli.config import get_default_model
+            self.model = model.get("default") or get_default_model()
         else:
-            self.model = model or "anthropic/claude-opus-4.6"
+            from vulti_cli.config import get_default_model
+            self.model = model or get_default_model()
         self.max_iterations = max_iterations
         # Shared iteration budget — parent creates, children inherit.
         # Consumed by every LLM turn across parent + all subagents.
@@ -6351,7 +6353,7 @@ class AIAgent:
 
 def main(
     query: str = None,
-    model: str = "anthropic/claude-opus-4.6",
+    model: str = None,
     api_key: str = None,
     base_url: str = "https://openrouter.ai/api/v1",
     max_turns: int = 10,

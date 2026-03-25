@@ -42,9 +42,8 @@ class AgentFactory:
 
         config = load_config(agent_id=agent_id)
 
-        # Resolve model — agent config > user default > hardcoded fallback
-        import os
-        _user_default = os.getenv("VULTI_DEFAULT_MODEL") or "anthropic/claude-opus-4.6"
+        # Resolve model — agent config > user default (from onboarding/settings)
+        _user_default = os.getenv("VULTI_DEFAULT_MODEL") or ""
         model_cfg = config.get("model", {})
         if isinstance(model_cfg, str):
             model = model_cfg

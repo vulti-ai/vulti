@@ -150,7 +150,7 @@ class MiniSWERunner:
     
     def __init__(
         self,
-        model: str = "anthropic/claude-sonnet-4.6",
+        model: str = None,
         base_url: str = None,
         api_key: str = None,
         env_type: str = "local",

@@ -289,10 +289,10 @@ def _resolve_gateway_model() -> str:
     """Read model from env/config — mirrors the resolution in _run_agent_sync.
 
     Without this, temporary AIAgent instances (memory flush, /compress) fall
-    back to the hardcoded default ("anthropic/claude-opus-4.6") which fails
-    when the active provider is openai-codex.
+    back to the user's configured default which may fail when the active
+    provider is openai-codex.
     """
-    model = os.getenv("VULTI_MODEL") or os.getenv("LLM_MODEL") or os.getenv("VULTI_DEFAULT_MODEL") or "anthropic/claude-opus-4.6"
+    model = os.getenv("VULTI_MODEL") or os.getenv("LLM_MODEL") or os.getenv("VULTI_DEFAULT_MODEL") or ""
     try:
         import yaml as _y
         _cfg_path = _vulti_home / "config.yaml"
@@ -553,7 +553,7 @@ class GatewayRunner:
                 return
 
             # Resolve model from config — AIAgent's default is OpenRouter-
-            # formatted ("anthropic/claude-opus-4.6") which fails when the
+            # formatted (e.g. "anthropic/claude-sonnet-4.6") which fails when the
             # active provider is openai-codex.
             model = _resolve_gateway_model()
 
@@ -3105,7 +3105,7 @@ class GatewayRunner:
         config_path = _vulti_home / 'config.yaml'
 
         # Resolve current model and provider from config
-        current = os.getenv("VULTI_MODEL") or "anthropic/claude-opus-4.6"
+        current = os.getenv("VULTI_MODEL") or os.getenv("VULTI_DEFAULT_MODEL") or ""
         current_provider = "openrouter"
         try:
             if config_path.exists():

@@ -58,6 +58,12 @@ cat > "$CONTENTS/Info.plist" << 'PLIST'
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
     <string>VultiHub connects to the local gateway service.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>VultiHub agents need access to your Documents folder to read and manage files on your behalf.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>VultiHub agents need access to your Downloads folder to read and manage files on your behalf.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>VultiHub agents need access to your Desktop to read and manage files on your behalf.</string>
 </dict>
 </plist>
 PLIST

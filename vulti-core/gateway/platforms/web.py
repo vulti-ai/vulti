@@ -1998,6 +1998,9 @@ class WebAdapter(BasePlatformAdapter):
             except Exception as e:
                 logger.debug("Auto-finalize failed for %s: %s", agent_id, e)
 
+        # Auto-install skills for any API keys already configured
+        self._auto_install_skills_for_agent(agent_id)
+
         return {
             "id": meta.id,
             "name": meta.name,
@@ -2009,6 +2012,22 @@ class WebAdapter(BasePlatformAdapter):
             "createdAt": meta.created_at,
             "createdFrom": meta.created_from,
         }
+
+    def _auto_install_skills_for_agent(self, agent_id: str) -> None:
+        """Install skills for all API keys that are already set in the environment."""
+        try:
+            installed = set()
+            for env_key, skill_names in self._ENV_TO_SKILL.items():
+                if os.getenv(env_key):
+                    for skill_name in skill_names:
+                        if skill_name not in installed:
+                            try:
+                                self._install_agent_skill(agent_id, skill_name)
+                                installed.add(skill_name)
+                            except Exception:
+                                pass
+        except Exception:
+            pass
 
     async def _setup_agent_matrix(self, agent_id: str, agent_name: str) -> None:
         """Register a new agent on Matrix, join rooms, create owner DM."""
@@ -2952,6 +2971,15 @@ class WebAdapter(BasePlatformAdapter):
         "WANDB_API_KEY": ("wandb", "api_key", "Weights & Biases — ML tracking", ["analytics", "ml"], ["WANDB_API_KEY"]),
     }
 
+    # Map env var keys to skills that should be auto-installed when the key is added.
+    # Only includes keys where a matching skill exists in skills/ or optional-skills/.
+    _ENV_TO_SKILL: dict[str, list[str]] = {
+        "FAL_KEY": ["fal-ai"],
+        "BLAND_API_KEY": ["telephony"],
+        "TWILIO_ACCOUNT_SID": ["telephony"],
+        "WANDB_API_KEY": ["weights-and-biases"],
+    }
+
     def _add_secret(self, key: str, value: str) -> dict:
         """Add or update an API key in ~/.vulti/.env and create a connection entry."""
         key = key.strip()
@@ -2973,7 +3001,28 @@ class WebAdapter(BasePlatformAdapter):
         # Always ensure matrix connection exists (default messaging bus)
         self._ensure_connection("matrix", "custom", "Matrix — agent communication bus", ["messaging", "internal"])
 
+        # Auto-install matching skills for all agents
+        if key in self._ENV_TO_SKILL:
+            self._auto_install_skills_for_key(key)
+
         return {"ok": True, "key": key}
+
+    def _auto_install_skills_for_key(self, env_key: str) -> None:
+        """Install skills that require the given env key for all registered agents."""
+        skill_names = self._ENV_TO_SKILL.get(env_key, [])
+        if not skill_names:
+            return
+        try:
+            registry = self._get_agent_registry()
+            agent_ids = [a["id"] for a in registry.list_agents()]
+            for skill_name in skill_names:
+                for agent_id in agent_ids:
+                    try:
+                        self._install_agent_skill(agent_id, skill_name)
+                    except Exception:
+                        pass  # skill may not exist or already installed
+        except Exception:
+            pass
 
     def _ensure_connection(self, name: str, conn_type: str, description: str, tags: list, credential_keys: list = None) -> None:
         """Create a connection entry if it doesn't already exist, with credentials."""
@@ -3354,19 +3403,32 @@ class WebAdapter(BasePlatformAdapter):
         registry = self._get_agent_registry()
         skills_root = self._get_vulti_home() / "skills"
 
-        # Support both flat ("matrix") and nested ("system/matrix") names.
-        # First try exact path, then search all category subdirectories.
-        source = skills_root / skill_name
-        if not source.exists():
-            # Search for skill by basename across category directories
-            basename = Path(skill_name).name
-            for category_dir in skills_root.iterdir():
+        # Search for skill across skills/ and optional-skills/ directories.
+        # Try exact path first, then search category subdirectories.
+        import vulti_cli as _vc
+        _pkg_root = Path(_vc.__file__).resolve().parent.parent
+        _search_roots = [skills_root, _pkg_root / "skills", _pkg_root / "optional-skills"]
+
+        source = None
+        basename = Path(skill_name).name
+        for root in _search_roots:
+            if not root.exists():
+                continue
+            # Exact path
+            candidate = root / skill_name
+            if candidate.is_dir() and (candidate / "SKILL.md").exists():
+                source = candidate
+                break
+            # Search category subdirectories
+            for category_dir in root.iterdir():
                 if category_dir.is_dir():
                     candidate = category_dir / basename
                     if candidate.is_dir() and (candidate / "SKILL.md").exists():
                         source = candidate
                         break
-        if not source.exists():
+            if source:
+                break
+        if source is None:
             raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
 
         # Always install with the flat basename (no category nesting)
